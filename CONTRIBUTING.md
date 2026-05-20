@@ -25,6 +25,9 @@ Welcome to the lobster tank! 🦞
 - **Gustavo Madeira Santana** - Multi-agents, CLI, web UI
   - GitHub: [@gumadeiras](https://github.com/gumadeiras) · X: [@gumadeiras](https://x.com/gumadeiras)
 
+- **Maximilian Nussbaumer** - DevOps, CI/CD
+  - GitHub: [@quotentiroler](https://github.com/quotentiroler)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
@@ -76,3 +79,44 @@ We are currently prioritizing:
 - **Performance**: Optimizing token usage and compaction logic.
 
 Check the [GitHub Issues](https://github.com/openclaw/openclaw/issues) for "good first issue" labels!
+
+## Core vs ClawHub
+
+Not everything belongs in the main repo. Here's how to decide:
+
+| Belongs in **Core**                            | Belongs on **[ClawHub](https://clawhub.ai)**         |
+| ---------------------------------------------- | ---------------------------------------------------- |
+| Channel integrations (Telegram, Discord, etc.) | Domain-specific skills (QR codes, image tools, etc.) |
+| CLI commands and infrastructure                | Custom workflows and automations                     |
+| Provider integrations (LLM backends)           | Niche or experimental utilities                      |
+| Security, routing, and core plumbing           | Third-party service integrations                     |
+
+**Rule of thumb:** if it adds new dependencies or is useful to some users but not most, it belongs on ClawHub. When in doubt, ask in Discord or open a Discussion before writing code.
+
+Skills submitted as PRs to this repo will be redirected to ClawHub. If the core maintainers later decide certain functionality should be first-party, it will be integrated into core.
+
+## Branch Strategy
+
+We use staged branch promotion to keep `main` stable:
+
+```
+dev/* / feature/* / fix/*  →  develop  →  alpha  →  beta  →  main
+```
+
+### For External Contributors
+
+1. Fork the repo
+2. Create your branch (`dev/my-feature`, `fix/some-bug`, etc.)
+3. Open a PR targeting `develop` (not `main`)
+4. CI runs lightweight checks only — no heavy platform tests on your PR
+5. Once merged to `develop`, your changes promote through alpha → beta → main automatically
+
+**Do not target `main`** — PRs to `main` will be redirected to `develop`.
+
+### For Maintainers
+
+- **Regular changes**: merge to `develop`, let the pipeline promote
+- **Hotfixes**: use `hotfix/*` branches for emergency fixes that bypass staging directly to `main`
+- **Docs-only changes**: skip the test pipeline automatically (paths-ignore)
+
+See [Pipeline docs](https://docs.openclaw.ai/reference/pipeline) for full details.
