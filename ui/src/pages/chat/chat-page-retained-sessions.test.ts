@@ -19,6 +19,7 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createChatPageSessions } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
+import { CHAT_TRANSCRIPT_READY_EVENT } from "./chat-transcript-ready.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
@@ -465,6 +466,95 @@ describe("chat page retained sessions", () => {
     expect(paneB?.active).toBe(true);
     expect(paneB?.presented).toBe(true);
     expect(paneB?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("keeps the previous transcript visible until a cold destination is ready", async () => {
+    const { page, paneFor } = await mountRetainedPage("agent:main:a");
+    const paneA = paneFor("agent:main:a");
+
+    const intent = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+      cancelable: true,
+      detail: { commit: () => true, face: "chat", sessionKey: "agent:main:b" },
+    });
+    window.dispatchEvent(intent);
+    expect(intent.defaultPrevented).toBe(false);
+
+    await showSession(page, "agent:main:b");
+    const paneB = paneFor("agent:main:b");
+    expect(paneA?.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+    expect(paneA?.presented).toBe(true);
+    expect(paneB?.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
+    expect(paneB?.presented).toBe(true);
+    expect(paneA?.hasAttribute("inert")).toBe(true);
+    expect(paneB?.hasAttribute("inert")).toBe(true);
+
+    paneB?.dispatchEvent(
+      new CustomEvent(CHAT_TRANSCRIPT_READY_EVENT, {
+        bubbles: true,
+        composed: true,
+        detail: { paneId: "p1", sessionKey: "agent:main:b" },
+      }),
+    );
+    await page.updateComplete;
+
+    expect(paneA?.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
+    expect(paneA?.presented).toBe(false);
+    expect(paneB?.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+    expect(paneB?.presented).toBe(true);
+  });
+
+  it("keeps the original transcript visible when a cold destination is superseded", async () => {
+    const { page, paneFor } = await mountRetainedPage("agent:main:a");
+    const paneA = paneFor("agent:main:a");
+
+    window.dispatchEvent(
+      new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+        cancelable: true,
+        detail: { commit: () => true, face: "chat", sessionKey: "agent:main:b" },
+      }),
+    );
+    await showSession(page, "agent:main:b");
+    const paneB = paneFor("agent:main:b");
+
+    window.dispatchEvent(
+      new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+        cancelable: true,
+        detail: { commit: () => true, face: "chat", sessionKey: "agent:main:c" },
+      }),
+    );
+    await showSession(page, "agent:main:c");
+    const paneC = paneFor("agent:main:c");
+
+    expect(paneA?.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+    expect(paneB?.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
+    expect(paneC?.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
+  });
+
+  it("reveals a cold loading pane after the bounded delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const { page, paneFor } = await mountRetainedPage("agent:main:a");
+      window.dispatchEvent(
+        new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+          cancelable: true,
+          detail: { commit: () => true, face: "chat", sessionKey: "agent:main:b" },
+        }),
+      );
+      await showSession(page, "agent:main:b");
+      const paneA = paneFor("agent:main:a");
+      const paneB = paneFor("agent:main:b");
+
+      vi.advanceTimersByTime(749);
+      await page.updateComplete;
+      expect(paneA?.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+
+      vi.advanceTimersByTime(1);
+      await page.updateComplete;
+      expect(paneA?.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
+      expect(paneB?.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("evicts a deleted inactive retained session without redirecting the active pane", async () => {

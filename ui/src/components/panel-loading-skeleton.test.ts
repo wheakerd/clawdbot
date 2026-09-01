@@ -89,6 +89,22 @@ describe("panel loading skeleton", () => {
     expect(skeleton?.hasAttribute("compact")).toBe(true);
   });
 
+  it("represents user cards separately from unboxed assistant turns", async () => {
+    const mount = document.body.appendChild(document.createElement("div"));
+    render(html`${renderPanelLoadingSkeleton("chat", "Loading conversation")}`, mount);
+
+    const skeleton = mount.querySelector<HTMLElement>("openclaw-panel-loading-skeleton");
+    await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+    const turns = skeleton?.shadowRoot?.querySelectorAll<HTMLElement>(".chat-turn");
+    expect(turns).toHaveLength(5);
+    expect(
+      skeleton?.shadowRoot?.querySelectorAll('.chat-turn[data-skeleton-role="user"]'),
+    ).toHaveLength(3);
+    expect(
+      skeleton?.shadowRoot?.querySelectorAll('.chat-turn[data-skeleton-role="assistant"]'),
+    ).toHaveLength(2);
+  });
+
   it("supports an overlay placeholder for retained viewport chrome", async () => {
     const mount = document.body.appendChild(document.createElement("div"));
     render(html`${renderPanelLoadingSkeleton("desktop", "Connecting", false, true)}`, mount);

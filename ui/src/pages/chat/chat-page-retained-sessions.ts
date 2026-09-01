@@ -5,14 +5,35 @@ import {
 } from "../../lib/sessions/navigation-handoff.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { clearPaneSessionHandoff, clearPaneSessionHandoffs } from "./chat-pane-shared.ts";
+import {
+  CHAT_TRANSCRIPT_READY_EVENT,
+  type ChatTranscriptReadyDetail,
+} from "./chat-transcript-ready.ts";
 import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
 import { findPane } from "./split-layout.ts";
 
 const RETAINED_SESSIONS_PER_PANE = 3;
 const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
+// Sub-second cold loads stay covered; slower loads need visible progress rather than stale content.
+const COLD_SESSION_LOADING_DELAY_MS = 750;
 
-type RetentionHost = HTMLElement & { requestUpdate(): unknown };
+type ColdSessionTransition = {
+  paneId: string;
+  revealed: boolean;
+  sourceSessionKey: string;
+  targetSessionKey: string;
+};
+
+type RetainedSessionPresentation = {
+  preparingSessionKey: string | null;
+  visualSessionKey: string;
+};
+
+type RetentionHost = HTMLElement & {
+  requestUpdate(): unknown;
+  updateComplete: Promise<unknown>;
+};
 type RetentionBindings = {
   context: () => ApplicationContext | undefined;
   face: () => SessionNavigationIntent["face"];
@@ -25,6 +46,8 @@ export class ChatPageRetainedSessions {
   private preview: (SessionNavigationIntent & { href: string; paneId: string }) | null = null;
   private previewFrame: number | undefined;
   private previewTimer: number | undefined;
+  private coldTransition: ColdSessionTransition | null = null;
+  private coldTransitionTimer: number | undefined;
 
   constructor(
     private readonly host: RetentionHost,
@@ -34,6 +57,7 @@ export class ChatPageRetainedSessions {
   connect(): void {
     window.addEventListener("popstate", this.cancelPreview);
     window.addEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
+    this.host.addEventListener(CHAT_TRANSCRIPT_READY_EVENT, this.handleTranscriptReady);
   }
 
   disconnect(): void {
@@ -42,10 +66,17 @@ export class ChatPageRetainedSessions {
     this.sessionsByPane.clear();
     window.removeEventListener("popstate", this.cancelPreview);
     window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
+    this.host.removeEventListener(CHAT_TRANSCRIPT_READY_EVENT, this.handleTranscriptReady);
     this.cancelPreview();
   }
 
   settleRoute(sessionKey: string): void {
+    if (
+      this.coldTransition &&
+      !areUiSessionKeysEquivalent(this.coldTransition.targetSessionKey, sessionKey)
+    ) {
+      this.cancelPreview();
+    }
     if (!this.preview) {
       return;
     }
@@ -55,6 +86,20 @@ export class ChatPageRetainedSessions {
     } else {
       this.cancelPreview();
     }
+  }
+
+  presentation(pane: ChatSplitPane): RetainedSessionPresentation {
+    const transition = this.coldTransition;
+    const preparing =
+      transition?.paneId === pane.id &&
+      areUiSessionKeysEquivalent(transition.targetSessionKey, pane.sessionKey);
+    if (!preparing) {
+      return { preparingSessionKey: null, visualSessionKey: pane.sessionKey };
+    }
+    return {
+      preparingSessionKey: transition.targetSessionKey,
+      visualSessionKey: transition.revealed ? pane.sessionKey : transition.sourceSessionKey,
+    };
   }
 
   retain(panes: readonly ChatSplitPane[]): ReadonlyMap<string, readonly string[]> {
@@ -138,6 +183,7 @@ export class ChatPageRetainedSessions {
     if (!(event instanceof CustomEvent)) {
       return;
     }
+    const previousTransition = this.coldTransition;
     this.cancelPreview();
     const intent = event.detail as SessionNavigationIntent;
     if (intent.face !== this.bindings.face()) {
@@ -148,11 +194,25 @@ export class ChatPageRetainedSessions {
     const retainedKey = this.sessionsByPane
       .get(activePane?.id ?? "")
       ?.find((key) => areUiSessionKeysEquivalent(key, intent.sessionKey));
-    if (
-      !activePane ||
-      !retainedKey ||
-      areUiSessionKeysEquivalent(activePane.sessionKey, retainedKey)
-    ) {
+    if (!activePane || areUiSessionKeysEquivalent(activePane.sessionKey, intent.sessionKey)) {
+      return;
+    }
+    if (!retainedKey) {
+      const sourceSessionKey =
+        previousTransition?.paneId === activePane.id && !previousTransition.revealed
+          ? previousTransition.sourceSessionKey
+          : activePane.sessionKey;
+      this.coldTransition = {
+        paneId: activePane.id,
+        revealed: false,
+        sourceSessionKey,
+        targetSessionKey: intent.sessionKey,
+      };
+      this.present(activePane.id, sourceSessionKey);
+      this.coldTransitionTimer = window.setTimeout(
+        this.finishColdTransition,
+        COLD_SESSION_LOADING_DELAY_MS,
+      );
       return;
     }
     this.present(activePane.id, retainedKey, true);
@@ -213,11 +273,52 @@ export class ChatPageRetainedSessions {
       window.clearTimeout(this.previewTimer);
       this.previewTimer = undefined;
     }
+    if (this.coldTransitionTimer !== undefined) {
+      window.clearTimeout(this.coldTransitionTimer);
+      this.coldTransitionTimer = undefined;
+    }
   }
+
+  private readonly handleTranscriptReady = (event: Event) => {
+    // SAFETY: this listener is registered only for our typed internal transcript-ready event.
+    const detail = (event as CustomEvent<ChatTranscriptReadyDetail>).detail;
+    const transition = this.coldTransition;
+    if (
+      detail &&
+      transition?.paneId === detail.paneId &&
+      areUiSessionKeysEquivalent(transition.targetSessionKey, detail.sessionKey)
+    ) {
+      this.finishColdTransition();
+    }
+  };
+
+  private readonly finishColdTransition = () => {
+    const transition = this.coldTransition;
+    if (!transition || transition.revealed) {
+      return;
+    }
+    if (this.coldTransitionTimer !== undefined) {
+      window.clearTimeout(this.coldTransitionTimer);
+      this.coldTransitionTimer = undefined;
+    }
+    transition.revealed = true;
+    this.host.requestUpdate();
+    void this.host.updateComplete.then(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (this.coldTransition === transition) {
+            this.coldTransition = null;
+            this.host.requestUpdate();
+          }
+        });
+      });
+    });
+  };
 
   private readonly cancelPreview = () => {
     this.clearPreviewWork();
     this.preview = null;
+    this.coldTransition = null;
     const layout = this.bindings.layout();
     const activePane = findPane(layout, layout.activePaneId)?.pane;
     if (activePane) {

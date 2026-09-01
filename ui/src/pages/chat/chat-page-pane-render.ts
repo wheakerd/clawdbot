@@ -46,10 +46,12 @@ type ChatPagePaneRenderOptions = {
   onSplitRight?: (paneId: string) => void;
   ownerKey: string;
   pane: ChatSplitPane;
+  preparingSessionKey: string | null;
   sessionKeys: readonly string[];
   showGatewayPicker: boolean;
   splitMode: boolean;
   weight: number;
+  visualSessionKey: string;
 };
 
 export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
@@ -70,10 +72,13 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
           options.sessionKeys,
           (sessionKey) => sessionKey,
           (sessionKey) => {
-            const visible =
-              sessionKey === options.pane.sessionKey ||
-              areUiSessionKeysEquivalent(sessionKey, options.pane.sessionKey);
-            const presented = visible && (!options.narrow || options.active);
+            const selected = areUiSessionKeysEquivalent(sessionKey, options.pane.sessionKey);
+            const visible = areUiSessionKeysEquivalent(sessionKey, options.visualSessionKey);
+            const preparing =
+              options.preparingSessionKey !== null &&
+              areUiSessionKeysEquivalent(sessionKey, options.preparingSessionKey);
+            const presented = (selected || visible) && (!options.narrow || options.active);
+            const interactive = selected && visible && presented;
             const active = options.active && visible;
             const draft = active
               ? routeDraft(options.data, options.consumedDraftData, sessionKey)
@@ -86,54 +91,8 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               sessions.find((row) => areUiSessionKeysEquivalent(row.key, resolvedKey)),
             );
             return html`<openclaw-chat-pane
-              class="chat-pane-cache__pane ${
-                visible ? "chat-pane-cache__pane--visible" : ""
-              } ${active ? "chat-pane-cache__pane--active" : ""} ${
-                options.splitMode ? "chat-split-view__pane" : ""
-              }"
-              data-mcp-app-owner-key=${JSON.stringify([options.ownerKey, sessionKey])}
-              aria-hidden=${presented ? "false" : "true"}
-              ?inert=${!presented}
-              .paneId=${options.pane.id}
-              .presentationId=${JSON.stringify([options.pane.id, sessionKey])}
-              .chatMessagesBySession=${options.chatMessagesBySession}
-              .sessionSnapshotStore=${options.sessionSnapshotStore}
-              .sessionKey=${sessionKey}
-              .presented=${presented}
-              .visuallyPresented=${presented}
-              .active=${active}
-              .draft=${draft}
-              .focusComposer=${options.draftFocus.shouldFocusPane(
-                active,
-                draft,
-                sessionKey,
-                options.data,
-              )}
-              .dashboardExpanded=${options.data?.dashboardExpanded === true}
-              .routeFace=${options.data?.face ?? "chat"}
-              .paneTitle=${title}
-              .narrow=${options.narrow}
-              .mergedChrome=${options.mergedChrome && active}
-              .navDrawerOpen=${options.navDrawerOpen && active}
-              .nativeGateways=${nativeGateways}
-              .gatewaysSnapshot=${nativeGateways?.snapshot ?? null}
-              .onboarding=${options.onboarding}
-              .onOpenSplitView=${options.onOpenSplitView}
-              .onSplitDown=${options.onSplitDown}
-              .onSplitRight=${options.onSplitRight}
-              .onClosePane=${options.onClosePane}
-              .onFocusPane=${options.onFocusPane}
-              .onPaneSessionChange=${(
-                paneId: string,
-                nextSessionKey: string,
-                paneOptions?: PaneSessionChangeOptions,
-              ) => options.onPaneSessionChange(paneId, sessionKey, nextSessionKey, paneOptions)}
-              .onSessionDeleted=${options.onSessionDeleted}
-              .onFaceChange=${options.onFaceChange}
-            ></openclaw-chat-pane>`;
-          },
-        )}
-      </div>
-    </div>
-  `;
-}
+              class="chat-pane-cache__pane ${visible
+                ? "chat-pane-cache__pane--visible"
+                : ""} ${preparing ? "chat-pane-cache__pane--preparing" : ""} ${active
+                ? "chat-pane-cache__pane--active"
+                : ""} ${options.splitMode ? "chat-split-view__pane" : ""}"

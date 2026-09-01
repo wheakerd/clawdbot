@@ -62,6 +62,10 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import {
+  CHAT_TRANSCRIPT_READY_EVENT,
+  type ChatTranscriptReadyDetail,
+} from "./chat-transcript-ready.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
@@ -94,6 +98,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   });
 
   private chatRouteReadyReported = false;
+  private chatTranscriptLoadingObserved = false;
+  private chatTranscriptReadyReported = false;
   private currentSessionArchived: boolean | undefined;
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
@@ -561,6 +567,30 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       // handoff cover until this pane has committed its usable composer.
       this.chatRouteReadyReported = true;
       this.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true, composed: true }));
+    }
+    const state = this.state;
+    const catalogSession = parseCatalogSessionKey(state?.sessionKey ?? "");
+    const messageCount = catalogSession
+      ? this.catalogMessages.length
+      : (state?.chatMessages.length ?? 0);
+    const loading = catalogSession ? this.catalogLoading : (state?.chatLoading ?? true);
+    this.chatTranscriptLoadingObserved ||= loading;
+    const renderedMessage = [...this.querySelectorAll<HTMLElement>(".chat-bubble")].some(
+      (bubble) => bubble.childElementCount > 0,
+    );
+    const transcriptReady =
+      renderedMessage || (this.chatTranscriptLoadingObserved && !loading && messageCount === 0);
+    if (!this.chatTranscriptReadyReported && state && transcriptReady) {
+      // A cold destination mounts behind the previous pane. Report the first
+      // usable transcript commit so the page can replace both panes atomically.
+      this.chatTranscriptReadyReported = true;
+      this.dispatchEvent(
+        new CustomEvent<ChatTranscriptReadyDetail>(CHAT_TRANSCRIPT_READY_EVENT, {
+          bubbles: true,
+          composed: true,
+          detail: { paneId: this.paneId, sessionKey: state.sessionKey },
+        }),
+      );
     }
     if (changedProperties.has("focusComposer") && this.focusComposer) {
       const textarea = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
