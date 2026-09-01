@@ -125,7 +125,15 @@ export class ChatPageRetainedSessions {
       equivalentIndex < 0 ? pane.sessionKey : retained.splice(equivalentIndex, 1)[0]!;
     retained.push(retainedKey);
     if (retained.length > RETAINED_SESSIONS_PER_PANE) {
-      this.findPane(pane.id, retained.shift()!)?.prepareForEviction?.();
+      // Cold targets prepare behind this source; evicting it leaves no visible pane.
+      const visualSource =
+        this.coldTransition?.paneId === pane.id && !this.coldTransition.revealed
+          ? this.coldTransition.sourceSessionKey
+          : null;
+      const evictionIndex = visualSource
+        ? retained.findIndex((key) => !areUiSessionKeysEquivalent(key, visualSource))
+        : 0;
+      this.findPane(pane.id, retained.splice(evictionIndex, 1)[0]!)?.prepareForEviction?.();
     }
     return retained.toSorted((left, right) => left.localeCompare(right));
   }

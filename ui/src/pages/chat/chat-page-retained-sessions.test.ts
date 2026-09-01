@@ -484,7 +484,7 @@ describe("chat page retained sessions", () => {
     expect(paneA?.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
     expect(paneA?.presented).toBe(true);
     expect(paneB?.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
-    expect(paneB?.presented).toBe(true);
+    expect(paneB?.presented).toBe(false);
     expect(paneA?.hasAttribute("inert")).toBe(true);
     expect(paneB?.hasAttribute("inert")).toBe(true);
 
@@ -504,7 +504,7 @@ describe("chat page retained sessions", () => {
   });
 
   it("keeps the original transcript visible when a cold destination is superseded", async () => {
-    const { page, paneFor } = await mountRetainedPage("agent:main:a");
+    const { page, paneFor, panes } = await mountRetainedPage("agent:main:a");
     const paneA = paneFor("agent:main:a");
 
     window.dispatchEvent(
@@ -528,6 +528,23 @@ describe("chat page retained sessions", () => {
     expect(paneA?.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
     expect(paneB?.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
     expect(paneC?.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
+
+    window.dispatchEvent(
+      new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+        cancelable: true,
+        detail: { commit: () => true, face: "chat", sessionKey: "agent:main:d" },
+      }),
+    );
+    await showSession(page, "agent:main:d");
+    const paneD = paneFor("agent:main:d");
+
+    expect(panes().map((pane) => pane.sessionKey)).toEqual([
+      "agent:main:a",
+      "agent:main:c",
+      "agent:main:d",
+    ]);
+    expect(paneA?.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+    expect(paneD?.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
   });
 
   it("reveals a cold loading pane after the bounded delay", async () => {

@@ -81,7 +81,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
             const preparing =
               options.preparingSessionKey !== null &&
               areUiSessionKeysEquivalent(sessionKey, options.preparingSessionKey);
-            const presented = (selected || visible) && (!options.narrow || options.active);
+            const presented = visible && (!options.narrow || options.active);
             const interactive = selected && visible && presented;
             const active = options.active && visible;
             const draft = active
