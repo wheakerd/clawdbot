@@ -107,10 +107,13 @@ async function showSession(page: ChatPage, sessionKey: string): Promise<void> {
 }
 
 async function reportTranscriptReady(page: ChatPage, sessionKey: string): Promise<void> {
-  const pane = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find((candidate) =>
-    areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
+  const pane = expectDefined(
+    [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find((candidate) =>
+      areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
+    ),
+    `pane for transcript-ready event: ${sessionKey}`,
   );
-  pane?.dispatchEvent(
+  pane.dispatchEvent(
     new CustomEvent(CHAT_TRANSCRIPT_READY_EVENT, {
       bubbles: true,
       composed: true,
@@ -122,7 +125,21 @@ async function reportTranscriptReady(page: ChatPage, sessionKey: string): Promis
 
 function setLayout(page: ChatPage, layout: ChatSplitLayout): void {
   (page as unknown as { layout: ChatSplitLayout }).layout = layout;
-  page.requestUpdate();
+}
+
+function splitLayout(
+  activePaneId: "p1" | "p2",
+  firstSessionKey: string,
+  secondSessionKey: string,
+): ChatSplitLayout {
+  return {
+    activePaneId,
+    columns: [
+      { id: "c1", panes: [{ id: "p1", sessionKey: firstSessionKey }], paneWeights: [1] },
+      { id: "c2", panes: [{ id: "p2", sessionKey: secondSessionKey }], paneWeights: [1] },
+    ],
+    columnWeights: [0.5, 0.5],
+  };
 }
 
 async function mountRetainedPage(sessionKey: string, ...warmSessionKeys: string[]) {
@@ -619,10 +636,10 @@ describe("chat page retained sessions", () => {
     expect(paneD?.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
   });
 
-  it("keeps a superseded unready destination cold when revisited", async () => {
+  it("keeps a superseded target hidden when it becomes ready and warms its revisit", async () => {
     const { page, paneFor } = await mountRetainedPage("agent:main:a");
 
-    for (const sessionKey of ["agent:main:b", "agent:main:c", "agent:main:b"]) {
+    for (const sessionKey of ["agent:main:b", "agent:main:c"]) {
       window.dispatchEvent(
         new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
           cancelable: true,
@@ -632,6 +649,7 @@ describe("chat page retained sessions", () => {
       await showSession(page, sessionKey);
     }
 
+    await reportTranscriptReady(page, "agent:main:b");
     expect(paneFor("agent:main:a")?.classList.contains("chat-pane-cache__pane--visible")).toBe(
       true,
     );
@@ -641,6 +659,17 @@ describe("chat page retained sessions", () => {
     expect(paneFor("agent:main:c")?.classList.contains("chat-pane-cache__pane--visible")).toBe(
       false,
     );
+
+    const revisit = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+      cancelable: true,
+      detail: { commit: () => true, face: "chat", sessionKey: "agent:main:b" },
+    });
+    window.dispatchEvent(revisit);
+
+    expect(revisit.defaultPrevented).toBe(true);
+    expect(paneFor("agent:main:b")?.classList.contains("chat-pane-cache__pane--visible")).toBe(
+      true,
+    );
   });
 
   it("keeps cold transitions independent across split panes", async () => {
@@ -648,22 +677,7 @@ describe("chat page retained sessions", () => {
     setNavigationContext(page);
     page.data = { sessionKey: "agent:main:a" };
     document.body.append(page);
-    setLayout(page, {
-      activePaneId: "p1",
-      columns: [
-        {
-          id: "c1",
-          panes: [{ id: "p1", sessionKey: "agent:main:a" }],
-          paneWeights: [1],
-        },
-        {
-          id: "c2",
-          panes: [{ id: "p2", sessionKey: "agent:main:c" }],
-          paneWeights: [1],
-        },
-      ],
-      columnWeights: [0.5, 0.5],
-    });
+    setLayout(page, splitLayout("p1", "agent:main:a", "agent:main:c"));
     await page.updateComplete;
 
     window.dispatchEvent(
@@ -672,24 +686,10 @@ describe("chat page retained sessions", () => {
         detail: { commit: () => true, face: "chat", sessionKey: "agent:main:b" },
       }),
     );
+    setLayout(page, splitLayout("p1", "agent:main:b", "agent:main:c"));
     await showSession(page, "agent:main:b");
 
-    setLayout(page, {
-      activePaneId: "p2",
-      columns: [
-        {
-          id: "c1",
-          panes: [{ id: "p1", sessionKey: "agent:main:b" }],
-          paneWeights: [1],
-        },
-        {
-          id: "c2",
-          panes: [{ id: "p2", sessionKey: "agent:main:c" }],
-          paneWeights: [1],
-        },
-      ],
-      columnWeights: [0.5, 0.5],
-    });
+    setLayout(page, splitLayout("p2", "agent:main:b", "agent:main:c"));
     await showSession(page, "agent:main:c");
     window.dispatchEvent(
       new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
@@ -697,6 +697,7 @@ describe("chat page retained sessions", () => {
         detail: { commit: () => true, face: "chat", sessionKey: "agent:main:d" },
       }),
     );
+    setLayout(page, splitLayout("p2", "agent:main:b", "agent:main:d"));
     await showSession(page, "agent:main:d");
 
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];

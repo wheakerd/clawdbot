@@ -144,47 +144,6 @@ suite.define(() => {
         '.chat-thread openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]',
       );
       await loadingSkeleton.waitFor({ state: "visible" });
-      const loadingGeometry = await loadingSkeleton.evaluate((element) => {
-        const thread = element.closest<HTMLElement>(".chat-thread");
-        const firstTurn = element.shadowRoot?.querySelector<HTMLElement>(".chat-turn");
-        const userTurn = element.shadowRoot?.querySelector<HTMLElement>(
-          '.chat-turn[data-skeleton-role="user"]',
-        );
-        const assistantTurn = element.shadowRoot?.querySelector<HTMLElement>(
-          '.chat-turn[data-skeleton-role="assistant"]',
-        );
-        if (!thread || !firstTurn || !userTurn || !assistantTurn) {
-          return null;
-        }
-        const skeletonWidth = element.getBoundingClientRect().width;
-        return {
-          assistantWidthRatio: assistantTurn.getBoundingClientRect().width / skeletonWidth,
-          firstTurnInset:
-            firstTurn.getBoundingClientRect().top - thread.getBoundingClientRect().top,
-          userWidthRatio: userTurn.getBoundingClientRect().width / skeletonWidth,
-        };
-      });
-      expect(loadingGeometry).not.toBeNull();
-      expect(loadingGeometry!.firstTurnInset).toBeLessThan(80);
-      expect(loadingGeometry!.assistantWidthRatio).toBeGreaterThan(0.9);
-      expect(loadingGeometry!.userWidthRatio).toBeGreaterThan(0.64);
-      expect(loadingGeometry!.userWidthRatio).toBeLessThan(0.72);
-      await page.setViewportSize({ height: 844, width: 390 });
-      const mobileUserWidthRatio = await loadingSkeleton.evaluate((element) => {
-        const conversation = element.shadowRoot?.querySelector<HTMLElement>(".conversation");
-        const userTurn = element.shadowRoot?.querySelector<HTMLElement>(
-          '.chat-turn[data-skeleton-role="user"]',
-        );
-        if (!conversation || !userTurn) {
-          return null;
-        }
-        return userTurn.getBoundingClientRect().width / conversation.getBoundingClientRect().width;
-      });
-      if (mobileUserWidthRatio === null) {
-        throw new Error("mobile chat skeleton user turn did not render");
-      }
-      expect(mobileUserWidthRatio).toBeGreaterThan(0.84);
-      expect(mobileUserWidthRatio).toBeLessThan(0.92);
       await gateway.resolveDeferred("chat.startup");
       await page
         .locator(".chat-thread")

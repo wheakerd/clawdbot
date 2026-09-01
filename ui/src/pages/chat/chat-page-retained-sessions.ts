@@ -19,10 +19,9 @@ const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
 const COLD_SESSION_LOADING_DELAY_MS = 750;
 
 type ColdSessionTransition = {
-  revealed: boolean;
   sourceSessionKey: string;
   targetSessionKey: string;
-};
+} & ({ phase: "covered"; timer: number } | { phase: "revealed" });
 
 type RetainedSession = {
   key: string;
@@ -50,9 +49,7 @@ export class ChatPageRetainedSessions {
   private preview: (SessionNavigationIntent & { href: string; paneId: string }) | null = null;
   private previewFrame: number | undefined;
   private previewTimer: number | undefined;
-  // Split panes can prepare concurrently; each pane owns its cover and reveal timer.
   private readonly coldTransitions = new Map<string, ColdSessionTransition>();
-  private readonly coldTransitionTimers = new Map<string, number>();
 
   constructor(
     private readonly host: RetentionHost,
@@ -68,12 +65,12 @@ export class ChatPageRetainedSessions {
   disconnect(): void {
     // Pane disconnects stage their scoped composer packages for a later chat
     // remount. Only an explicit pane/session close is terminal.
-    this.sessionsByPane.clear();
     window.removeEventListener("popstate", this.cancelPreview);
     window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
     this.host.removeEventListener(CHAT_TRANSCRIPT_READY_EVENT, this.handleTranscriptReady);
     this.cancelPreview();
     this.clearColdTransitions();
+    this.sessionsByPane.clear();
   }
 
   settleRoute(sessionKey: string): void {
@@ -107,7 +104,8 @@ export class ChatPageRetainedSessions {
     }
     return {
       preparingSessionKey: transition.targetSessionKey,
-      visualSessionKey: transition.revealed ? pane.sessionKey : transition.sourceSessionKey,
+      visualSessionKey:
+        transition.phase === "revealed" ? pane.sessionKey : transition.sourceSessionKey,
     };
   }
 
@@ -115,6 +113,7 @@ export class ChatPageRetainedSessions {
     const paneIds = new Set(panes.map((pane) => pane.id));
     for (const paneId of this.sessionsByPane.keys()) {
       if (!paneIds.has(paneId)) {
+        this.clearColdTransition(paneId);
         this.sessionsByPane.delete(paneId);
       }
     }
@@ -138,7 +137,7 @@ export class ChatPageRetainedSessions {
     if (retained.length > RETAINED_SESSIONS_PER_PANE) {
       // Cold targets prepare behind this source; evicting it leaves no visible pane.
       const transition = this.coldTransitions.get(pane.id);
-      const visualSource = transition && !transition.revealed ? transition.sourceSessionKey : null;
+      const visualSource = transition?.phase === "covered" ? transition.sourceSessionKey : null;
       const evictionIndex = visualSource
         ? retained.findIndex(({ key }) => !areUiSessionKeysEquivalent(key, visualSource))
         : 0;
@@ -154,8 +153,8 @@ export class ChatPageRetainedSessions {
       clearPaneSessionHandoffs(context, paneId);
       context.chatAttachmentHandoff.clearPane(paneId);
     }
-    this.sessionsByPane.delete(paneId);
     this.clearColdTransition(paneId);
+    this.sessionsByPane.delete(paneId);
   }
 
   readonly removeSession = (
@@ -167,8 +166,7 @@ export class ChatPageRetainedSessions {
     const deletedPane = this.findPane(paneId, sessionKey);
     const transition = this.coldTransitions.get(paneId);
     const removedColdSource =
-      transition &&
-      !transition.revealed &&
+      transition?.phase === "covered" &&
       areUiSessionKeysEquivalent(transition.sourceSessionKey, sessionKey);
     if (removedColdSource) {
       this.finishColdTransition(paneId);
@@ -239,23 +237,20 @@ export class ChatPageRetainedSessions {
     this.clearColdTransition(activePane.id);
     if (!retainedSession || retainedSession.pending) {
       const sourceSessionKey =
-        previousTransition && !previousTransition.revealed
+        previousTransition?.phase === "covered"
           ? previousTransition.sourceSessionKey
           : activePane.sessionKey;
-      const transition = {
-        revealed: false,
+      const timer = window.setTimeout(
+        () => this.finishColdTransition(activePane.id),
+        COLD_SESSION_LOADING_DELAY_MS,
+      );
+      this.coldTransitions.set(activePane.id, {
+        phase: "covered",
         sourceSessionKey,
         targetSessionKey: intent.sessionKey,
-      };
-      this.coldTransitions.set(activePane.id, transition);
+        timer,
+      });
       this.present(activePane.id, sourceSessionKey);
-      this.coldTransitionTimers.set(
-        activePane.id,
-        window.setTimeout(
-          () => this.finishColdTransition(activePane.id),
-          COLD_SESSION_LOADING_DELAY_MS,
-        ),
-      );
       return;
     }
     this.present(activePane.id, retainedSession.key, true);
@@ -341,18 +336,23 @@ export class ChatPageRetainedSessions {
 
   private finishColdTransition(paneId: string): void {
     const transition = this.coldTransitions.get(paneId);
-    if (!transition || transition.revealed) {
+    if (transition?.phase !== "covered") {
       return;
     }
-    this.clearColdTransitionTimer(paneId);
-    transition.revealed = true;
+    window.clearTimeout(transition.timer);
+    const revealedTransition: ColdSessionTransition = {
+      phase: "revealed",
+      sourceSessionKey: transition.sourceSessionKey,
+      targetSessionKey: transition.targetSessionKey,
+    };
+    this.coldTransitions.set(paneId, revealedTransition);
     this.host.requestUpdate();
     void this.host.updateComplete.then(() => {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          if (this.coldTransitions.get(paneId) === transition) {
+          if (this.coldTransitions.get(paneId) === revealedTransition) {
             this.coldTransitions.delete(paneId);
-            this.findPane(paneId, transition.targetSessionKey)?.classList.remove(
+            this.findPane(paneId, revealedTransition.targetSessionKey)?.classList.remove(
               "chat-pane-cache__pane--preparing",
             );
           }
@@ -361,24 +361,18 @@ export class ChatPageRetainedSessions {
     });
   }
 
-  private clearColdTransitionTimer(paneId: string): void {
-    const timer = this.coldTransitionTimers.get(paneId);
-    if (timer !== undefined) {
-      window.clearTimeout(timer);
-      this.coldTransitionTimers.delete(paneId);
-    }
-  }
-
   private clearColdTransition(paneId: string): void {
-    this.clearColdTransitionTimer(paneId);
+    const transition = this.coldTransitions.get(paneId);
+    if (transition?.phase === "covered") {
+      window.clearTimeout(transition.timer);
+    }
     this.coldTransitions.delete(paneId);
   }
 
   private clearColdTransitions(): void {
     for (const paneId of this.coldTransitions.keys()) {
-      this.clearColdTransitionTimer(paneId);
+      this.clearColdTransition(paneId);
     }
-    this.coldTransitions.clear();
   }
 
   private cancelColdTransition(paneId: string): void {

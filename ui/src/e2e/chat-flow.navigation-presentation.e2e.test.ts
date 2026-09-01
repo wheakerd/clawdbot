@@ -157,21 +157,32 @@ suite.define(() => {
       });
       expect(requireRecord(coldRequest.params).sessionKey).toBe(sessionB);
       await page.getByText("Session A retained cover.").waitFor({ state: "visible" });
-      await page.evaluate(() => {
-        Reflect.set(globalThis, "__coldCoverKeyObserved", false);
-        document.addEventListener(
-          "keydown",
-          () => Reflect.set(globalThis, "__coldCoverKeyObserved", true),
-          { capture: true, once: true },
-        );
-      });
 
       await page.keyboard.press("x");
 
-      expect(await page.evaluate(() => Reflect.get(globalThis, "__coldCoverKeyObserved"))).toBe(
-        true,
+      const textareaState = await page.locator("openclaw-chat-pane textarea").evaluateAll((nodes) =>
+        nodes.map((node) => ({
+          focused: node === document.activeElement,
+          value: (node as HTMLTextAreaElement).value,
+        })),
       );
-      expect(await page.locator(".chat-pane-cache__pane--visible textarea:focus").count()).toBe(0);
+      expect(textareaState.length).toBeGreaterThan(0);
+      expect(textareaState.every(({ focused, value }) => !focused && value === "")).toBe(true);
+
+      const loadingSkeleton = page.locator(
+        '.chat-pane-cache__pane--visible openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]',
+      );
+      await loadingSkeleton.waitFor({ state: "visible", timeout: 5_000 });
+      const loadingGeometry = await loadingSkeleton.evaluate((element) => {
+        const conversation = element.shadowRoot?.querySelector<HTMLElement>(".conversation");
+        const turns = element.shadowRoot?.querySelectorAll(".chat-turn").length ?? 0;
+        return {
+          height: conversation?.getBoundingClientRect().height ?? 0,
+          turns,
+        };
+      });
+      expect(loadingGeometry.turns).toBeGreaterThan(0);
+      expect(loadingGeometry.height).toBeGreaterThan(100);
 
       await gateway.resolveDeferred("chat.startup");
       await page.getByText("Session B ready.").waitFor({ state: "visible" });

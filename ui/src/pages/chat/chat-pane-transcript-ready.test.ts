@@ -32,3 +32,39 @@ it("reports the first rendered message once", () => {
   const event = ready.mock.calls[0]?.[0] as CustomEvent<ChatTranscriptReadyDetail>;
   expect(event.detail).toEqual({ paneId: "p1", sessionKey: "agent:main:ready" });
 });
+
+it.each([
+  ["ordinary", "agent:main:empty"],
+  ["catalog", "agent:main:catalog:claude:gateway%3Alocal:thread-1"],
+] as const)("reports a completed empty %s transcript once", (kind, sessionKey) => {
+  const { pane, state } = createTestChatPane({
+    client: {} as GatewayBrowserClient,
+    sessions: {} as SessionCapability,
+  });
+  state.sessionKey = sessionKey;
+  pane.paneId = "p1";
+  const ready = vi.fn();
+  pane.addEventListener(CHAT_TRANSCRIPT_READY_EVENT, ready);
+  const lifecycle = pane as TestChatPane & { updated(): void };
+  const catalogPane = pane as TestChatPane & { catalogLoading: boolean };
+
+  if (kind === "catalog") {
+    catalogPane.catalogLoading = true;
+  } else {
+    state.chatLoading = true;
+  }
+  lifecycle.updated();
+  expect(ready).not.toHaveBeenCalled();
+
+  if (kind === "catalog") {
+    catalogPane.catalogLoading = false;
+  } else {
+    state.chatLoading = false;
+  }
+  lifecycle.updated();
+  lifecycle.updated();
+
+  expect(ready).toHaveBeenCalledOnce();
+  const event = ready.mock.calls[0]?.[0] as CustomEvent<ChatTranscriptReadyDetail>;
+  expect(event.detail).toEqual({ paneId: "p1", sessionKey });
+});
