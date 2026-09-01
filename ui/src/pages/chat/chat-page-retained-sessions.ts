@@ -146,6 +146,13 @@ export class ChatPageRetainedSessions {
     preserveDraft = false,
   ): void => {
     const deletedPane = this.findPane(paneId, sessionKey);
+    const removedColdSource =
+      this.coldTransition?.paneId === paneId &&
+      !this.coldTransition.revealed &&
+      areUiSessionKeysEquivalent(this.coldTransition.sourceSessionKey, sessionKey);
+    if (removedColdSource) {
+      this.finishColdTransition();
+    }
     if (!preserveDraft) {
       deletedPane?.discardStagedAttachments?.();
     }
@@ -167,7 +174,7 @@ export class ChatPageRetainedSessions {
     const selectedSessionKey = findPane(this.bindings.layout(), paneId)?.pane.sessionKey;
     if (selectedSessionKey && areUiSessionKeysEquivalent(selectedSessionKey, sessionKey)) {
       this.bindings.selectReplacement(paneId, sessionKey, replacementSessionKey);
-    } else {
+    } else if (!removedColdSource) {
       this.host.requestUpdate();
     }
   };
