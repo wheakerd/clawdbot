@@ -157,13 +157,17 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       this.viewerPresence.sync(this.context?.gateway, layout, this.narrow);
     }
     const data = this.data;
-    const activePane = this.layout ? findPane(this.layout, this.layout.activePaneId)?.pane : null;
+    const activePane = findPane(layout, layout.activePaneId)?.pane;
     const activeSessionKey = this.layout ? (activePane?.sessionKey ?? null) : undefined;
-    const routeHandoffRendered = this.draftFocus.rendered(
-      data,
-      activeSessionKey,
-      this.consumedDraftData,
-    );
+    const activePanePresented =
+      !activePane ||
+      areUiSessionKeysEquivalent(
+        this.retainedSessions.presentation(activePane).visualSessionKey,
+        activePane.sessionKey,
+      );
+    const routeHandoffRendered =
+      activePanePresented &&
+      this.draftFocus.rendered(data, activeSessionKey, this.consumedDraftData);
     if (changedProperties.has("data")) {
       this.routeHref = window.location.href;
       if (

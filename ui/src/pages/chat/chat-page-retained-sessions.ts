@@ -19,10 +19,14 @@ const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
 const COLD_SESSION_LOADING_DELAY_MS = 750;
 
 type ColdSessionTransition = {
-  paneId: string;
   revealed: boolean;
   sourceSessionKey: string;
   targetSessionKey: string;
+};
+
+type RetainedSession = {
+  key: string;
+  pending: boolean;
 };
 
 type RetainedSessionPresentation = {
@@ -42,12 +46,13 @@ type RetentionBindings = {
 };
 
 export class ChatPageRetainedSessions {
-  private readonly sessionsByPane = new Map<string, string[]>();
+  private readonly sessionsByPane = new Map<string, RetainedSession[]>();
   private preview: (SessionNavigationIntent & { href: string; paneId: string }) | null = null;
   private previewFrame: number | undefined;
   private previewTimer: number | undefined;
-  private coldTransition: ColdSessionTransition | null = null;
-  private coldTransitionTimer: number | undefined;
+  // Split panes can prepare concurrently; each pane owns its cover and reveal timer.
+  private readonly coldTransitions = new Map<string, ColdSessionTransition>();
+  private readonly coldTransitionTimers = new Map<string, number>();
 
   constructor(
     private readonly host: RetentionHost,
@@ -68,14 +73,19 @@ export class ChatPageRetainedSessions {
     window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
     this.host.removeEventListener(CHAT_TRANSCRIPT_READY_EVENT, this.handleTranscriptReady);
     this.cancelPreview();
+    this.clearColdTransitions();
   }
 
   settleRoute(sessionKey: string): void {
+    const layout = this.bindings.layout();
+    const activePane = findPane(layout, layout.activePaneId)?.pane;
+    const transition = activePane ? this.coldTransitions.get(activePane.id) : undefined;
     if (
-      this.coldTransition &&
-      !areUiSessionKeysEquivalent(this.coldTransition.targetSessionKey, sessionKey)
+      activePane &&
+      transition &&
+      !areUiSessionKeysEquivalent(transition.targetSessionKey, sessionKey)
     ) {
-      this.cancelPreview();
+      this.cancelColdTransition(activePane.id);
     }
     if (!this.preview) {
       return;
@@ -89,10 +99,9 @@ export class ChatPageRetainedSessions {
   }
 
   presentation(pane: ChatSplitPane): RetainedSessionPresentation {
-    const transition = this.coldTransition;
+    const transition = this.coldTransitions.get(pane.id);
     const preparing =
-      transition?.paneId === pane.id &&
-      areUiSessionKeysEquivalent(transition.targetSessionKey, pane.sessionKey);
+      transition && areUiSessionKeysEquivalent(transition.targetSessionKey, pane.sessionKey);
     if (!preparing) {
       return { preparingSessionKey: null, visualSessionKey: pane.sessionKey };
     }
@@ -119,23 +128,24 @@ export class ChatPageRetainedSessions {
       this.sessionsByPane.set(pane.id, retained);
     }
     const equivalentIndex = retained.findIndex(
-      (key) => key === pane.sessionKey || areUiSessionKeysEquivalent(key, pane.sessionKey),
+      ({ key }) => key === pane.sessionKey || areUiSessionKeysEquivalent(key, pane.sessionKey),
     );
-    const retainedKey =
-      equivalentIndex < 0 ? pane.sessionKey : retained.splice(equivalentIndex, 1)[0]!;
-    retained.push(retainedKey);
+    const retainedSession =
+      equivalentIndex < 0
+        ? { key: pane.sessionKey, pending: true }
+        : retained.splice(equivalentIndex, 1)[0]!;
+    retained.push(retainedSession);
     if (retained.length > RETAINED_SESSIONS_PER_PANE) {
       // Cold targets prepare behind this source; evicting it leaves no visible pane.
-      const visualSource =
-        this.coldTransition?.paneId === pane.id && !this.coldTransition.revealed
-          ? this.coldTransition.sourceSessionKey
-          : null;
+      const transition = this.coldTransitions.get(pane.id);
+      const visualSource = transition && !transition.revealed ? transition.sourceSessionKey : null;
       const evictionIndex = visualSource
-        ? retained.findIndex((key) => !areUiSessionKeysEquivalent(key, visualSource))
+        ? retained.findIndex(({ key }) => !areUiSessionKeysEquivalent(key, visualSource))
         : 0;
-      this.findPane(pane.id, retained.splice(evictionIndex, 1)[0]!)?.prepareForEviction?.();
+      const evictedKey = retained.splice(evictionIndex, 1)[0]!.key;
+      this.findPane(pane.id, evictedKey)?.prepareForEviction?.();
     }
-    return retained.toSorted((left, right) => left.localeCompare(right));
+    return retained.map(({ key }) => key).toSorted((left, right) => left.localeCompare(right));
   }
 
   discardPane(paneId: string): void {
@@ -145,6 +155,7 @@ export class ChatPageRetainedSessions {
       context.chatAttachmentHandoff.clearPane(paneId);
     }
     this.sessionsByPane.delete(paneId);
+    this.clearColdTransition(paneId);
   }
 
   readonly removeSession = (
@@ -154,32 +165,30 @@ export class ChatPageRetainedSessions {
     preserveDraft = false,
   ): void => {
     const deletedPane = this.findPane(paneId, sessionKey);
-    const transition = this.coldTransition;
+    const transition = this.coldTransitions.get(paneId);
     const removedColdSource =
-      transition?.paneId === paneId &&
+      transition &&
       !transition.revealed &&
       areUiSessionKeysEquivalent(transition.sourceSessionKey, sessionKey);
     if (removedColdSource) {
-      this.finishColdTransition();
+      this.finishColdTransition(paneId);
     }
     if (!preserveDraft) {
       deletedPane?.discardStagedAttachments?.();
     }
     const retained = this.sessionsByPane.get(paneId);
-    const retainedIndex = retained?.findIndex((key) => areUiSessionKeysEquivalent(key, sessionKey));
+    const retainedIndex = retained?.findIndex(({ key }) =>
+      areUiSessionKeysEquivalent(key, sessionKey),
+    );
     if (retained && retainedIndex !== undefined && retainedIndex >= 0) {
       retained.splice(retainedIndex, 1);
     }
-    if (
-      transition?.paneId === paneId &&
-      areUiSessionKeysEquivalent(transition.targetSessionKey, sessionKey)
-    ) {
-      const replacementRetained = retained?.some((key) =>
+    if (transition && areUiSessionKeysEquivalent(transition.targetSessionKey, sessionKey)) {
+      const replacementRetained = retained?.find(({ key }) =>
         areUiSessionKeysEquivalent(key, replacementSessionKey),
       );
-      if (replacementRetained) {
-        this.clearPreviewWork();
-        this.coldTransition = null;
+      if (replacementRetained && !replacementRetained.pending) {
+        this.clearColdTransition(paneId);
       } else {
         transition.targetSessionKey = replacementSessionKey;
       }
@@ -213,7 +222,6 @@ export class ChatPageRetainedSessions {
     if (!(event instanceof CustomEvent)) {
       return;
     }
-    const previousTransition = this.coldTransition;
     this.cancelPreview();
     const intent = event.detail as SessionNavigationIntent;
     if (intent.face !== this.bindings.face()) {
@@ -221,38 +229,43 @@ export class ChatPageRetainedSessions {
     }
     const layout = this.bindings.layout();
     const activePane = findPane(layout, layout.activePaneId)?.pane;
-    const retainedKey = this.sessionsByPane
+    const retainedSession = this.sessionsByPane
       .get(activePane?.id ?? "")
-      ?.find((key) => areUiSessionKeysEquivalent(key, intent.sessionKey));
+      ?.find(({ key }) => areUiSessionKeysEquivalent(key, intent.sessionKey));
     if (!activePane || areUiSessionKeysEquivalent(activePane.sessionKey, intent.sessionKey)) {
       return;
     }
-    if (!retainedKey) {
+    const previousTransition = this.coldTransitions.get(activePane.id);
+    this.clearColdTransition(activePane.id);
+    if (!retainedSession || retainedSession.pending) {
       const sourceSessionKey =
-        previousTransition?.paneId === activePane.id && !previousTransition.revealed
+        previousTransition && !previousTransition.revealed
           ? previousTransition.sourceSessionKey
           : activePane.sessionKey;
-      this.coldTransition = {
-        paneId: activePane.id,
+      const transition = {
         revealed: false,
         sourceSessionKey,
         targetSessionKey: intent.sessionKey,
       };
+      this.coldTransitions.set(activePane.id, transition);
       this.present(activePane.id, sourceSessionKey);
-      this.coldTransitionTimer = window.setTimeout(
-        this.finishColdTransition,
-        COLD_SESSION_LOADING_DELAY_MS,
+      this.coldTransitionTimers.set(
+        activePane.id,
+        window.setTimeout(
+          () => this.finishColdTransition(activePane.id),
+          COLD_SESSION_LOADING_DELAY_MS,
+        ),
       );
       return;
     }
-    this.present(activePane.id, retainedKey, true);
+    this.present(activePane.id, retainedSession.key, true);
     // The route remains authoritative for semantic/global ownership. Both
     // presentations stay inert until it settles; only visual ownership moves.
     const preview = {
       ...intent,
       href: window.location.href,
       paneId: activePane.id,
-      sessionKey: retainedKey,
+      sessionKey: retainedSession.key,
     };
     this.preview = preview;
     this.previewFrame = requestAnimationFrame(() => {
@@ -303,58 +316,86 @@ export class ChatPageRetainedSessions {
       window.clearTimeout(this.previewTimer);
       this.previewTimer = undefined;
     }
-    if (this.coldTransitionTimer !== undefined) {
-      window.clearTimeout(this.coldTransitionTimer);
-      this.coldTransitionTimer = undefined;
-    }
   }
 
   private readonly handleTranscriptReady = (event: Event) => {
     // SAFETY: this listener is registered only for our typed internal transcript-ready event.
     const detail = (event as CustomEvent<ChatTranscriptReadyDetail>).detail;
-    const transition = this.coldTransition;
+    if (detail) {
+      const retainedSession = this.sessionsByPane
+        .get(detail.paneId)
+        ?.find(({ key }) => areUiSessionKeysEquivalent(key, detail.sessionKey));
+      if (retainedSession) {
+        retainedSession.pending = false;
+      }
+    }
+    const transition = detail ? this.coldTransitions.get(detail.paneId) : undefined;
     if (
       detail &&
-      transition?.paneId === detail.paneId &&
+      transition &&
       areUiSessionKeysEquivalent(transition.targetSessionKey, detail.sessionKey)
     ) {
-      this.finishColdTransition();
+      this.finishColdTransition(detail.paneId);
     }
   };
 
-  private readonly finishColdTransition = () => {
-    const transition = this.coldTransition;
+  private finishColdTransition(paneId: string): void {
+    const transition = this.coldTransitions.get(paneId);
     if (!transition || transition.revealed) {
       return;
     }
-    if (this.coldTransitionTimer !== undefined) {
-      window.clearTimeout(this.coldTransitionTimer);
-      this.coldTransitionTimer = undefined;
-    }
+    this.clearColdTransitionTimer(paneId);
     transition.revealed = true;
     this.host.requestUpdate();
     void this.host.updateComplete.then(() => {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          if (this.coldTransition === transition) {
-            this.coldTransition = null;
-            this.findPane(transition.paneId, transition.targetSessionKey)?.classList.remove(
+          if (this.coldTransitions.get(paneId) === transition) {
+            this.coldTransitions.delete(paneId);
+            this.findPane(paneId, transition.targetSessionKey)?.classList.remove(
               "chat-pane-cache__pane--preparing",
             );
           }
         });
       });
     });
-  };
+  }
+
+  private clearColdTransitionTimer(paneId: string): void {
+    const timer = this.coldTransitionTimers.get(paneId);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      this.coldTransitionTimers.delete(paneId);
+    }
+  }
+
+  private clearColdTransition(paneId: string): void {
+    this.clearColdTransitionTimer(paneId);
+    this.coldTransitions.delete(paneId);
+  }
+
+  private clearColdTransitions(): void {
+    for (const paneId of this.coldTransitions.keys()) {
+      this.clearColdTransitionTimer(paneId);
+    }
+    this.coldTransitions.clear();
+  }
+
+  private cancelColdTransition(paneId: string): void {
+    this.clearColdTransition(paneId);
+    const pane = findPane(this.bindings.layout(), paneId)?.pane;
+    if (pane) {
+      this.present(pane.id, pane.sessionKey);
+    }
+  }
 
   private readonly cancelPreview = () => {
+    const paneId = this.preview?.paneId;
     this.clearPreviewWork();
     this.preview = null;
-    this.coldTransition = null;
-    const layout = this.bindings.layout();
-    const activePane = findPane(layout, layout.activePaneId)?.pane;
-    if (activePane) {
-      this.present(activePane.id, activePane.sessionKey);
+    const pane = paneId ? findPane(this.bindings.layout(), paneId)?.pane : undefined;
+    if (pane) {
+      this.present(pane.id, pane.sessionKey);
     }
   };
 }

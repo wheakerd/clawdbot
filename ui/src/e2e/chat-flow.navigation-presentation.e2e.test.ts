@@ -98,6 +98,88 @@ suite.define(() => {
     }
   });
 
+  it("does not let a retained cold-session cover intercept printable input", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionA = "agent:main:session-a";
+    const sessionB = "agent:main:session-b";
+    const fillerSessions = Array.from({ length: 5 }, (_, index) => ({
+      key: `agent:main:recent-${index}`,
+      kind: "direct",
+      label: `Recent ${index}`,
+      updatedAt: 6 - index,
+    }));
+    const historyResponse = (sessionKey: string, text: string) => ({
+      messages: [{ role: "assistant", content: text, timestamp: 1_000 }],
+      sessionId: `${sessionKey}:backing`,
+      thinkingLevel: null,
+    });
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.startup": {
+          cases: [
+            {
+              match: { sessionKey: sessionA },
+              response: historyResponse(sessionA, "Session A retained cover."),
+            },
+            {
+              match: { sessionKey: sessionB },
+              response: historyResponse(sessionB, "Session B ready."),
+            },
+          ],
+        },
+        "sessions.list": chatSessionListResponse([
+          { key: sessionA, kind: "direct", label: "Session A", updatedAt: 7 },
+          ...fillerSessions,
+          { key: sessionB, kind: "direct", label: "Session B", updatedAt: 0 },
+        ]),
+      },
+      sessionKey: sessionA,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
+      await page.getByText("Session A retained cover.").waitFor({ timeout: 10_000 });
+      await gateway.deferNext("chat.startup", { sessionKey: sessionB });
+      const startupRequestsBeforeNavigation = (await gateway.getRequests("chat.startup")).length;
+
+      await page
+        .locator(
+          `.sidebar-recent-session[data-session-key="${sessionB}"] a.sidebar-recent-session__link`,
+        )
+        .click();
+      const coldRequest = await gateway.waitForRequest("chat.startup", {
+        after: startupRequestsBeforeNavigation,
+      });
+      expect(requireRecord(coldRequest.params).sessionKey).toBe(sessionB);
+      await page.getByText("Session A retained cover.").waitFor({ state: "visible" });
+      await page.evaluate(() => {
+        Reflect.set(globalThis, "__coldCoverKeyObserved", false);
+        document.addEventListener(
+          "keydown",
+          () => Reflect.set(globalThis, "__coldCoverKeyObserved", true),
+          { capture: true, once: true },
+        );
+      });
+
+      await page.keyboard.press("x");
+
+      expect(await page.evaluate(() => Reflect.get(globalThis, "__coldCoverKeyObserved"))).toBe(
+        true,
+      );
+      expect(await page.locator(".chat-pane-cache__pane--visible textarea:focus").count()).toBe(0);
+
+      await gateway.resolveDeferred("chat.startup");
+      await page.getByText("Session B ready.").waitFor({ state: "visible" });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("retains scrolled and end-anchored sessions without history reloads", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

@@ -83,8 +83,8 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               areUiSessionKeysEquivalent(sessionKey, options.preparingSessionKey);
             const presented = visible && (!options.narrow || options.active);
             const interactive = selected && visible && presented;
-            const active = options.active && visible;
-            const draft = active
+            const active = options.active && selected;
+            const draft = interactive
               ? routeDraft(options.data, options.consumedDraftData, sessionKey)
               : undefined;
             const resolvedKey =
@@ -100,3 +100,48 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
                 : ""} ${preparing ? "chat-pane-cache__pane--preparing" : ""} ${active
                 ? "chat-pane-cache__pane--active"
                 : ""} ${options.splitMode ? "chat-split-view__pane" : ""}"
+              data-mcp-app-owner-key=${JSON.stringify([options.ownerKey, sessionKey])}
+              aria-hidden=${visible ? "false" : "true"}
+              ?inert=${!interactive}
+              .paneId=${options.pane.id}
+              .presentationId=${JSON.stringify([options.pane.id, sessionKey])}
+              .chatMessagesBySession=${options.chatMessagesBySession}
+              .sessionSnapshotStore=${options.sessionSnapshotStore}
+              .sessionKey=${sessionKey}
+              .presented=${presented}
+              .visuallyPresented=${visible}
+              .active=${active}
+              .draft=${draft}
+              .focusComposer=${options.draftFocus.shouldFocusPane(
+                interactive,
+                draft,
+                sessionKey,
+                options.data,
+              )}
+              .routeFace=${options.data?.face ?? "chat"}
+              .paneTitle=${title}
+              .narrow=${options.narrow}
+              .mergedChrome=${options.mergedChrome && active}
+              .navDrawerOpen=${options.navDrawerOpen && active}
+              .nativeGateways=${nativeGateways}
+              .gatewaysSnapshot=${nativeGateways?.snapshot ?? null}
+              .onboarding=${options.onboarding}
+              .onOpenSplitView=${options.onOpenSplitView}
+              .onSplitDown=${options.onSplitDown}
+              .onSplitRight=${options.onSplitRight}
+              .onClosePane=${options.onClosePane}
+              .onFocusPane=${options.onFocusPane}
+              .onPaneSessionChange=${(
+                paneId: string,
+                nextSessionKey: string,
+                paneOptions?: PaneSessionChangeOptions,
+              ) => options.onPaneSessionChange(paneId, sessionKey, nextSessionKey, paneOptions)}
+              .onSessionDeleted=${options.onSessionDeleted}
+              .onFaceChange=${options.onFaceChange}
+            ></openclaw-chat-pane>`;
+          },
+        )}
+      </div>
+    </div>
+  `;
+}
