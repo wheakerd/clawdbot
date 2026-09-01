@@ -308,7 +308,9 @@ export class ChatPageRetainedSessions {
         requestAnimationFrame(() => {
           if (this.coldTransition === transition) {
             this.coldTransition = null;
-            this.host.requestUpdate();
+            this.findPane(transition.paneId, transition.targetSessionKey)?.classList.remove(
+              "chat-pane-cache__pane--preparing",
+            );
           }
         });
       });
