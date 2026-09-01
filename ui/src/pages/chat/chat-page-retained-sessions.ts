@@ -154,10 +154,11 @@ export class ChatPageRetainedSessions {
     preserveDraft = false,
   ): void => {
     const deletedPane = this.findPane(paneId, sessionKey);
+    const transition = this.coldTransition;
     const removedColdSource =
-      this.coldTransition?.paneId === paneId &&
-      !this.coldTransition.revealed &&
-      areUiSessionKeysEquivalent(this.coldTransition.sourceSessionKey, sessionKey);
+      transition?.paneId === paneId &&
+      !transition.revealed &&
+      areUiSessionKeysEquivalent(transition.sourceSessionKey, sessionKey);
     if (removedColdSource) {
       this.finishColdTransition();
     }
@@ -168,6 +169,20 @@ export class ChatPageRetainedSessions {
     const retainedIndex = retained?.findIndex((key) => areUiSessionKeysEquivalent(key, sessionKey));
     if (retained && retainedIndex !== undefined && retainedIndex >= 0) {
       retained.splice(retainedIndex, 1);
+    }
+    if (
+      transition?.paneId === paneId &&
+      areUiSessionKeysEquivalent(transition.targetSessionKey, sessionKey)
+    ) {
+      const replacementRetained = retained?.some((key) =>
+        areUiSessionKeysEquivalent(key, replacementSessionKey),
+      );
+      if (replacementRetained) {
+        this.clearPreviewWork();
+        this.coldTransition = null;
+      } else {
+        transition.targetSessionKey = replacementSessionKey;
+      }
     }
     const context = this.bindings.context();
     if (context && !preserveDraft) {

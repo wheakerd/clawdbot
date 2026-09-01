@@ -596,6 +596,26 @@ describe("chat page retained sessions", () => {
     expect(navigation.navigate).not.toHaveBeenCalled();
   });
 
+  it("keeps the source visible when a cold destination is replaced after deletion", async () => {
+    const { page, paneFor, panes } = await mountRetainedPage("agent:main:a");
+    const paneA = paneFor("agent:main:a");
+
+    window.dispatchEvent(
+      new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+        cancelable: true,
+        detail: { commit: () => true, face: "chat", sessionKey: "agent:main:b" },
+      }),
+    );
+    await showSession(page, "agent:main:b");
+    paneFor("agent:main:b")?.onSessionDeleted?.("p1", "agent:main:b", "agent:main:c");
+    await showSession(page, "agent:main:c");
+    const paneC = paneFor("agent:main:c");
+
+    expect(panes().some((pane) => pane.sessionKey === "agent:main:b")).toBe(false);
+    expect(paneA?.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+    expect(paneC?.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
+  });
+
   it("evicts a deleted inactive retained session without redirecting the active pane", async () => {
     const { navigation, page, paneFor, panes } = await mountRetainedPage(
       "agent:main:a",
