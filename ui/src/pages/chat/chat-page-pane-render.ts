@@ -72,8 +72,12 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
           options.sessionKeys,
           (sessionKey) => sessionKey,
           (sessionKey) => {
-            const selected = areUiSessionKeysEquivalent(sessionKey, options.pane.sessionKey);
-            const visible = areUiSessionKeysEquivalent(sessionKey, options.visualSessionKey);
+            const selected =
+              sessionKey === options.pane.sessionKey ||
+              areUiSessionKeysEquivalent(sessionKey, options.pane.sessionKey);
+            const visible =
+              sessionKey === options.visualSessionKey ||
+              areUiSessionKeysEquivalent(sessionKey, options.visualSessionKey);
             const preparing =
               options.preparingSessionKey !== null &&
               areUiSessionKeysEquivalent(sessionKey, options.preparingSessionKey);
