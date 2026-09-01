@@ -568,29 +568,29 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       this.chatRouteReadyReported = true;
       this.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true, composed: true }));
     }
-    const state = this.state;
-    const catalogSession = parseCatalogSessionKey(state?.sessionKey ?? "");
-    const messageCount = catalogSession
-      ? this.catalogMessages.length
-      : (state?.chatMessages.length ?? 0);
-    const loading = catalogSession ? this.catalogLoading : (state?.chatLoading ?? true);
-    this.chatTranscriptLoadingObserved ||= loading;
-    const renderedMessage = [...this.querySelectorAll<HTMLElement>(".chat-bubble")].some(
-      (bubble) => bubble.childElementCount > 0,
-    );
-    const transcriptReady =
-      renderedMessage || (this.chatTranscriptLoadingObserved && !loading && messageCount === 0);
-    if (!this.chatTranscriptReadyReported && state && transcriptReady) {
-      // A cold destination mounts behind the previous pane. Report the first
-      // usable transcript commit so the page can replace both panes atomically.
-      this.chatTranscriptReadyReported = true;
-      this.dispatchEvent(
-        new CustomEvent<ChatTranscriptReadyDetail>(CHAT_TRANSCRIPT_READY_EVENT, {
-          bubbles: true,
-          composed: true,
-          detail: { paneId: this.paneId, sessionKey: state.sessionKey },
-        }),
-      );
+    if (!this.chatTranscriptReadyReported) {
+      const state = this.state;
+      const catalogSession = parseCatalogSessionKey(state?.sessionKey ?? "");
+      const messageCount = catalogSession
+        ? this.catalogMessages.length
+        : (state?.chatMessages.length ?? 0);
+      const loading = catalogSession ? this.catalogLoading : (state?.chatLoading ?? true);
+      this.chatTranscriptLoadingObserved ||= loading;
+      const renderedMessage = this.querySelector(".chat-bubble > *") !== null;
+      const transcriptReady =
+        renderedMessage || (this.chatTranscriptLoadingObserved && !loading && messageCount === 0);
+      if (state && transcriptReady) {
+        // A cold destination mounts behind the previous pane. Report the first
+        // usable transcript commit so the page can replace both panes atomically.
+        this.chatTranscriptReadyReported = true;
+        this.dispatchEvent(
+          new CustomEvent<ChatTranscriptReadyDetail>(CHAT_TRANSCRIPT_READY_EVENT, {
+            bubbles: true,
+            composed: true,
+            detail: { paneId: this.paneId, sessionKey: state.sessionKey },
+          }),
+        );
+      }
     }
     if (changedProperties.has("focusComposer") && this.focusComposer) {
       const textarea = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
