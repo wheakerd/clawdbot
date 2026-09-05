@@ -101,7 +101,9 @@ suite.define(() => {
                   ? "content"
                   : "source"
                 : "blank";
-            if (state.frames.at(-1) !== phase) state.frames.push(phase);
+            if (state.frames.at(-1) !== phase) {
+              state.frames.push(phase);
+            }
             state.frame = requestAnimationFrame(sample);
           };
           sample();
@@ -172,7 +174,9 @@ suite.define(() => {
         );
         await trace.dispose();
 
-        if (kind === "slow mobile") return;
+        if (kind === "slow mobile") {
+          return;
+        }
         const requests = (await gateway.getRequests("chat.startup")).length;
         await sidebarLink(sessionA).click();
         await expect.poll(selectedKey).toBe(sessionA);
@@ -181,7 +185,7 @@ suite.define(() => {
         expect(
           await page.evaluate(
             () =>
-              new Promise<string | undefined>((resolve) =>
+              new Promise<string | undefined>((resolve) => {
                 requestAnimationFrame(() => {
                   resolve(
                     (
@@ -190,8 +194,8 @@ suite.define(() => {
                       }
                     )?.sessionKey,
                   );
-                }),
-              ),
+                });
+              }),
           ),
         ).toBe(sessionB);
         expect(await page.locator('.chat-pane-cache[aria-busy="true"]').count()).toBe(0);
@@ -206,35 +210,31 @@ suite.define(() => {
     const context = await suite.newBrowserContext({ locale: "en-US" });
     const page = await context.newPage();
     const target = "agent:main:unlisted-session";
+    const reference = { key: target, slug: "unlisted-session" };
     const gateway = await installMockGateway(page, {
       sessionKey: sessionA,
       historyMessages: [{ role: "assistant", content: `Open ${target}`, timestamp: 1000 }],
       methodResponses: {
-        "sessions.list": {
+        "sessions.resolve": {
           cases: [
             {
-              match: { search: target },
-              response: chatSessionListResponse([
-                { key: target, kind: "direct", label: "Unlisted session", updatedAt: 0 },
-              ]),
-            },
-            {
-              match: {},
-              response: chatSessionListResponse([
-                { key: sessionA, kind: "direct", label: "Session A", updatedAt: 10 },
-              ]),
+              match: { reference },
+              response: { ok: true, key: target, agentId: "main" },
             },
           ],
         },
+        "sessions.list": chatSessionListResponse([
+          { key: sessionA, kind: "direct", label: "Session A", updatedAt: 10 },
+        ]),
       },
     });
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       const link = page.locator(`.markdown-session-link[data-session-key="${target}"]`).first();
       await link.waitFor();
-      await gateway.deferNext("sessions.list", { search: target });
+      await gateway.deferNext("sessions.resolve", { reference });
       await link.click();
-      await gateway.waitForRequest("sessions.list", { match: { search: target } });
+      await gateway.waitForRequest("sessions.resolve", { match: { reference } });
       const outlet = page.locator("openclaw-router-outlet");
       expect(await outlet.getAttribute("aria-busy")).toBe("true");
       expect(await outlet.evaluate((node) => (node as HTMLElement).inert)).toBe(true);
@@ -251,7 +251,7 @@ suite.define(() => {
       await expect.poll(() => outlet.getAttribute("aria-busy")).toBe("false");
       expect(await outlet.evaluate((node) => (node as HTMLElement).inert)).toBe(false);
       // A cancelled lookup cannot mount its target when the late reply arrives.
-      await gateway.resolveDeferred("sessions.list");
+      await gateway.resolveDeferred("sessions.resolve");
       expect(await gateway.getRequests("chat.startup", { sessionKey: target })).toHaveLength(0);
       await link.click();
       await expect
@@ -302,16 +302,18 @@ suite.define(() => {
         `${controlUiSessionUrl(suite.server.baseUrl, sessionA)}?draft=Continue&__openclawComposerFocus=1`,
       );
       await expect.poll(() => page.getByText("Shared session.", { exact: true }).count()).toBe(2);
-      expect(
-        await page.evaluate(
-          () =>
-            (
-              document.activeElement?.closest("openclaw-chat-pane") as HTMLElement & {
-                paneId?: string;
-              }
-            )?.paneId,
-        ),
-      ).toBe("p1");
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                document.activeElement?.closest("openclaw-chat-pane") as HTMLElement & {
+                  paneId?: string;
+                }
+              )?.paneId,
+          ),
+        )
+        .toBe("p1");
       await page.setViewportSize({ width: 390, height: 900 });
       await page.locator(".chat-split-view--narrow").waitFor();
       const hidden = page.locator(".chat-split-view__cell--narrow-hidden openclaw-chat-pane");

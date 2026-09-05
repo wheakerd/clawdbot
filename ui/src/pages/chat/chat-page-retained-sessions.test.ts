@@ -538,7 +538,9 @@ describe("chat page retained sessions", () => {
     expect(paneA?.hasAttribute("inert")).toBe(true);
     expect(paneB?.hasAttribute("inert")).toBe(true);
 
-    if (paneB) paneB.transcriptCommitted = true;
+    if (paneB) {
+      paneB.transcriptCommitted = true;
+    }
     paneB?.dispatchEvent(
       new CustomEvent(CHAT_TRANSCRIPT_READY_EVENT, {
         bubbles: true,

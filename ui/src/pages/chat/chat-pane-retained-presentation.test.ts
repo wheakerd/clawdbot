@@ -132,7 +132,9 @@ describe("chat pane retained presentation lifecycle", () => {
       }
       // Native/window events bypass the browser's inert hit-testing.
       panes[0]!.mounted.setAttribute("inert", "");
-      for (const listener of listeners) listener("blocked draft");
+      for (const listener of listeners) {
+        listener("blocked draft");
+      }
       const shortcut = new KeyboardEvent("keydown", {
         key: "b",
         ctrlKey: true,

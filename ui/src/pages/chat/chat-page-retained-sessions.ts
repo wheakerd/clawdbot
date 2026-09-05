@@ -94,7 +94,9 @@ export class ChatPageRetainedSessions {
       return { phase: "preview", visualSessionKey: this.preview.sessionKey };
     }
     const transition = this.coldTransitions.get(pane.id);
-    if (!transition) return { phase: "content", visualSessionKey: pane.sessionKey };
+    if (!transition) {
+      return { phase: "content", visualSessionKey: pane.sessionKey };
+    }
     return {
       phase: transition.phase,
       visualSessionKey:
@@ -357,6 +359,8 @@ export class ChatPageRetainedSessions {
     this.clearPreviewWork();
     this.preview = null;
     // The renderer restores both selection and current viewport ownership.
-    if (paneId) this.host.requestUpdate();
+    if (paneId) {
+      this.host.requestUpdate();
+    }
   };
 }

@@ -122,7 +122,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     this.addEventListener("dragover", this.handleDragOver);
     this.addEventListener("dragleave", this.handleDragLeave);
     this.addEventListener("drop", this.handleDrop);
-    window.addEventListener("dragend", this.handleWindowDragEnd);
+    window.addEventListener("dragend", this.clearDropIndicator);
     window.addEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
     this.retainedSessions.connect();
     this.syncRouteToActivePane();
@@ -144,7 +144,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     this.removeEventListener("dragover", this.handleDragOver);
     this.removeEventListener("dragleave", this.handleDragLeave);
     this.removeEventListener("drop", this.handleDrop);
-    window.removeEventListener("dragend", this.handleWindowDragEnd);
+    window.removeEventListener("dragend", this.clearDropIndicator);
     window.removeEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
     this.clearDropIndicator();
     super.disconnectedCallback();
@@ -346,14 +346,10 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     }
   };
 
-  private readonly handleWindowDragEnd = () => {
-    this.clearDropIndicator();
-  };
-
-  private clearDropIndicator() {
+  private readonly clearDropIndicator = () => {
     this.dragDepth = 0;
     this.clearDropPreview();
-  }
+  };
 
   private clearDropPreview() {
     this.pendingDragOver = null;
