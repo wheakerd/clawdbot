@@ -604,7 +604,8 @@ class SessionPrefetchController implements ReactiveController {
         (pane) => this.host.contains(pane) && pane.conversationPresented === true,
       ),
       presentedTranscriptsReady: !panes.some(
-        (pane) => pane.presented !== false && pane.transcriptLoading === true,
+        (pane) =>
+          (pane.presented !== false || pane.preparing === true) && pane.transcriptLoading === true,
       ),
       rows: context.sessions.state.result?.sessions ?? null,
       snapshotHost: {

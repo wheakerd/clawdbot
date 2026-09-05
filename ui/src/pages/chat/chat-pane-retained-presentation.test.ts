@@ -130,6 +130,18 @@ describe("chat pane retained presentation lifecycle", () => {
       for (const { focus } of panes) {
         expect(focus).toHaveBeenCalledOnce();
       }
+      // Native/window events bypass the browser's inert hit-testing.
+      panes[0]!.mounted.setAttribute("inert", "");
+      for (const listener of listeners) listener("blocked draft");
+      const shortcut = new KeyboardEvent("keydown", {
+        key: "b",
+        ctrlKey: true,
+        shiftKey: true,
+        cancelable: true,
+      });
+      panes[0]!.mounted.handleDocumentKeydown(shortcut);
+      expect(shortcut.defaultPrevented).toBe(false);
+      expect(page.state.handleChatDraftChange).toHaveBeenCalledTimes(1);
       expect(page.pane.context.gateway.setSessionKey).not.toHaveBeenCalled();
       expect(page.pane.context.agentSelection.state.selectedId).toBe("main");
     } finally {

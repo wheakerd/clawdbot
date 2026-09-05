@@ -4,3 +4,9 @@ export type ChatTranscriptReadyDetail = {
   paneId: string;
   sessionKey: string;
 };
+
+declare global {
+  interface HTMLElementEventMap {
+    [CHAT_TRANSCRIPT_READY_EVENT]: CustomEvent<ChatTranscriptReadyDetail>;
+  }
+}

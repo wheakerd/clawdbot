@@ -230,6 +230,8 @@ class OpenClawRouterOutlet<
   override render() {
     const router = this.router;
     if (!router) {
+      this.ariaBusy = "false";
+      this.inert = false;
       return nothing;
     }
     const snapshot = this.outlet.snapshot;
@@ -245,7 +247,7 @@ class OpenClawRouterOutlet<
       explicitOwnerKey !== undefined &&
       renderedMatch?.status === "pending" &&
       renderedMatch.data === undefined;
-    return this.mcpAppUnmountGate.render(
+    const rendered = this.mcpAppUnmountGate.render(
       explicitOwnerKey ?? routeKey,
       () =>
         renderRouterOutlet(router, snapshot, renderedMatch, {
@@ -254,6 +256,12 @@ class OpenClawRouterOutlet<
       () => [this],
       { retainRenderedValue: retainCurrent },
     );
+    // Reference resolution has no authoritative destination yet. Keep its
+    // subtree intact, but fence stale input until resolution and teardown finish.
+    const pending = retainCurrent || this.mcpAppUnmountGate.unmountPending;
+    this.ariaBusy = String(pending);
+    this.inert = pending;
+    return rendered;
   }
 }
 

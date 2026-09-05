@@ -62,10 +62,6 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
-import {
-  CHAT_TRANSCRIPT_READY_EVENT,
-  type ChatTranscriptReadyDetail,
-} from "./chat-transcript-ready.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
@@ -88,7 +84,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   private readonly sessionPanelToggles = new ChatPaneSessionPanelToggleController({
     current: () => {
       const state = this.state;
-      return state && this.active && this.presented
+      return state && this.acceptsInput
         ? { renderRoot: this.renderRoot, state, updateComplete: this.updateComplete }
         : null;
     },
@@ -98,8 +94,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   });
 
   private chatRouteReadyReported = false;
-  private chatTranscriptLoadingObserved = false;
-  private chatTranscriptReadyReported = false;
   private currentSessionArchived: boolean | undefined;
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
@@ -174,7 +168,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
     this.nativeDraftCleanup = this.context.nativeChatDrafts.subscribe((draft) => {
       const state = this.state;
-      if (!state || !this.active || !this.presented) {
+      if (!state || !this.acceptsInput) {
         return;
       }
       state.handleChatDraftChange(draft, []);
@@ -189,7 +183,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
 
   /** Receives one complete browser annotation without mixing generated context into the user's draft. */
   protected receiveBrowserAnnotation(event: Event): void {
-    if (!admitBrowserAnnotation(this.state, this.active && this.presented, event)) {
+    if (!admitBrowserAnnotation(this.state, this.acceptsInput, event)) {
       return;
     }
     // A null mount binds only when its first annotation ownership begins.
@@ -203,8 +197,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     // may consume a key before the visible pane receives it.
     if (
       !state ||
-      !this.active ||
-      !this.presented ||
+      !this.acceptsInput ||
       event.defaultPrevented ||
       document.querySelector(".shell-nav[aria-modal='true']")
     ) {
@@ -390,7 +383,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     });
     const handleTerminalDockBottom = () => {
       const state = this.state;
-      if (!state || !this.active || !this.presented) {
+      if (!state || !this.acceptsInput) {
         return;
       }
       state.updateSidebarLayout(closeSlot(state.sidebarLayout, "terminal"));
@@ -567,30 +560,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       // handoff cover until this pane has committed its usable composer.
       this.chatRouteReadyReported = true;
       this.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true, composed: true }));
-    }
-    if (!this.chatTranscriptReadyReported) {
-      const state = this.state;
-      const catalogSession = parseCatalogSessionKey(state?.sessionKey ?? "");
-      const messageCount = catalogSession
-        ? this.catalogMessages.length
-        : (state?.chatMessages.length ?? 0);
-      const loading = catalogSession ? this.catalogLoading : (state?.chatLoading ?? true);
-      this.chatTranscriptLoadingObserved ||= loading;
-      const renderedMessage = this.querySelector(".chat-bubble > *") !== null;
-      const transcriptReady =
-        renderedMessage || (this.chatTranscriptLoadingObserved && !loading && messageCount === 0);
-      if (state && transcriptReady) {
-        // A cold destination mounts behind the previous pane. Report the first
-        // usable transcript commit so the page can replace both panes atomically.
-        this.chatTranscriptReadyReported = true;
-        this.dispatchEvent(
-          new CustomEvent<ChatTranscriptReadyDetail>(CHAT_TRANSCRIPT_READY_EVENT, {
-            bubbles: true,
-            composed: true,
-            detail: { paneId: this.paneId, sessionKey: state.sessionKey },
-          }),
-        );
-      }
     }
     if (changedProperties.has("focusComposer") && this.focusComposer) {
       const textarea = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);

@@ -86,10 +86,14 @@ openclaw-chat-pane {
   z-index: 1;
 }
 
-/* Cold destinations paint behind the retained source pane. Their virtual rows
-   must opt out of offscreen skipping or the atomic reveal exposes blank rows. */
-.chat-pane-cache__pane--preparing .chat-virtual-row {
-  content-visibility: visible;
+openclaw-router-outlet[aria-busy="true"],
+.chat-pane-cache[aria-busy="true"] {
+  cursor: progress;
+}
+
+openclaw-router-outlet[aria-busy="true"] .chat-pane-cache__pane--visible,
+.chat-pane-cache[aria-busy="true"] > .chat-pane-cache__pane--visible {
+  opacity: 0.55;
 }
 
 .chat-pane-cache__pane:not(.chat-pane-cache__pane--active) .chat-inline-approval {

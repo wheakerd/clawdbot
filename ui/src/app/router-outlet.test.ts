@@ -210,10 +210,12 @@ describe("openclaw-router-outlet", () => {
     expect(teardownView).toHaveBeenCalledOnce();
     expect(outlet.querySelector('[data-testid="route-page"]')).not.toBeNull();
     expect(outlet.querySelector('[data-testid="route-next"]')).toBeNull();
+    expect(outlet.inert).toBe(true);
 
     teardown.resolve(undefined);
     await expect.poll(() => outlet.querySelector('[data-testid="route-next"]')).not.toBeNull();
     expect(outlet.querySelector("mcp-app-view")).toBeNull();
+    expect(outlet.inert).toBe(false);
     outlet.remove();
     router.stop();
   });
