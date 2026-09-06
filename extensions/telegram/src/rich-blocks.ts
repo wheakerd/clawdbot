@@ -23,7 +23,7 @@ import {
   type TelegramRichBlocksDegradationReason,
 } from "./rich-block-model.js";
 import { findTelegramHtmlIslands, renderTelegramHtmlIsland } from "./rich-blocks-html-map.js";
-import { parseHtmlFragment, parseInlineHtmlIslands, type HtmlNode } from "./rich-blocks-html.js";
+import { htmlNodesToRichText, parseHtmlFragment, type HtmlNode } from "./rich-blocks-html.js";
 import {
   collectMarkdownRichListSources,
   renderMarkdownRichListSource,
@@ -148,9 +148,6 @@ function collectTelegramLinkActions(
  * Spans that partially overlap are split at shared boundaries (IR contract).
  */
 function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number): RichText {
-  if (rangeEnd <= rangeStart) {
-    return "";
-  }
   const slice = sliceMarkdownIR(ir, rangeStart, rangeEnd);
   const text = slice.text;
   if (!text) {
@@ -160,6 +157,7 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   type Active = { start: number; end: number } & (
     | { kind: "style"; style: InlineStyleKind }
     | { kind: "annotation" }
+    | { kind: "html"; wrap: (text: RichText) => RichText }
     | { kind: "link"; target: { kind: "url"; href: string } | { kind: "anchor"; name: string } }
   );
   const spans: Active[] = [];
@@ -178,13 +176,48 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
         : { start: link.start, end: link.end, kind: "link", target: link.action },
     );
   }
+  type Leaf = { start: number; end: number } & (
+    | { kind: "text" }
+    | { kind: "atom"; value: RichText }
+  );
+  const leaves: Leaf[] = [];
+  const nodes = text.includes("<")
+    ? parseHtmlFragment(text, [
+        ...slice.styles.filter((span) => span.style === "code" || span.style === "code_block"),
+        ...(slice.annotations ?? []),
+      ])
+    : [];
+  const hasElement = (children: readonly HtmlNode[]): boolean =>
+    children.some((node) => node.kind === "element" && (node.closed || hasElement(node.children)));
+  if (hasElement(nodes)) {
+    // Keep HTML wrappers and atomic islands on the same source axis as Markdown.
+    // One sweep can then apply annotation dominance without breaking authored HTML.
+    htmlNodesToRichText(nodes, {
+      text: ({ start, end }) => {
+        leaves.push({ kind: "text", start, end });
+        return "";
+      },
+      wrap: ({ start, end }, wrap, children) => {
+        spans.push({ kind: "html", start, end, wrap });
+        return children();
+      },
+      atom: ({ start, end }, value) => {
+        // An indivisible replacement must not hide a protected source annotation.
+        const annotated = slice.annotations?.some((span) => span.start < end && span.end > start);
+        leaves.push(annotated ? { kind: "text", start, end } : { kind: "atom", start, end, value });
+        return "";
+      },
+    });
+  } else {
+    leaves.push({ kind: "text", start: 0, end: text.length });
+  }
   const rank = (span: Active) =>
-    span.kind === "style" ? INLINE_STYLE_RANK[span.style] : span.kind === "link" ? 50 : 0;
+    span.kind === "style" ? INLINE_STYLE_RANK[span.style] : span.kind === "annotation" ? 0 : 50;
   spans.sort(
     (left, right) => left.start - right.start || right.end - left.end || rank(left) - rank(right),
   );
   const points = [
-    ...new Set([0, text.length, ...spans.flatMap((span) => [span.start, span.end])]),
+    ...new Set([...spans, ...leaves].flatMap((span) => [span.start, span.end])),
   ].toSorted((left, right) => left - right);
   const stack: Active[] = [];
   const root: RichText[] = [];
@@ -192,8 +225,12 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
 
   for (let i = 0; i < points.length - 1; i += 1) {
     const start = points[i] ?? 0;
-    const end = points[i + 1] ?? start;
-    const covering = spans.filter((span) => span.start <= start && span.end > start);
+    const leaf = leaves.find((entry) => entry.start <= start && entry.end > start);
+    if (!leaf || (leaf.kind === "atom" && leaf.start !== start)) {
+      continue;
+    }
+    const end = leaf.kind === "atom" ? leaf.end : (points[i + 1] ?? start);
+    const covering = spans.filter((span) => span.start <= start && span.end >= end);
     const annotation = covering.find((span) => span.kind === "annotation");
     // Dominance applies only to the covered range. Surrounding formatting resumes
     // after a transcript header. Code is already literal in IR; its merged range
@@ -210,41 +247,24 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
     for (const item of active.slice(shared)) {
       const container: RichText[] = [];
       const node: RichText =
-        item.kind === "link"
-          ? item.target.kind === "url"
-            ? { type: "url", text: container, url: item.target.href }
-            : { type: "anchor_link", text: container, anchor_name: item.target.name }
-          : { type: item.kind === "annotation" ? "code" : item.style, text: container };
+        item.kind === "html"
+          ? item.wrap(container)
+          : item.kind === "link"
+            ? item.target.kind === "url"
+              ? { type: "url", text: container, url: item.target.href }
+              : { type: "anchor_link", text: container, anchor_name: item.target.name }
+            : { type: item.kind === "annotation" ? "code" : item.style, text: container };
       frameStack.at(-1)?.push(node);
       stack.push(item);
       frameStack.push(container);
     }
     if (end > start) {
       // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
-      frameStack.at(-1)?.push(text.slice(start, end));
+      frameStack.at(-1)?.push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
     }
   }
 
-  return normalizeRichText(applyInlineHtmlIslands(root));
-}
-
-// Inline islands (<sup>, <tg-math>, <tg-emoji>, …) live in plain string leaves;
-// code spans keep their content literal.
-function applyInlineHtmlIslands(node: RichText): RichText {
-  if (typeof node === "string") {
-    return parseInlineHtmlIslands(node);
-  }
-  if (Array.isArray(node)) {
-    return node.map(applyInlineHtmlIslands);
-  }
-  if (
-    node.type === "code" ||
-    node.type === "mathematical_expression" ||
-    node.type === "custom_emoji"
-  ) {
-    return node;
-  }
-  return { ...node, text: applyInlineHtmlIslands(node.text) };
+  return normalizeRichText(root);
 }
 
 function pushParagraph(

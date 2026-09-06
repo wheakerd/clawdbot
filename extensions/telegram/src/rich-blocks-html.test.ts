@@ -48,6 +48,43 @@ describe("block HTML islands", () => {
     expect(serialized).not.toContain("<details>");
   });
 
+  it.each(
+    [
+      ["details", "<details><summary>More</summary><p>", "</p></details>", "More\n"],
+      ["list items", "<ul><li>", "</li></ul>", "• "],
+      ["blockquotes", "<blockquote>", "</blockquote>", ""],
+    ].flatMap(([container, open, close, prefix]) =>
+      [
+        ["styled text", "Download", "Download"],
+        ["entities decoded once", "A &amp; &#38; &amp;amp;", "A & & &amp;"],
+        ["escaped entity", String.raw`\&amp;`, "&amp;"],
+        ["parsed whitespace", "A   B\nC&nbsp;D", "A   B\nC\u00a0D"],
+      ].map(([label, source, expected]) => ({
+        container,
+        open,
+        close,
+        prefix,
+        label,
+        source,
+        expected,
+      })),
+    ),
+  )(
+    "keeps inline HTML links across Markdown styles inside $container ($label)",
+    ({ open, close, prefix, source, expected }) => {
+      const { blocks, plainText } = markdownToTelegramRichBlocks(
+        `${open}<a href="https://example.com">**${source}**</a>${close}`,
+      );
+
+      expect(JSON.stringify(blocks)).toContain('"type":"url"');
+      expect(JSON.stringify(blocks)).toContain('"url":"https://example.com"');
+      expect(JSON.stringify(blocks)).toContain('"type":"bold"');
+      expect(plainText).toBe(`${prefix}${expected}`);
+      expect(plainText).not.toContain("<a ");
+      expect(plainText).not.toContain("</a>");
+    },
+  );
+
   it.each([
     ["headings", "# Steps", "heading"],
     ["fenced code", "```bash\nopenclaw doctor\n```", "pre"],

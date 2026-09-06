@@ -276,6 +276,59 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(collectLinkTargets(text)).toEqual([]);
   });
 
+  it.each(
+    [
+      {
+        source: "<tg-math>x</tg-math>",
+        atom: { type: "mathematical_expression", expression: "x" },
+      },
+      {
+        source: '<tg-emoji emoji-id="5368324170671202286">😀</tg-emoji>',
+        atom: {
+          type: "custom_emoji",
+          custom_emoji_id: "5368324170671202286",
+          alternative_text: "😀",
+        },
+      },
+    ].flatMap(({ source, atom }) => [
+      { markdown: `||${source}||`, expected: { type: "spoiler", text: atom } },
+      {
+        markdown: `[${source}](https://example.com)`,
+        expected: { type: "url", text: atom, url: "https://example.com" },
+      },
+    ]),
+  )("preserves Markdown wrappers around $markdown", ({ markdown, expected }) => {
+    expect(markdownToTelegramRichBlocks(markdown).blocks).toEqual([
+      { type: "paragraph", text: expected },
+    ]);
+  });
+
+  it.each([
+    {
+      open: '<a href="https://example.com">',
+      close: "</a>",
+      wrapper: { type: "url", url: "https://example.com" },
+    },
+    { open: "<b>", close: "</b>", wrapper: { type: "bold" } },
+  ])(
+    "excludes transcript annotations from HTML $wrapper.type wrappers",
+    ({ open, close, wrapper }) => {
+      const { blocks, plainText } = markdownToTelegramRichBlocks(
+        `${open}\nuser[Thu] trailing${close}`,
+      );
+      expect(blocks).toEqual([
+        {
+          type: "paragraph",
+          text: expect.arrayContaining([
+            { type: "code", text: "user[Thu]" },
+            { ...wrapper, text: " trailing" },
+          ]),
+        },
+      ]);
+      expect(plainText).toBe("\nuser[Thu] trailing");
+    },
+  );
+
   it.each(["https://example.com", "#section"])(
     "preserves authored %s links with code-only labels",
     (href) => {

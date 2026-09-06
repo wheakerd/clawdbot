@@ -996,6 +996,7 @@ def serve_message(message, users):
         "contentType": normalized["contentType"],
         "text": normalized["text"],
         "entities": normalized["entities"],
+        "richMessage": normalized["richMessage"],
     }
 
 
@@ -1019,12 +1020,57 @@ def serve_update(update, users, known_messages):
     return {"kind": "edit", **normalized}
 
 
+def rich_text(value):
+    if not isinstance(value, dict):
+        return ""
+    kind = value.get("@type", "")
+    if kind == "richTextPlain":
+        return value.get("text", "")
+    if kind == "richTextCustomEmoji":
+        return value.get("alternative_text", "")
+    if kind == "richTextMathematicalExpression":
+        return value.get("expression", "")
+    if kind == "richTexts":
+        return "".join(rich_text(item) for item in value.get("texts") or [])
+    return rich_text(value.get("text"))
+
+
+def rich_message_text(value):
+    if not isinstance(value, dict):
+        return ""
+    parts = []
+
+    def visit(node):
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+        if str(node.get("@type", "")).startswith("richText"):
+            text = rich_text(node)
+            if text:
+                parts.append(text)
+            return
+        for child in node.values():
+            visit(child)
+
+    visit(value.get("blocks") or [])
+    return "\n".join(parts)
+
+
 def message_content(content):
+    if content.get("@type") == "messageRichMessage":
+        message = content["message"]
+        return {
+            "contentType": "messageRichMessage", "text": rich_message_text(message),
+            "entities": [], "richMessage": message,
+        }
     key = "text" if content.get("@type") == "messageText" else "caption"
     formatted = content.get(key)
     if isinstance(formatted, dict) and isinstance(formatted.get("text"), str):
-        return {"contentType": content.get("@type"), "text": formatted["text"], "entities": formatted["entities"]}
-    return {"contentType": content.get("@type"), "text": "", "entities": []}
+        return {"contentType": content.get("@type"), "text": formatted["text"], "entities": formatted["entities"], "richMessage": None}
+    return {"contentType": content.get("@type"), "text": "", "entities": [], "richMessage": None}
 
 
 def write_ndjson(payload):

@@ -245,6 +245,47 @@ class PhotoContentTest(unittest.TestCase):
 
         self.assertIsNone(event)
 
+    def test_preserves_rich_tree_revisions_and_clears_it_on_plain_replacement(self):
+        known = {}
+        message_id = 45 << 20
+        rich = {
+            "@type": "richMessage", "is_full": True, "is_rtl": False,
+            "blocks": [{"@type": "pageBlockParagraph", "text": {
+                "@type": "richTextUrl", "url": "https://example.com/qa", "is_cached": False,
+                "text": {"@type": "richTextSpoiler", "text": {
+                    "@type": "richTextMathematicalExpression", "expression": "x",
+                }},
+            }}],
+        }
+        content = {"@type": "messageRichMessage", "message": rich}
+        created = driver.serve_update({"@type": "updateNewMessage", "message": {
+            "id": message_id, "chat_id": -1001, "sender_id": {"user_id": 101},
+            "content": content,
+        }}, {}, known)
+        self.assertEqual(created["richMessage"], rich)
+        self.assertEqual(created["text"], "x")
+        self.assertEqual(created["entities"], [])
+        replacement = {**rich, "is_full": False, "blocks": [{
+            "@type": "pageBlockParagraph", "text": {
+                "@type": "richTextCustomEmoji", "custom_emoji_id": "5368324170671202286",
+                "alternative_text": "😀",
+            },
+        }]}
+        for next_content, expected_text, expected_rich in [
+            ({"@type": "messageRichMessage", "message": replacement}, "😀", replacement),
+            ({"@type": "messageText", "text": {"text": "final", "entities": []}}, "final", None),
+            ({"@type": "messageUnsupported"}, "", None),
+        ]:
+            with self.subTest(content_type=next_content["@type"]):
+                edited = driver.serve_update({
+                    "@type": "updateMessageContent", "message_id": message_id,
+                    "new_content": next_content,
+                }, {}, known)
+                self.assertEqual(edited["richMessage"], expected_rich)
+                self.assertEqual(edited["text"], expected_text)
+                self.assertEqual(edited["botApiMessageId"], 45)
+                self.assertEqual(known[message_id]["richMessage"], expected_rich)
+
 
 if __name__ == "__main__":
     unittest.main()
