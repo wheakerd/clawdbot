@@ -35,6 +35,7 @@ const metadataSnapshot: PluginMetadataSnapshot = {
   plugins: [],
   byPluginId: new Map(),
   normalizePluginId: (id) => id,
+  declaredProviderOwners: new Map(),
   owners: {
     channels: new Map(),
     channelConfigs: new Map(),

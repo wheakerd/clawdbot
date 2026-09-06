@@ -1,7 +1,7 @@
 // Model set tests cover persisting default model/provider selections.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -14,11 +14,31 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
-  replaceConfigFile: (...args: unknown[]) => mocks.replaceConfigFile(...args),
+  transformConfigFile: async ({ transform }: TransformConfigFileParams<unknown>) => {
+    const loaded = await mocks.readConfigFileSnapshot();
+    const snapshot = {
+      path: "/tmp/openclaw.json",
+      parsed: loaded.sourceConfig ?? loaded.config,
+      runtimeConfig: loaded.config,
+      ...loaded,
+    };
+    const { nextConfig } = await transform(
+      snapshot.sourceConfig ?? snapshot.config,
+      { snapshot, previousHash: snapshot.hash ?? null, attempt: 0 },
+      {},
+    );
+    await mocks.replaceConfigFile({ nextConfig, baseHash: snapshot.hash });
+    return { nextConfig };
+  },
 }));
 
 vi.mock("../../config/logging.js", () => ({
   logConfigUpdated: (...args: unknown[]) => mocks.logConfigUpdated(...args),
+}));
+
+// Real provider activation is covered by model-selection.runtime.test.ts.
+vi.mock("./model-selection.runtime.js", () => ({
+  withModelCommandProviderRuntime: (_params: unknown, run: () => unknown) => run(),
 }));
 
 vi.mock("../codex-runtime-plugin-install.js", () => ({

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TransformConfigFileParams } from "../../config/config.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
@@ -61,6 +62,16 @@ vi.mock("../../config/config.js", async () => {
     ...actual,
     readConfigFileSnapshot: mocks.readConfigFileSnapshot,
     replaceConfigFile: mocks.replaceConfigFile,
+    transformConfigFile: async ({ transform }: TransformConfigFileParams<unknown>) => {
+      const snapshot = await mocks.readConfigFileSnapshot();
+      const { nextConfig } = await transform(
+        snapshot.sourceConfig,
+        { snapshot, previousHash: snapshot.hash, attempt: 0 },
+        {},
+      );
+      await mocks.replaceConfigFile({ nextConfig, baseHash: snapshot.hash });
+      return { nextConfig };
+    },
   };
 });
 

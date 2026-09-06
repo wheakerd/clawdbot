@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -18,11 +18,31 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
-  replaceConfigFile: (...args: unknown[]) => mocks.replaceConfigFile(...args),
+  transformConfigFile: async ({ transform }: TransformConfigFileParams<unknown>) => {
+    const loaded = await mocks.readConfigFileSnapshot();
+    const writeSnapshot = {
+      path: "/tmp/openclaw.json",
+      parsed: loaded.sourceConfig ?? loaded.config,
+      runtimeConfig: loaded.config,
+      ...loaded,
+    };
+    const { nextConfig } = await transform(
+      writeSnapshot.sourceConfig ?? writeSnapshot.config,
+      { snapshot: writeSnapshot, previousHash: writeSnapshot.hash ?? null, attempt: 0 },
+      {},
+    );
+    await mocks.replaceConfigFile({ nextConfig, baseHash: writeSnapshot.hash });
+    return { nextConfig };
+  },
 }));
 
 vi.mock("./load-config.js", () => ({
   loadModelsConfig: (...args: unknown[]) => mocks.loadModelsConfig(...args),
+}));
+
+// Real provider activation is covered by model-selection.runtime.test.ts.
+vi.mock("./model-selection.runtime.js", () => ({
+  withModelCommandProviderRuntime: (_params: unknown, run: () => unknown) => run(),
 }));
 
 function makeRuntime(): RuntimeEnv & { logs: string[] } {
