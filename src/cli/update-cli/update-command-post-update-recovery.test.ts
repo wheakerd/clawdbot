@@ -119,6 +119,7 @@ async function finishFailedUpdate(
   } = {},
 ): Promise<UpdateCommandFailure> {
   return await finishUpdate({
+    mutationStarted: true,
     result,
     ...(options.failure ? { failure: options.failure } : {}),
     root: options.originalRoot ?? result.root ?? "/repo",

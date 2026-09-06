@@ -3,6 +3,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
@@ -72,6 +73,7 @@ import { selectPackageExecutor, type PreparedPackageUpdate } from "./update-pack
 const CLI_NAME = resolveCliName();
 
 type MutableUpdateExecutionResult = {
+  mutationStarted: boolean;
   result: UpdateRunResult;
   failure?: { cause: unknown; detail: string };
   preManagedServiceStop: PreManagedServiceStop | undefined;
@@ -292,6 +294,7 @@ export async function executeMutableUpdate(params: {
     params.updateInstallKind === "package" ? selectPackageExecutor() : undefined;
   let preparedPackageUpdate: PreparedPackageUpdate | undefined;
   let packageActivationStarted = false;
+  let mutationStarted = false;
   const validateCandidate = async (root: string) => {
     const env = ownedManagedUpdateContext?.env ?? params.opts.run?.env ?? process.env;
     if (params.opts.run) {
@@ -480,6 +483,7 @@ export async function executeMutableUpdate(params: {
     if (params.updateInstallKind === "package") {
       preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
     }
+    mutationStarted = true;
     params.onActivation?.();
   };
   try {
@@ -631,6 +635,7 @@ export async function executeMutableUpdate(params: {
           cwd: params.root,
           durationMs,
           exitCode: 1,
+          ...(isAbortError(err) ? { termination: "signal" as const } : {}),
           stderrTail: message,
         },
       ],
@@ -644,6 +649,7 @@ export async function executeMutableUpdate(params: {
   return {
     result,
     failure,
+    mutationStarted,
     preManagedServiceStop,
     ownedManagedUpdateContext,
     recoveryEnv,

@@ -133,6 +133,7 @@ function fixture(): FinishUpdateParams {
   const env = { ...process.env };
   const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
   return {
+    mutationStarted: true,
     result: {
       status: "ok",
       mode: "npm",

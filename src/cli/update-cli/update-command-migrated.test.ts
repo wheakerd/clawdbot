@@ -110,6 +110,7 @@ it.each([false, true])(
 
     const result = await continueMigratedUpdateInFreshProcess(
       {
+        mutationStarted: true,
         result: {
           status: "error",
           reason: "doctor-failed",
@@ -163,6 +164,12 @@ it.each([false, true])(
       },
       progress.pendingSteps,
     );
+    expect(result.automaticTriage).toMatchObject({
+      kind: "update",
+      phase: "state-migrated-no-rollback",
+      installationRoot: root,
+      gateway: "preserve",
+    });
     expect(result.exitCode).not.toBe(0);
     expect(result.result).toMatchObject({
       runId: created.runId,
