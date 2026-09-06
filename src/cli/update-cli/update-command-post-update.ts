@@ -21,7 +21,6 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
-import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { printResult } from "./progress.js";
 import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js";
@@ -58,8 +57,6 @@ import {
   type PreManagedServiceStop,
 } from "./update-command-service.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
-
-const CLI_NAME = resolveCliName();
 
 export type FinishUpdateParams = UpdateRestartParams & {
   failure?: { cause: unknown; detail: string };
@@ -665,10 +662,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       await tryWriteCompletionCache(postUpdateRoot, Boolean(params.opts.json));
     } catch (err) {
       if (!params.opts.json) {
-        const completionCacheRefreshCommand = replaceCliName(
-          formatCliCommand("openclaw completion --write-state"),
-          CLI_NAME,
-        );
+        const completionCacheRefreshCommand = formatCliCommand("openclaw completion --write-state");
         defaultRuntime.log(
           theme.warn(
             `Completion cache update failed: ${formatErrorMessage(err)}. Update will continue; retry with: ${completionCacheRefreshCommand}`,
