@@ -37,6 +37,7 @@ openclaw-chat-pane {
 .chat-split-view__cell {
   --chat-surface: var(--bg-content, var(--bg));
 
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -91,9 +92,33 @@ openclaw-router-outlet[aria-busy="true"],
   cursor: progress;
 }
 
-openclaw-router-outlet[aria-busy="true"] .chat-pane-cache__pane--visible,
-.chat-pane-cache[aria-busy="true"] > .chat-pane-cache__pane--visible {
-  opacity: 0.55;
+.chat-pane-cache__status {
+  position: absolute;
+  z-index: 2;
+  inset-block-start: 12px;
+  inset-inline-end: 12px;
+  display: none;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--chat-surface);
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+openclaw-router-outlet[aria-busy="true"] .chat-pane-cache__status--active,
+.chat-split-view__cell:has(> .chat-pane-cache[aria-busy="true"]) > .chat-pane-cache__status {
+  display: block;
+}
+
+/* Replace the inert header actions in place, without covering or moving the transcript. */
+openclaw-router-outlet[aria-busy="true"]
+  .chat-pane-cache__status--active
+  ~ .chat-pane-cache
+  .chat-pane__header-trailing,
+.chat-pane-cache[aria-busy="true"] .chat-pane__header-trailing {
+  visibility: hidden;
 }
 
 .chat-pane-cache__pane:not(.chat-pane-cache__pane--active) .chat-inline-approval {

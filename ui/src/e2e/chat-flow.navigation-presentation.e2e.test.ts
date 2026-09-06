@@ -75,7 +75,9 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+      await page.goto(
+        `${controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a")}?draft=Continue&__openclawComposerFocus=1`,
+      );
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count(), { timeout: 10_000 }).toBe(2);
       await expect
@@ -93,6 +95,28 @@ suite.define(() => {
 
       await gateway.resolveDeferred("chat.startup");
       await expect.poll(() => page.getByText("Shared cold startup proof.").count()).toBe(2);
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                document.activeElement?.closest("openclaw-chat-pane") as HTMLElement & {
+                  paneId?: string;
+                }
+              )?.paneId,
+          ),
+        )
+        .toBe("p1");
+      await page.setViewportSize({ width: 390, height: 900 });
+      await page.locator(".chat-split-view--narrow").waitFor();
+      const hidden = page.locator(".chat-split-view__cell--narrow-hidden openclaw-chat-pane");
+      expect(
+        await hidden.evaluate((node) => ({
+          visuallyPresented: (node as HTMLElement & { visuallyPresented: boolean })
+            .visuallyPresented,
+          hidden: node.getAttribute("aria-hidden"),
+        })),
+      ).toEqual({ visuallyPresented: false, hidden: "true" });
     } finally {
       await suite.closeBrowserContext(context);
     }

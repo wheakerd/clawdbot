@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
+import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -67,6 +68,11 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
       @pointerdown=${() => options.onFocusPane(options.pane.id)}
       @focusin=${() => options.onFocusPane(options.pane.id)}
     >
+      <span
+        class="chat-pane-cache__status ${options.active ? "chat-pane-cache__status--active" : ""}"
+        role="status"
+        >${t("common.loading")}</span
+      >
       <div class="chat-pane-cache" aria-busy=${pending ? "true" : "false"}>
         ${repeat(
           options.sessionKeys,

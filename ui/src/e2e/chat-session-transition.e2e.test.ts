@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -119,8 +118,9 @@ suite.define(() => {
           match: { sessionKey: sessionB },
         });
         expect(await selectedKey()).toBe(sessionA);
-        expect(await visible.evaluate((node) => getComputedStyle(node).opacity)).toBe("0.55");
+        expect(await visible.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
         expect(await page.locator('.chat-pane-cache[aria-busy="true"]').count()).toBe(1);
+        await page.locator('.chat-pane-cache__status[role="status"]').waitFor();
         await page.keyboard.press("x");
         expect(
           await page
@@ -137,9 +137,10 @@ suite.define(() => {
           'openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]',
         );
         if (kind === "slow mobile") {
-          await skeleton.waitFor({ state: "visible" });
-          expect(await selectedKey()).toBe(sessionB);
-          expect(await page.locator('.chat-pane-cache[aria-busy="true"]').count()).toBe(0);
+          // Keep history deferred past the former timed skeleton swap.
+          await page.waitForTimeout(1_000);
+          expect(await selectedKey()).toBe(sessionA);
+          expect(await skeleton.count()).toBe(0);
         }
         if (kind === "error") {
           await gateway.rejectDeferred("chat.startup", {
@@ -169,9 +170,7 @@ suite.define(() => {
           cancelAnimationFrame(state.frame);
           return state.frames;
         });
-        expect(frames).toEqual(
-          kind === "slow mobile" ? ["source", "fallback", "content"] : ["source", "content"],
-        );
+        expect(frames).toEqual(["source", "content"]);
         await trace.dispose();
 
         if (kind === "slow mobile") {
@@ -239,7 +238,8 @@ suite.define(() => {
       expect(await outlet.getAttribute("aria-busy")).toBe("true");
       expect(await outlet.evaluate((node) => (node as HTMLElement).inert)).toBe(true);
       const visible = page.locator(".chat-pane-cache__pane--visible");
-      expect(await visible.evaluate((node) => getComputedStyle(node).opacity)).toBe("0.55");
+      expect(await visible.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
+      await page.locator('.chat-pane-cache__status[role="status"]').waitFor();
       await page.keyboard.press("Control+Shift+b");
       expect(await visible.locator('[data-panel-slot="workspace"]').count()).toBe(0);
       expect(await gateway.getRequests("chat.startup", { sessionKey: target })).toHaveLength(0);
@@ -263,67 +263,6 @@ suite.define(() => {
         .toBe(target);
       expect(await outlet.getAttribute("aria-busy")).toBe("false");
       expect(await outlet.evaluate((node) => (node as HTMLElement).inert)).toBe(false);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("keeps route draft focus and mobile visual activity in the active split pane", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      viewport: { width: 1440, height: 900 },
-    });
-    await context.addInitScript(
-      ({ key, settingsKey }) => {
-        localStorage.setItem(
-          settingsKey,
-          JSON.stringify({
-            chatSplitLayout: {
-              activePaneId: "p1",
-              columns: [
-                { id: "c1", panes: [{ id: "p1", sessionKey: key }], paneWeights: [1] },
-                { id: "c2", panes: [{ id: "p2", sessionKey: key }], paneWeights: [1] },
-              ],
-              columnWeights: [0.5, 0.5],
-            },
-          }),
-        );
-      },
-      { key: sessionA, settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
-    );
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      sessionKey: sessionA,
-      methodResponses: { "sessions.list": sessionList },
-      historyMessages: [{ role: "assistant", content: "Shared session.", timestamp: 1000 }],
-    });
-    try {
-      await page.goto(
-        `${controlUiSessionUrl(suite.server.baseUrl, sessionA)}?draft=Continue&__openclawComposerFocus=1`,
-      );
-      await expect.poll(() => page.getByText("Shared session.", { exact: true }).count()).toBe(2);
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (
-                document.activeElement?.closest("openclaw-chat-pane") as HTMLElement & {
-                  paneId?: string;
-                }
-              )?.paneId,
-          ),
-        )
-        .toBe("p1");
-      await page.setViewportSize({ width: 390, height: 900 });
-      await page.locator(".chat-split-view--narrow").waitFor();
-      const hidden = page.locator(".chat-split-view__cell--narrow-hidden openclaw-chat-pane");
-      expect(
-        await hidden.evaluate((node) => ({
-          visuallyPresented: (node as HTMLElement & { visuallyPresented: boolean })
-            .visuallyPresented,
-          hidden: node.getAttribute("aria-hidden"),
-        })),
-      ).toEqual({ visuallyPresented: false, hidden: "true" });
     } finally {
       await suite.closeBrowserContext(context);
     }

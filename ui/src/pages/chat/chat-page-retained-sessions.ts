@@ -15,16 +15,14 @@ import { findPane } from "./split-layout.ts";
 
 const RETAINED_SESSIONS_PER_PANE = 3;
 const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
-// Sub-second cold loads stay covered; slower loads need visible progress rather than stale content.
-const COLD_SESSION_LOADING_DELAY_MS = 750;
 
 type ColdSessionTransition = {
   sourceSessionKey: string;
   targetSessionKey: string;
-} & ({ phase: "pending"; timer: number } | { phase: "fallback" });
+};
 
 export type RetainedSessionPresentation = {
-  phase: "content" | "preview" | "pending" | "fallback";
+  phase: "content" | "preview" | "pending";
   visualSessionKey: string;
 };
 
@@ -63,7 +61,7 @@ export class ChatPageRetainedSessions {
     window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
     this.host.removeEventListener(CHAT_TRANSCRIPT_READY_EVENT, this.handleTranscriptReady);
     this.cancelPreview();
-    this.clearColdTransitions();
+    this.coldTransitions.clear();
     this.sessionsByPane.clear();
   }
 
@@ -98,9 +96,8 @@ export class ChatPageRetainedSessions {
       return { phase: "content", visualSessionKey: pane.sessionKey };
     }
     return {
-      phase: transition.phase,
-      visualSessionKey:
-        transition.phase === "fallback" ? pane.sessionKey : transition.sourceSessionKey,
+      phase: "pending",
+      visualSessionKey: transition.sourceSessionKey,
     };
   }
 
@@ -108,7 +105,7 @@ export class ChatPageRetainedSessions {
     const paneIds = new Set(panes.map((pane) => pane.id));
     for (const paneId of this.sessionsByPane.keys()) {
       if (!paneIds.has(paneId)) {
-        this.clearColdTransition(paneId);
+        this.coldTransitions.delete(paneId);
         this.sessionsByPane.delete(paneId);
       }
     }
@@ -140,7 +137,7 @@ export class ChatPageRetainedSessions {
     if (retained.length > RETAINED_SESSIONS_PER_PANE) {
       // Cold targets prepare behind this source; evicting it leaves no visible pane.
       const transition = this.coldTransitions.get(pane.id);
-      const visualSource = transition?.phase === "pending" ? transition.sourceSessionKey : null;
+      const visualSource = transition?.sourceSessionKey;
       const evictionIndex = visualSource
         ? retained.findIndex((key) => !areUiSessionKeysEquivalent(key, visualSource))
         : 0;
@@ -156,7 +153,7 @@ export class ChatPageRetainedSessions {
       clearPaneSessionHandoffs(context, paneId);
       context.chatAttachmentHandoff.clearPane(paneId);
     }
-    this.clearColdTransition(paneId);
+    this.coldTransitions.delete(paneId);
     this.sessionsByPane.delete(paneId);
   }
 
@@ -168,11 +165,8 @@ export class ChatPageRetainedSessions {
   ): void => {
     const deletedPane = this.findPane(paneId, sessionKey);
     const transition = this.coldTransitions.get(paneId);
-    const removedColdSource =
-      transition?.phase === "pending" &&
-      areUiSessionKeysEquivalent(transition.sourceSessionKey, sessionKey);
-    if (removedColdSource) {
-      this.revealColdFallback(paneId);
+    if (transition && areUiSessionKeysEquivalent(transition.sourceSessionKey, sessionKey)) {
+      this.coldTransitions.delete(paneId);
     }
     if (!preserveDraft) {
       deletedPane?.discardStagedAttachments?.();
@@ -184,7 +178,7 @@ export class ChatPageRetainedSessions {
     }
     if (transition && areUiSessionKeysEquivalent(transition.targetSessionKey, sessionKey)) {
       if (this.findPane(paneId, replacementSessionKey)?.transcriptCommitted) {
-        this.clearColdTransition(paneId);
+        this.coldTransitions.delete(paneId);
       } else {
         transition.targetSessionKey = replacementSessionKey;
       }
@@ -202,7 +196,7 @@ export class ChatPageRetainedSessions {
     const selectedSessionKey = findPane(this.bindings.layout(), paneId)?.pane.sessionKey;
     if (selectedSessionKey && areUiSessionKeysEquivalent(selectedSessionKey, sessionKey)) {
       this.bindings.selectReplacement(paneId, sessionKey, replacementSessionKey);
-    } else if (!removedColdSource) {
+    } else {
       this.host.requestUpdate();
     }
   };
@@ -284,7 +278,7 @@ export class ChatPageRetainedSessions {
     }
     const transition = this.coldTransitions.get(detail.paneId);
     if (transition && areUiSessionKeysEquivalent(transition.targetSessionKey, detail.sessionKey)) {
-      this.clearColdTransition(detail.paneId);
+      this.coldTransitions.delete(detail.paneId);
       this.host.requestUpdate();
     }
   };
@@ -295,62 +289,24 @@ export class ChatPageRetainedSessions {
     targetSessionKey: string,
   ): void {
     const previous = this.coldTransitions.get(paneId);
-    this.clearColdTransition(paneId);
+    this.coldTransitions.delete(paneId);
     if (this.findPane(paneId, targetSessionKey)?.transcriptCommitted) {
       return;
     }
-    const source = previous?.phase === "pending" ? previous.sourceSessionKey : sourceSessionKey;
+    const source = previous?.sourceSessionKey ?? sourceSessionKey;
     // Only settled content is a cover. An unfinished source could otherwise
     // complete after supersession and flash beneath the newer selection.
     if (!this.findPane(paneId, source)?.transcriptCommitted) {
-      this.coldTransitions.set(paneId, {
-        phase: "fallback",
-        sourceSessionKey: source,
-        targetSessionKey,
-      });
       return;
     }
     this.coldTransitions.set(paneId, {
-      phase: "pending",
       sourceSessionKey: source,
       targetSessionKey,
-      timer: window.setTimeout(
-        () => this.revealColdFallback(paneId),
-        COLD_SESSION_LOADING_DELAY_MS,
-      ),
     });
-  }
-
-  private revealColdFallback(paneId: string): void {
-    const transition = this.coldTransitions.get(paneId);
-    if (transition?.phase !== "pending") {
-      return;
-    }
-    window.clearTimeout(transition.timer);
-    this.coldTransitions.set(paneId, {
-      phase: "fallback",
-      sourceSessionKey: transition.sourceSessionKey,
-      targetSessionKey: transition.targetSessionKey,
-    });
-    this.host.requestUpdate();
-  }
-
-  private clearColdTransition(paneId: string): void {
-    const transition = this.coldTransitions.get(paneId);
-    if (transition?.phase === "pending") {
-      window.clearTimeout(transition.timer);
-    }
-    this.coldTransitions.delete(paneId);
-  }
-
-  private clearColdTransitions(): void {
-    for (const paneId of this.coldTransitions.keys()) {
-      this.clearColdTransition(paneId);
-    }
   }
 
   private cancelColdTransition(paneId: string): void {
-    this.clearColdTransition(paneId);
+    this.coldTransitions.delete(paneId);
     this.host.requestUpdate();
   }
 
