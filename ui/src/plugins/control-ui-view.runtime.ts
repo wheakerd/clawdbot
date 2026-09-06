@@ -34,6 +34,7 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) defaultView: unknown = nothing;
   @property({ attribute: false }) defaultHost?: LitElement;
   @property({ type: Boolean }) presented = true;
+  @property({ attribute: false }) replacementRef?: (element: Element) => void;
   @state() private error = "";
   private registration?: ViewRegistration;
   private mountAbort?: AbortController;
@@ -112,12 +113,12 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
       return;
     }
     try {
+      const container = this.querySelector<HTMLElement>("[data-plugin-view-root]");
+      if (!container) {
+        return;
+      }
+      const abort = this.mountAbort ?? new AbortController();
       if (!this.mountAbort) {
-        const container = this.querySelector<HTMLElement>("[data-plugin-view-root]");
-        if (!container) {
-          return;
-        }
-        const abort = new AbortController();
         this.mountAbort = abort;
         registration.signal.addEventListener(
           "abort",
@@ -153,8 +154,18 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
         };
         this.handle?.update?.(this.viewContext);
       }
-      for (const container of this.defaultContainers) {
-        render(this.defaultView, container, { host: this.defaultHost ?? this });
+      for (const defaultContainer of this.defaultContainers) {
+        render(this.defaultView, defaultContainer, { host: this.defaultHost ?? this });
+      }
+      // Standalone replacements commit at mount/update; delegated views keep
+      // their built-in renderer's readiness. The root fences retired mounts.
+      if (
+        this.isConnected &&
+        !abort.signal.aborted &&
+        !registration.signal.aborted &&
+        this.defaultContainers.size === 0
+      ) {
+        this.replacementRef?.(container);
       }
     } catch (error) {
       this.fail(error);

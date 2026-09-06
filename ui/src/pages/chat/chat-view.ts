@@ -167,54 +167,60 @@ export function renderChat(props: ChatProps) {
   // Placement is visible work, but does not own an abortable model run yet.
   const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
   let chatSection: HTMLElement | null = null;
-  const thread = renderPluginSurface(
-    "transcript",
-    {
-      sessionKey: props.sessionKey,
-      agentId: props.currentAgentId,
-      messages: props.messages,
-      stream: props.stream,
-      loading: props.loading,
-    },
-    renderChatThread(
-      {
-        ...props,
-        loading: props.loading && !placementStartup,
-        streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
-        queue,
-        pendingInputs: pendingInputs?.page.items,
-        runActive: props.runActive === true,
-        runWorking,
-        startupLabel: chatStartupStatusLabel(props.startupStatus, placementStartup),
-        questionPrompts: props.gatewayQuestionPrompts,
-        agents: props.agentsList?.agents,
-        onOpenImage: openImage,
-        onRequestUpdate: requestUpdate,
-        queuedMessageAction: props.placementStartup?.initialTurn
-          ? {
-              id: props.placementStartup.initialTurn.id,
-              label:
-                props.placementStartup.action === "check-delivery"
-                  ? t("chat.queue.checkDelivery")
-                  : undefined,
-              onAction: props.connected ? props.onRetrySessionPlacementStartup : undefined,
-            }
-          : undefined,
-        onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
-        onDiscardQueuedMessage: props.onQueueRemove,
-        onCompanionPrefill:
-          props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
-        onOpenSession: props.onSessionSelect,
-        onFocusComposer: () =>
-          chatSection
-            ?.querySelector<HTMLElement>(
-              "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > textarea",
-            )
-            ?.focus({ preventScroll: true }),
-      },
-      props.transcript,
-    ),
-    props.presented ?? true,
+  const thread = props.transcript.renderSession(
+    props.paneId,
+    props.sessionKey,
+    (transcript) =>
+      html`${renderPluginSurface(
+        "transcript",
+        {
+          sessionKey: props.sessionKey,
+          agentId: props.currentAgentId,
+          messages: props.messages,
+          stream: props.stream,
+          loading: props.loading,
+        },
+        renderChatThread(
+          {
+            ...props,
+            loading: props.loading && !placementStartup,
+            streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
+            queue,
+            pendingInputs: pendingInputs?.page.items,
+            runActive: props.runActive === true,
+            runWorking,
+            startupLabel: chatStartupStatusLabel(props.startupStatus, placementStartup),
+            questionPrompts: props.gatewayQuestionPrompts,
+            agents: props.agentsList?.agents,
+            onOpenImage: openImage,
+            onRequestUpdate: requestUpdate,
+            queuedMessageAction: props.placementStartup?.initialTurn
+              ? {
+                  id: props.placementStartup.initialTurn.id,
+                  label:
+                    props.placementStartup.action === "check-delivery"
+                      ? t("chat.queue.checkDelivery")
+                      : undefined,
+                  onAction: props.connected ? props.onRetrySessionPlacementStartup : undefined,
+                }
+              : undefined,
+            onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
+            onDiscardQueuedMessage: props.onQueueRemove,
+            onCompanionPrefill:
+              props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
+            onOpenSession: props.onSessionSelect,
+            onFocusComposer: () =>
+              chatSection
+                ?.querySelector<HTMLElement>(
+                  "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > textarea",
+                )
+                ?.focus({ preventScroll: true }),
+          },
+          props.transcript,
+        ),
+        props.presented ?? true,
+        (element) => transcript.contentElementRef(props.loading ? undefined : element),
+      )}`,
   );
   // The composer keeps the outbox queue; only the transcript includes the
   // placement initial turn, whose retry action belongs to startup.

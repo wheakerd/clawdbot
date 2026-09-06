@@ -679,13 +679,36 @@ suite.define(() => {
         await page.screenshot({ path: path.join(suite.artifactDir, "after.png"), fullPage: true });
         await page.locator(".nav-item--home").click();
         await expectOneAccessory();
+        await selectView(page, "Transcript", "ui-fixture/transcript");
+        const startups = (
+          await gateway.getRequests("chat.startup", { sessionKey: otherSessionKey })
+        ).length;
+        await gateway.deferNext("chat.startup", { sessionKey: otherSessionKey });
         await page
           .locator(`.sidebar-recent-session[data-session-key="${otherSessionKey}"] a`)
           .click();
+        await gateway.waitForRequest("chat.startup", {
+          after: startups,
+          match: { sessionKey: otherSessionKey },
+        });
+        await gateway.rejectDeferred("chat.startup", {
+          code: "UNAVAILABLE",
+          message: "History unavailable",
+        });
+        await page.locator(".chat-history-error").getByText("History unavailable").waitFor();
         await expectOneAccessory(otherSessionKey);
         await expect.poll(() => accessory.getAttribute("data-presented")).toBe("false");
         expect(await accessory.isVisible()).toBe(false);
         await page.locator(".nav-item--home").click();
+        await page
+          .locator(".chat-pane-cache__pane--visible")
+          .getByText(`Custom transcript ${sessionKey}`, { exact: true })
+          .waitFor();
+        expect(await page.locator('.chat-pane-cache[aria-busy="true"]').count()).toBe(0);
+        await page
+          .locator(".chat-pane-cache__pane--visible")
+          .getByLabel("Fixture draft", { exact: true })
+          .click();
         await expectOneAccessory();
         expect(await accessory.getAttribute("data-presented")).toBe("true");
         await page.screenshot({

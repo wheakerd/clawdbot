@@ -68,24 +68,24 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   private contentReady = false;
   private contentCommit: { element: Element; committed: boolean } | null = null;
   get contentCommitted(): boolean {
-    return Boolean(
-      this.connected && this.contentCommit?.committed && this.contentCommit.element.isConnected,
-    );
+    const commit = this.contentCommit;
+    return this.connected && commit?.committed === true && commit.element.isConnected;
   }
   readonly contentElementRef = (element?: Element) => {
-    this.contentCommit = element ? { element, committed: false } : null;
-    const commit = this.contentCommit;
-    if (!commit) {
-      return;
-    }
-    // Refs run in the actual template host, before new nodes connect. A pane's
-    // updateComplete can precede a sidebar stamp or the virtualizer's next range.
-    queueMicrotask(() => {
-      if (this.connected && this.contentCommit === commit && commit.element.isConnected) {
-        commit.committed = true;
-        this.callbacks.onContentCommitted?.();
+    if (element !== this.contentCommit?.element) {
+      const commit = element ? { element, committed: false } : null;
+      this.contentCommit = commit;
+      if (commit) {
+        // Refs run in the actual template host, before new nodes connect. A pane's
+        // updateComplete can precede a sidebar stamp or the virtualizer's next range.
+        queueMicrotask(() => {
+          if (this.connected && this.contentCommit === commit && commit.element.isConnected) {
+            commit.committed = true;
+            this.callbacks.onContentCommitted?.();
+          }
+        });
       }
-    });
+    }
   };
   // The in-flow history header's fixed height, folded into scrollMargin.
   // appliedHeaderHeight is what the current virtualizer margin already carries.

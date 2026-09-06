@@ -9,16 +9,17 @@ import { applicationContext } from "../app/context.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 
 export type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "replacements";
+type SurfaceArgs = [ControlUiSurface, unknown, unknown, boolean, ((element: Element) => void)?];
 
 class PluginSurfaceDirective extends AsyncDirective {
   private host?: LitElement;
   private consumer?: ContextConsumer<typeof applicationContext, LitElement>;
   private runtime?: ControlUiPluginCapability;
   private unsubscribe?: () => void;
-  private args?: [ControlUiSurface, unknown, unknown, boolean];
+  private args?: SurfaceArgs;
   private pending = false;
 
-  override update(part: ChildPart, args: [ControlUiSurface, unknown, unknown, boolean]) {
+  override update(part: ChildPart, args: SurfaceArgs) {
     this.args = args;
     const host = part.options?.host;
     if (host instanceof LitElement && this.host !== host) {
@@ -85,6 +86,7 @@ class PluginSurfaceDirective extends AsyncDirective {
     props: unknown,
     defaultView: unknown,
     presented: boolean,
+    replacementRef?: (element: Element) => void,
   ) {
     // Built-in renderers remain synchronous and do not create a component for
     // every transcript row. Only a selected replacement owns a DOM mount.
@@ -96,6 +98,7 @@ class PluginSurfaceDirective extends AsyncDirective {
           .defaultView=${defaultView}
           .defaultHost=${this.host}
           .presented=${presented}
+          .replacementRef=${replacementRef}
         ></openclaw-plugin-view>`
       : defaultView;
   }
@@ -108,8 +111,9 @@ export function renderPluginSurface<S extends ControlUiSurface>(
   props: ControlUiSurfaceProps[S],
   defaultView: unknown,
   presented = true,
+  replacementRef?: (element: Element) => void,
 ) {
-  return pluginSurface(surface, props, defaultView, presented);
+  return pluginSurface(surface, props, defaultView, presented, replacementRef);
 }
 
 export function renderPluginContribution(

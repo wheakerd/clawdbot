@@ -82,6 +82,11 @@ export function pluginModule(revision: string, replacements = true) {
         return {dispose: context.mountDefault(container)};
       }});
       host.ui.registerReplacement({id:"failing-transcript", label:"Failing transcript", surface:"transcript", mount() { throw new Error("Fixture transcript failed"); }});
+      host.ui.registerReplacement({id:"transcript", label:"Custom transcript", surface:"transcript", mount(container, context) {
+        const update = next => { container.textContent = next.props.loading ? "Plugin loading" : "Custom transcript " + next.props.sessionKey; };
+        update(context);
+        return { update };
+      }});
       if (["withdrawn", "invalid-selection"].includes(${JSON.stringify(revision)})) {
         if (${JSON.stringify(revision)} === "invalid-selection") {
           host.ui.selectReplacement("workspace", "workspace");
