@@ -1,4 +1,7 @@
+import assert from "node:assert/strict";
 import { createQaBusState } from "./bus-state.js";
+import type { TelegramUserbotUpdate } from "./live-transports/telegram/userbot-driver.runtime.js";
+import { waitForQaTransportCondition } from "./qa-transport.js";
 import { readQaScenarioById, type QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import type { QaSuiteStep } from "./suite-types.js";
@@ -167,4 +170,108 @@ export async function runLoadedScenarioFlow(
     scenarioTitle: scenario.title,
     flow: params.flow ?? loadedFlow,
   });
+}
+
+export async function runTelegramRichObservationFlow(delayedKind: "message" | "edit") {
+  const plain = (text: string) => ({ "@type": "richTextPlain", text });
+  const wrap = (kind: string, text: unknown) => ({ "@type": kind, text });
+  const url = (text: unknown) => ({
+    ...wrap("richTextUrl", text),
+    url: "https://example.com/qa",
+  });
+  const paragraph = (text: unknown) => ({ "@type": "pageBlockParagraph", text });
+  const styled = url(wrap("richTextBold", plain("Download")));
+  const list = { "@type": "pageBlockList", items: [{ blocks: [paragraph(styled)] }] };
+  const math = { "@type": "richTextMathematicalExpression", expression: "x" };
+  const emoji = {
+    "@type": "richTextCustomEmoji",
+    custom_emoji_id: "5368324170671202286",
+    alternative_text: "😀",
+  };
+  const annotation = (wrapper: (text: unknown) => unknown) =>
+    paragraph({
+      "@type": "richTexts",
+      texts: [
+        wrapper(plain("\n")),
+        wrap("richTextFixed", plain("user[Thu]")),
+        wrapper(plain(" trailing")),
+      ],
+    });
+  const nativeBlocks = [
+    { "@type": "pageBlockDetails", header: plain("More"), blocks: [paragraph(styled)] },
+    list,
+    { "@type": "pageBlockBlockQuote", blocks: [paragraph(styled)] },
+    paragraph(url(math)),
+    paragraph(wrap("richTextSpoiler", math)),
+    paragraph(url(emoji)),
+    paragraph(wrap("richTextSpoiler", emoji)),
+    annotation(url),
+    annotation((text) => wrap("richTextBold", text)),
+  ];
+  type Observation = Pick<
+    TelegramUserbotUpdate,
+    "botApiMessageId" | "contentType" | "kind" | "richMessage"
+  >;
+  const observed: Observation[] = [];
+  const observation = (id: number, block: unknown, kind: "message" | "edit"): Observation => ({
+    botApiMessageId: id,
+    kind,
+    contentType: "messageRichMessage",
+    richMessage: { "@type": "richMessage", blocks: [block], is_full: true, is_rtl: false },
+  });
+  const timers: ReturnType<typeof setTimeout>[] = [];
+  const deliver = (kind: "message" | "edit", action: () => void) => {
+    // Receipts settle first; native updates arrive on a later event-loop turn.
+    if (kind === delayedKind) {
+      timers.push(setTimeout(action, 1));
+    } else {
+      action();
+    }
+  };
+  let sends = 0;
+  let edits = 0;
+  try {
+    const result = await runLoadedScenarioFlow("telegram-rich-inline-composition", {
+      api: {
+        env: {
+          providerMode: "mock-openai",
+          cfg: { channels: { telegram: { accounts: { sut: { richMessages: true } } } } },
+          gateway: {
+            call: async (method: string) => {
+              assert.equal(method, "send");
+              const block = nativeBlocks[sends];
+              const id = ++sends;
+              deliver("message", () => observed.push(observation(id, block, "message")));
+              return { messageId: id };
+            },
+          },
+        },
+        transport: {
+          id: "telegram",
+          accountId: "sut",
+          reset() {},
+          buildAgentDelivery: () => ({ to: "123" }),
+        },
+        readTelegramMessages: () => structuredClone(observed),
+        waitForCondition: waitForQaTransportCondition,
+        runQaCli: async (_env: unknown, args: string[]) => {
+          assert.deepEqual(args.slice(0, 2), ["message", "edit"]);
+          const id = Number(args[args.indexOf("--message-id") + 1]);
+          assert.equal(id, 1);
+          edits += 1;
+          deliver("edit", () => {
+            observed[0] = observation(id, list, "edit");
+          });
+        },
+        runAgentPrompt: () => {
+          throw new Error("direct delivery must not invoke a model");
+        },
+      },
+    });
+    return { result, sends, edits, observed };
+  } finally {
+    for (const timer of timers) {
+      clearTimeout(timer);
+    }
+  }
 }

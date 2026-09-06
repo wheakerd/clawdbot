@@ -127,14 +127,12 @@ flow:
                   expr: "Number.isSafeInteger(Number(receipt.messageId)) && Number(receipt.messageId) > 0"
                   message: Gateway send must return an accepted native message ID
               - call: waitForCondition
+                saveAs: received
                 args:
                   - lambda:
                       params: []
-                      expr: "readTelegramMessages().some(message => String(message.botApiMessageId) === String(receipt.messageId))"
+                      expr: "readTelegramMessages().find(message => String(message.botApiMessageId) === String(receipt.messageId))"
                   - 30000
-              - set: received
-                value:
-                  expr: "readTelegramMessages().find(message => String(message.botApiMessageId) === String(receipt.messageId))"
               - assert:
                   expr: "received.contentType === 'messageRichMessage' && received.richMessage?.is_full === true && containsPattern(received.richMessage.blocks, fixture.pattern)"
                   message:
@@ -152,14 +150,12 @@ flow:
             - timeoutMs: 60000
               json: true
         - call: waitForCondition
+          saveAs: edited
           args:
             - lambda:
                 params: []
-                expr: "readTelegramMessages().some(message => message.kind === 'edit' && message.botApiMessageId === editTarget)"
+                expr: "readTelegramMessages().find(message => message.kind === 'edit' && message.botApiMessageId === editTarget)"
             - 30000
-        - set: edited
-          value:
-            expr: "readTelegramMessages().find(message => message.botApiMessageId === editTarget)"
         - assert:
             expr: "edited.kind === 'edit' && edited.contentType === 'messageRichMessage' && edited.richMessage?.is_full === true && containsPattern(edited.richMessage.blocks, { '@type': 'pageBlockList' }) && containsPattern(edited.richMessage.blocks, fixtures[1].pattern) && readTelegramMessages().length === fixtures.length"
             message: editing must preserve the styled link on the same native message without a replacement bubble

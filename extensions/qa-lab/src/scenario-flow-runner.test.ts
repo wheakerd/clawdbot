@@ -12,7 +12,10 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
-import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import {
+  runLoadedScenarioFlow,
+  runTelegramRichObservationFlow,
+} from "./scenario-flow-runner.test-support.js";
 import type { QaSuiteStep } from "./suite-types.js";
 
 function readWebchatTranscriptWaitFlow() {
@@ -299,6 +302,18 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
+  it.each(["message", "edit"] as const)(
+    "waits for delayed Telegram rich %s observations through the real condition helper",
+    async (delayedKind) => {
+      const { result, sends, edits, observed } = await runTelegramRichObservationFlow(delayedKind);
+      expect(result.status).toBe("pass");
+      expect(sends).toBe(9);
+      expect(edits).toBe(1);
+      expect(observed).toHaveLength(9);
+      expect(observed[0]?.kind).toBe("edit");
+    },
+  );
+
   it("ignores stale provider prompt mismatches when the current run matches", async () => {
     const currentObservation = {
       egress: "responses-sdk",
