@@ -181,12 +181,12 @@ suite.define(() => {
       await gateway.waitForRequest("agent.identity.get");
       const initialIdentityRequestCount = (await gateway.getRequests("agent.identity.get")).length;
       const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      const readBottomDistance = () =>
+        thread.evaluate(
+          (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+        );
       await expect.poll(() => thread.count()).toBe(1);
-      const initialDistance = await thread.evaluate((element) => {
-        const transcript = element as HTMLElement;
-        return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
-      });
-      expect(initialDistance).toBeLessThanOrEqual(8);
+      expect(await readBottomDistance()).toBeLessThanOrEqual(8);
       await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         transcript.scrollTop = Math.floor((transcript.scrollHeight - transcript.clientHeight) / 3);
@@ -206,11 +206,7 @@ suite.define(() => {
       expect(await gateway.getRequests("agent.identity.get")).toHaveLength(
         initialIdentityRequestCount,
       );
-      const firstVisitDistance = await thread.evaluate((element) => {
-        const transcript = element as HTMLElement;
-        return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
-      });
-      expect(firstVisitDistance).toBeLessThanOrEqual(8);
+      expect(await readBottomDistance()).toBeLessThanOrEqual(8);
 
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
       const startupRequestsBeforeReturn = (await gateway.getRequests("chat.startup")).length;
@@ -219,21 +215,14 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
 
-      const restored = await thread.evaluate((element) => {
-        const transcript = element as HTMLElement;
-        return {
-          distanceFromBottom:
-            transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight,
-          scrollTop: transcript.scrollTop,
-        };
-      });
+      const restoredDistance = await readBottomDistance();
       const restoredAnchor = await readTopTranscriptAnchor(thread);
       expect(restoredAnchor?.key).toBe(storedAnchor?.key);
       expect(
         Math.abs((restoredAnchor?.offset ?? 0) - (storedAnchor?.offset ?? 0)),
         JSON.stringify({ restoredAnchor, storedAnchor }),
       ).toBeLessThanOrEqual(2);
-      expect(restored.distanceFromBottom).toBeGreaterThan(8);
+      expect(restoredDistance).toBeGreaterThan(8);
 
       const historyRequestsBeforeEndReturn = (await gateway.getRequests("chat.history")).length;
       await sessionLink(sessionB).click();
@@ -261,11 +250,7 @@ suite.define(() => {
         historyRequestsBeforeEndReturn,
       );
       expect(await gateway.getRequests("chat.startup")).toHaveLength(startupRequestsBeforeReturn);
-      const endAnchoredDistance = await thread.evaluate((element) => {
-        const transcript = element as HTMLElement;
-        return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
-      });
-      expect(endAnchoredDistance).toBeLessThanOrEqual(8);
+      expect(await readBottomDistance()).toBeLessThanOrEqual(8);
     } finally {
       await suite.closeBrowserContext(context);
     }
