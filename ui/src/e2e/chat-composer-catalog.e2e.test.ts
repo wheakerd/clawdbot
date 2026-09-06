@@ -417,7 +417,7 @@ suite.define(() => {
         provider: "anthropic",
         available: true,
       };
-      const startupResponse = (sessionId: string, model: typeof workModel) => ({
+      const startupResponse = (sessionId: string) => ({
         agentsList: {
           agents: [
             { id: "work", name: "Work" },
@@ -428,7 +428,6 @@ suite.define(() => {
           scope: "agent",
         },
         messages: [],
-        metadata: { commands: [], models: [model] },
         sessionId,
         thinkingLevel: null,
       });
@@ -440,19 +439,22 @@ suite.define(() => {
             cases: [
               {
                 match: { sessionKey: "agent:work:main" },
-                response: startupResponse("work-session", workModel),
+                response: {
+                  ...startupResponse("work-session"),
+                  metadata: { commands: [], models: [workModel] },
+                },
               },
               {
                 match: { sessionKey: "agent:other:main" },
-                response: startupResponse("other-session", otherModel),
+                response: startupResponse("other-session"),
               },
             ],
           },
-          "models.list": {
+          "chat.metadata": {
             cases: [
               {
-                match: { agentId: "other", view: "configured" },
-                response: { models: [otherModel] },
+                match: { agentId: "other", sessionKey: "agent:other:main" },
+                response: { commands: [], models: [otherModel] },
               },
             ],
           },
@@ -501,9 +503,9 @@ suite.define(() => {
         .toBe(1);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
-      await gateway.deferNext("chat.startup", { sessionKey: "agent:other:main" });
+      await gateway.deferNext("chat.metadata", { sessionKey: "agent:other:main" });
       await navigateToControlUiSession(page, "agent:other:main");
-      await gateway.waitForRequest("chat.startup", { after: 1 });
+      await gateway.waitForRequest("chat.metadata");
       const targetModelTrigger = activeComposer().locator('[data-chat-model-select="true"]');
       await expect.poll(() => targetModelTrigger.textContent()).toContain("other-model");
       expect(await targetModelTrigger.getAttribute("aria-busy")).toBe("false");
@@ -519,10 +521,10 @@ suite.define(() => {
       if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
         await activeComposer().screenshot({
           animations: "disabled",
-          path: `${suite.artifactDir}/selected-model-during-session-startup.png`,
+          path: `${suite.artifactDir}/selected-model-during-catalog-load.png`,
         });
       }
-      await gateway.resolveDeferred("chat.startup");
+      await gateway.resolveDeferred("chat.metadata");
       const startupRequests = await gateway.getRequests("chat.startup");
       expect(
         startupRequests.filter(
@@ -531,7 +533,7 @@ suite.define(() => {
             "agent:other:main",
         ),
       ).toHaveLength(1);
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(1);
       await expect
         .poll(() =>
           activeComposer().locator('[data-chat-model-option="anthropic/other-model"]').count(),

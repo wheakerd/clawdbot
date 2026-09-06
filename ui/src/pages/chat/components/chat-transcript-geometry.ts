@@ -65,6 +65,44 @@ export function maxTranscriptScrollOffset(element: HTMLElement | null): number |
   return element ? Math.max(0, element.scrollHeight - element.clientHeight) : null;
 }
 
+export function activeTranscriptMessageId(
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  messageIds: readonly string[],
+  messageRowKeysById: ReadonlyMap<string, string>,
+  rowIndexesByKey: ReadonlyMap<string, number>,
+): string | null {
+  const scrollElement = virtualizer.options.getScrollElement();
+  if (!scrollElement || messageIds.length === 0) {
+    return null;
+  }
+  const maxOffset = maxTranscriptScrollOffset(scrollElement);
+  // The reader has reached the final section even though the normal midpoint
+  // viewport anchor still points into the preceding row.
+  if (maxOffset !== null && Math.abs(maxOffset - scrollElement.scrollTop) <= 1) {
+    return messageIds.findLast((messageId) => messageRowKeysById.has(messageId)) ?? null;
+  }
+  // Measurements already include scrollMargin. Query the complete row model,
+  // not the rendered range, which can lag a jump or include a focused outlier.
+  const viewportAnchor = scrollElement.scrollTop + scrollElement.clientHeight * 0.5;
+  const activeRow = virtualizer.getVirtualItemForOffset(viewportAnchor);
+  if (!activeRow) {
+    return null;
+  }
+  let precedingId: string | null = null;
+  for (const messageId of messageIds) {
+    const rowKey = messageRowKeysById.get(messageId);
+    const rowIndex = rowKey ? rowIndexesByKey.get(rowKey) : undefined;
+    if (rowIndex === undefined) {
+      continue;
+    }
+    if (rowIndex > activeRow.index) {
+      return precedingId ?? messageId;
+    }
+    precedingId = messageId;
+  }
+  return precedingId;
+}
+
 export class PositionRailGutterController implements ReactiveController {
   private frame: number | null = null;
 
