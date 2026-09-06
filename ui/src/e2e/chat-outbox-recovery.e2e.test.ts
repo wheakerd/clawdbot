@@ -292,7 +292,9 @@ suite.define(() => {
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.waitFor();
+        // Establish input ownership before disconnecting; visible controls can
+        // still belong to a pending route's inert subtree.
+        await composer.click();
         await gateway.setOnline(false);
         await page.locator('.agent-chat__composer-underlaps[data-tone="warn"]').waitFor();
         await composer.fill(`retain destination ${sessionKey}`);
