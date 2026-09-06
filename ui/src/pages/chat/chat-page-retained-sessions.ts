@@ -223,13 +223,13 @@ export class ChatPageRetainedSessions {
       return;
     }
     const retainedPane = this.findPane(activePane.id, intent.sessionKey);
-    this.beginColdTransition(activePane.id, activePane.sessionKey, intent.sessionKey);
     if (!retainedPane?.transcriptCommitted) {
+      this.beginColdTransition(activePane.id, activePane.sessionKey, intent.sessionKey);
       this.host.requestUpdate();
       return;
     }
-    // The route remains authoritative for semantic/global ownership. Both
-    // presentations stay inert until it settles; only visual ownership moves.
+    // A warm preview is speculative: keep any cold cover until the route settles.
+    // Both presentations stay inert; only visual ownership moves before commitment.
     const preview = {
       ...intent,
       href: window.location.href,

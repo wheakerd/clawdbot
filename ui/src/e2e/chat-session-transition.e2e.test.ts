@@ -74,10 +74,6 @@ suite.define(() => {
       const visible = page.locator(".chat-pane-cache__pane--visible");
       const selectedKey = () =>
         visible.evaluate((node) => (node as HTMLElement & { sessionKey: string }).sessionKey);
-      const sidebarLink = (key: string) =>
-        page.locator(
-          `.sidebar-recent-session[data-session-key="${key}"] a.sidebar-recent-session__link`,
-        );
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
         await page.getByText("Session A complete.", { exact: true }).waitFor();
@@ -152,14 +148,6 @@ suite.define(() => {
           await gateway.resolveDeferred("chat.startup");
         }
         await expect.poll(selectedKey).toBe(sessionB);
-        await expect
-          .poll(() =>
-            visible.evaluate(
-              (node) =>
-                (node as HTMLElement & { transcriptCommitted: boolean }).transcriptCommitted,
-            ),
-          )
-          .toBe(true);
         expect(await skeleton.count()).toBe(0);
         if (kind !== "empty" && kind !== "error") {
           await visible.getByText("Session B complete.", { exact: true }).waitFor();
@@ -172,33 +160,6 @@ suite.define(() => {
         });
         expect(frames).toEqual(["source", "content"]);
         await trace.dispose();
-
-        if (kind === "slow mobile") {
-          return;
-        }
-        const requests = (await gateway.getRequests("chat.startup")).length;
-        await sidebarLink(sessionA).click();
-        await expect.poll(selectedKey).toBe(sessionA);
-        await sidebarLink(sessionB).click();
-        // Observe the first paint after clicking, not a poll that could wait out the fallback.
-        expect(
-          await page.evaluate(
-            () =>
-              new Promise<string | undefined>((resolve) => {
-                requestAnimationFrame(() => {
-                  resolve(
-                    (
-                      document.querySelector(".chat-pane-cache__pane--visible") as HTMLElement & {
-                        sessionKey?: string;
-                      }
-                    )?.sessionKey,
-                  );
-                });
-              }),
-          ),
-        ).toBe(sessionB);
-        expect(await page.locator('.chat-pane-cache[aria-busy="true"]').count()).toBe(0);
-        expect((await gateway.getRequests("chat.startup")).length).toBe(requests);
       } finally {
         await suite.closeBrowserContext(context);
       }

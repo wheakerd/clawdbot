@@ -213,6 +213,7 @@ suite.define(() => {
       expect(firstVisitDistance).toBeLessThanOrEqual(8);
 
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+      const startupRequestsBeforeReturn = (await gateway.getRequests("chat.startup")).length;
       await sessionLink(sessionA).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
       await waitForChatScrollIdle(page);
@@ -236,11 +237,30 @@ suite.define(() => {
 
       const historyRequestsBeforeEndReturn = (await gateway.getRequests("chat.history")).length;
       await sessionLink(sessionB).click();
+      // Observe the first paint after clicking, not a poll that could wait out the fallback.
+      expect(
+        await page.evaluate(
+          () =>
+            new Promise<string | undefined>((resolve) => {
+              requestAnimationFrame(() => {
+                resolve(
+                  (
+                    document.querySelector(".chat-pane-cache__pane--visible") as HTMLElement & {
+                      sessionKey?: string;
+                    }
+                  )?.sessionKey,
+                );
+              });
+            }),
+        ),
+      ).toBe(sessionB);
+      expect(await page.locator('.chat-pane-cache[aria-busy="true"]').count()).toBe(0);
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
       await waitForChatScrollIdle(page);
       expect(await gateway.getRequests("chat.history")).toHaveLength(
         historyRequestsBeforeEndReturn,
       );
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(startupRequestsBeforeReturn);
       const endAnchoredDistance = await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
