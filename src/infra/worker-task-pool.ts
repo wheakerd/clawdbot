@@ -12,6 +12,8 @@ const runInWorkerPoolContext = AsyncLocalStorage.snapshot();
 type WorkerTaskInput<Input> = Input | (() => Input | Promise<Input>);
 export type WorkerTaskResponse = {
   input: unknown;
+  /** Move owned binary replies instead of copying large inventories back to the worker. */
+  transferList?: readonly Transferable[];
   /** Remaining owner budget, plus its existing watchdog grace. */
   timeoutMs: number;
   /** Release input ownership only after worker consumption or confirmed termination. */
@@ -375,7 +377,7 @@ export class WorkerTaskPool<Input, Output> {
               responseId: exchange.id,
               input: response.input,
             },
-            [],
+            response.transferList,
           );
         } catch (error) {
           this.fail(slot, toErrorObject(error, "worker response delivery failed"));
@@ -488,7 +490,10 @@ export class WorkerTaskPool<Input, Output> {
 /** A conversation never outlives the pool task or crosses worker generations. */
 export type WorkerTaskChannel = {
   consumeInput: () => void;
-  request: (value: unknown) => Promise<{ input: unknown; consumed: () => void }>;
+  request: (
+    value: unknown,
+    transferList?: readonly Transferable[],
+  ) => Promise<{ input: unknown; consumed: () => void }>;
 };
 
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
@@ -539,17 +544,20 @@ export function serveWorkerTasks<Output>(
         ? {
             consumeInput: () =>
               port.postMessage({ status: "consumed", taskId: task.taskId, id: 0 }),
-            request: (value) => {
+            request: (value, transferList) => {
               if (active !== task || task.pending) {
                 throw new Error("closed or busy worker channel");
               }
               task.pending = createDeferredCore();
-              port.postMessage({
-                status: "request",
-                taskId: task.taskId,
-                id: ++task.responseId,
-                value,
-              });
+              port.postMessage(
+                {
+                  status: "request",
+                  taskId: task.taskId,
+                  id: ++task.responseId,
+                  value,
+                },
+                transferList ? [...transferList] : [],
+              );
               return task.pending.promise;
             },
           }
