@@ -17,6 +17,8 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createChannelManager } from "../server-channels.js";
+import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import { requireGatewayRecord } from "../test-helpers.assertions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -210,6 +212,78 @@ describe("channelsHandlers channels.status", () => {
       outboundAt: null,
     });
     mocks.listChannelPlugins.mockReturnValue([createChannelPlugin()]);
+  });
+
+  it("keeps filtered account diagnostics without inspecting unrelated channels", async () => {
+    const resolveAccount = vi.fn(() => {
+      throw new Error("unavailable account must not resolve credentials");
+    });
+    const selected = createChannelTestPluginBase({
+      id: "whatsapp",
+      config: {
+        listAccountIds: () => ["disabled", "unavailable"],
+        resolveAccount,
+        inspectAccount: () => ({ enabled: false, configured: true, name: "Disabled account" }),
+      },
+    });
+    const inspectUnrelated = vi.fn(() => {
+      throw new Error("unrelated channel inspection failed");
+    });
+    const unrelated = createChannelTestPluginBase({
+      id: "discord",
+      config: { inspectAccount: inspectUnrelated },
+    });
+    const registry = createTestRegistry(
+      [selected, unrelated].map((plugin) => ({
+        pluginId: plugin.id,
+        plugin,
+        source: "test",
+      })),
+    );
+    setActivePluginRegistry(registry);
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "account",
+        ownerId: "whatsapp:unavailable",
+        state: "unavailable",
+        paths: ["channels.whatsapp.accounts.unavailable.token"],
+        refKeys: [],
+        reason: "secret reference was not found",
+      },
+    ]);
+    mocks.listChannelPlugins.mockReturnValue([selected, unrelated]);
+    const manager = createChannelManager({
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      getPluginRegistry: () => registry,
+      channelLogs: {},
+      channelRuntimeEnvs: {},
+    });
+    const options = createOptions({ channel: "whatsapp", probe: false });
+    options.context.getRuntimeSnapshot = manager.getRuntimeSnapshot;
+
+    const payload = await runChannelsStatus(options.params, { context: options.context });
+
+    expect(payload.partial).toBeUndefined();
+    expect(channelAccounts(payload, "whatsapp")).toMatchObject([
+      {
+        accountId: "disabled",
+        enabled: false,
+        configured: true,
+        running: false,
+        name: "Disabled account",
+      },
+      {
+        accountId: "unavailable",
+        running: false,
+        lifecycle: "blocked",
+        lastError: expect.stringContaining("configured but unavailable"),
+      },
+    ]);
+    expect(Object.keys(requireGatewayRecord(payload.channelAccounts, "channel accounts"))).toEqual([
+      "whatsapp",
+    ]);
+    expect(inspectUnrelated).not.toHaveBeenCalled();
+    expect(resolveAccount).not.toHaveBeenCalled();
   });
 
   it.each([undefined, true, false])(
@@ -925,7 +999,7 @@ describe("channelsHandlers channels.status", () => {
       lastStartAt: now - 60 * 60_000,
       lastTransportActivityAt: now - 40 * 60_000,
     });
-    const eventLoop = {
+    const eventLoop: GatewayEventLoopHealth = {
       degraded: true,
       degradedSinceMs: 61_000,
       reasons: ["event_loop_delay"],
@@ -935,29 +1009,11 @@ describe("channelsHandlers channels.status", () => {
       utilization: 1,
       cpuCoreRatio: 1,
     };
-    const respond = vi.fn();
+    const options = createOptions({ probe: false, timeoutMs: 2000 });
+    options.context.getEventLoopHealth = () => eventLoop;
 
-    await expectDefined(
-      channelsHandlers["channels.status"],
-      'channelsHandlers["channels.status"] test invariant',
-    )(
-      createOptions(
-        { probe: false, timeoutMs: 2000 },
-        {
-          respond,
-          context: {
-            getRuntimeConfig: mocks.getRuntimeConfig,
-            getRuntimeSnapshot: () => ({
-              channels: {},
-              channelAccounts: {},
-            }),
-            getEventLoopHealth: () => eventLoop,
-          } as never,
-        },
-      ),
-    );
+    const payload = await runChannelsStatus(options.params, { context: options.context });
 
-    const payload = requireRespondPayload(respond);
     expect(payload.eventLoop).toBe(eventLoop);
     expect(firstChannelAccount(payload, "whatsapp").healthState).toBe("stale-socket");
   });
