@@ -14,6 +14,9 @@ import {
 import {
   acquireStateDatabaseCoordinator,
   acquireStateDatabaseHandleExclusion,
+  captureStateDatabaseCoordinatorRuntime,
+  resolveStateDatabaseCoordinatorPath,
+  withStateDatabaseCoordinatorRuntimeDirectory,
 } from "./state-database-coordinator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -125,6 +128,97 @@ describe("idle SQLite coordinator connections", () => {
     expect(database.isOpen).toBe(true);
     vi.advanceTimersByTime(30 * 60_000);
     expect(database.isOpen).toBe(false);
+  });
+
+  it("ends the released lease's custody when its connection enters the idle pool", () => {
+    const { location } = fixture();
+    const databases = observeConnections();
+    const first = tryAcquireExclusiveSqliteCoordinator(location, { keepAlive: true });
+    const database = firstConnection(databases());
+    first?.release();
+    const next = tryAcquireExclusiveSqliteCoordinator(location, { keepAlive: true });
+    try {
+      expect(databases().size).toBe(1);
+      first?.release();
+      expect(database.isTransaction).toBe(true);
+      expect(database.isOpen).toBe(true);
+      expect(first?.closed).toBe(true);
+      expect(next?.closed).toBe(false);
+    } finally {
+      next?.release();
+    }
+    first?.release();
+    expect(next?.closed).toBe(true);
+    expect(database.isOpen).toBe(true);
+    expect(database.isTransaction).toBe(false);
+  });
+
+  it.each([false, true])(
+    "restores capture-time pooling eligibility independently of ambient scope (canonical: %s)",
+    async (canonical) => {
+      const { directory } = fixture();
+      const defaultRuntime = captureStateDatabaseCoordinatorRuntime();
+      const captured = withStateDatabaseCoordinatorRuntimeDirectory(
+        canonical ? defaultRuntime : defaultRuntime.directory,
+        captureStateDatabaseCoordinatorRuntime,
+      );
+      const params = { databasePath: path.join(directory, "state.sqlite") };
+      withStateDatabaseCoordinatorRuntimeDirectory(captured, () =>
+        acquireStateDatabaseCoordinator(params),
+      ).release();
+      const databases = observeConnections();
+      await withStateDatabaseCoordinatorRuntimeDirectory(directory, async () => {
+        await Promise.resolve();
+        const lease = withStateDatabaseCoordinatorRuntimeDirectory(captured, () =>
+          acquireStateDatabaseCoordinator(params),
+        );
+        expect(lease.path).toBe(
+          resolveStateDatabaseCoordinatorPath({
+            ...params,
+            runtimeDirectory: defaultRuntime.directory,
+            uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+          }),
+        );
+        lease.release();
+        expect(lease.closed).toBe(true);
+        expect(firstConnection(databases()).isOpen).toBe(canonical);
+      });
+    },
+  );
+
+  it("retries a failed pooled release until native close finishes", () => {
+    const { location } = fixture();
+    const databases = observeConnections();
+    const lease = tryAcquireExclusiveSqliteCoordinator(location, { keepAlive: true });
+    const database = firstConnection(databases());
+    const rollback = vi.spyOn(database, "exec").mockImplementationOnce(() => {
+      throw new Error("rollback failed");
+    });
+    const close = vi.spyOn(database, "close").mockImplementationOnce(() => {
+      throw new Error("native close failed");
+    });
+    try {
+      expect(() => lease?.release()).toThrow("rollback and close both failed");
+      expect(lease?.closed).toBe(false);
+      expect(database.isOpen).toBe(true);
+      lease?.release();
+      expect(lease?.closed).toBe(true);
+      expect(database.isOpen).toBe(false);
+      expect(close).toHaveBeenCalledTimes(2);
+      const next = tryAcquireExclusiveSqliteCoordinator(location, { keepAlive: true });
+      try {
+        expect(databases().size).toBe(2);
+        lease?.release();
+        expect(close).toHaveBeenCalledTimes(2);
+        expect(next?.closed).toBe(false);
+      } finally {
+        next?.release();
+      }
+    } finally {
+      rollback.mockRestore();
+      close.mockRestore();
+      lease?.release();
+    }
   });
 
   it.skipIf(process.platform === "win32").each(["replace", "delete"])(
