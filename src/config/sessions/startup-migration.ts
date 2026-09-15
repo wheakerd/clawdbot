@@ -34,7 +34,7 @@ import {
 } from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { resolveAllAgentSessionStoreTargetsSync, resolveSessionStoreTargets } from "./targets.js";
-import { migrateManagedWorktreeCanonicalWorkspaces } from "./worktree-workspace-migration.js";
+import type { migrateManagedWorktreeCanonicalWorkspaces } from "./worktree-workspace-migration.js";
 
 export type SessionStartupMigrationLogger = Record<"info" | "warn", (message: string) => void>;
 
@@ -187,9 +187,7 @@ export async function runSessionStartupMigration(params: {
   }
 
   const databases = new Set<string>();
-  const migrateWorktreeSessions =
-    params.deps?.migrateManagedWorktreeCanonicalWorkspaces ??
-    migrateManagedWorktreeCanonicalWorkspaces;
+  let migrateWorktreeSessions = params.deps?.migrateManagedWorktreeCanonicalWorkspaces;
   const registeredDatabases = new Set(
     listOpenClawRegisteredAgentDatabases({ env }).map((entry) => `${entry.agentId}\0${entry.path}`),
   );
@@ -226,6 +224,8 @@ export async function runSessionStartupMigration(params: {
         // Workspace metadata participates in claim matching. Preserve it during a
         // partial move so the next attempt can finish removing the source claim.
         if (!result.armed || result.complete) {
+          migrateWorktreeSessions ??= (await import("./worktree-workspace-migration.js"))
+            .migrateManagedWorktreeCanonicalWorkspaces;
           migratedWorktreeSessions += await migrateWorktreeSessions({
             ...target,
             cfg: params.cfg,
