@@ -50,7 +50,7 @@ export function assertSessionStoreMigrationComplete(params: {
   ).filter(
     (target) => !target.agentId || !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
   );
-  const pending = readDeferredPluginMigrations({ env });
+  let pending: ReturnType<typeof readDeferredPluginMigrations> | undefined;
   const legacyRootStore = path.join(resolveStateDir(env), "sessions", "sessions.json");
   const legacyTargets = fs.existsSync(legacyRootStore)
     ? resolveSessionStoreTargets(params.cfg, { allAgents: true }, { env }).map((target) => ({
@@ -83,8 +83,10 @@ export function assertSessionStoreMigrationComplete(params: {
     for (const target of candidates) {
       if (
         !target.agentId ||
-        deferredPluginSessionStoreIds({ target: { ...target, agentId: target.agentId }, pending })
-          .length === 0
+        deferredPluginSessionStoreIds({
+          target: { ...target, agentId: target.agentId },
+          pending: (pending ??= readDeferredPluginMigrations({ env })),
+        }).length === 0
       ) {
         return true;
       }
