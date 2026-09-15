@@ -21,6 +21,10 @@ import {
 } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import {
+  readSqliteSchemaHeader,
+  readSqliteSchemaHeaderFromSnapshot,
+} from "./sqlite-schema-header.js";
+import {
   withSqliteSourceHandle,
   withSqliteSourceHandleAsync,
   withSqliteSourceReadDatabase,
@@ -586,13 +590,11 @@ function prepareReadOnlySourceSyncInProcess(
 
 /** Fixed metadata inspection in the read-only child; no payload scan or backup
  * unless source journal state requires private recovery/artifact preservation. */
-export async function inspectSqliteSchemaHeaderInProcess(
+export function inspectSqliteSchemaHeaderInProcess(
   pathname: string,
   stagingRoot?: string,
   agentSchemaVersionForOwnership?: number,
 ) {
-  const { readSqliteSchemaHeader, readSqliteSchemaHeaderFromSnapshot } =
-    await import("./sqlite-schema-header.js");
   return withSqliteSourceHandleAsync(pathname, async () => {
     const canonicalPath = fs.realpathSync.native(pathname);
     const mode = readSourceJournalMode(canonicalPath);
