@@ -1,6 +1,7 @@
 import { html, type TemplateResult } from "lit";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { t } from "../i18n/index.ts";
+import { createDockPanelLayout } from "./dock-panel-layout.ts";
 import { dockPanelStyles } from "./dock-panel-styles.ts";
 import { icons } from "./icons.ts";
 import { renderLinkReaderContent, linkReaderContentStyles } from "./link-reader-content.ts";
@@ -8,6 +9,16 @@ import type { LinkReaderImages } from "./link-reader-images.ts";
 import { linkReaderPanelStyles } from "./link-reader-panel.styles.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { panelTabStripStyles } from "./panel-tab-strip.ts";
+
+export const linkReaderPanelLayout = createDockPanelLayout({
+  storageKey: "openclaw.link-reader.panel.v1",
+  minHeight: 240,
+  minWidth: 300,
+  defaultDock: "right",
+  supportedDocks: ["right"],
+  defaultHeight: 420,
+  defaultWidth: 560,
+});
 
 export const linkReaderViewStyles = [
   panelTabStripStyles,

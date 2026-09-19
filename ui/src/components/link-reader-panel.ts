@@ -12,7 +12,6 @@ import { t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
-import { createDockPanelLayout } from "./dock-panel-layout.ts";
 import { icons } from "./icons.ts";
 import { LinkReaderImages } from "./link-reader-images.ts";
 import {
@@ -20,6 +19,7 @@ import {
   renderReaderButton,
   readerIcon,
   linkReaderViewStyles,
+  linkReaderPanelLayout,
   tabTarget,
   tabLabel,
   type ReaderTab,
@@ -41,15 +41,6 @@ import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
 registerLinkReaderEnglish();
 
-const panelLayout = createDockPanelLayout({
-  storageKey: "openclaw.link-reader.panel.v1",
-  minHeight: 240,
-  minWidth: 300,
-  defaultDock: "right",
-  supportedDocks: ["right"],
-  defaultHeight: 420,
-  defaultWidth: 560,
-});
 const HISTORY_LIMIT = 30;
 const TAB_LIMIT = 10;
 /** Browser-style, memory-only tabs for plugin-provided read-only documents. */
@@ -107,7 +98,7 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
   private focusAddress = false;
   private refreshRequested = false;
   private readonly dockLayout = new DockLayoutController(this, {
-    layout: panelLayout,
+    layout: linkReaderPanelLayout,
     reservationPrefix: "link-reader",
     isAvailable: () => this.tabs.length > 0 && !this.suppressed && !this.embedded,
     // Embedded geometry belongs to the region, never the standalone dock store.
@@ -136,7 +127,9 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
   }
   override disconnectedCallback(): void {
     this.abortRequest();
-    for (const tab of this.tabs) this.setTabView(tab, { status: "idle" });
+    for (const tab of this.tabs) {
+      this.setTabView(tab, { status: "idle" });
+    }
     this.tabs = [];
     this.activeId = null;
     this.returnFocus = null;
@@ -152,7 +145,9 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
     }
     if (changed.has("sessionKey") && changed.get("sessionKey") !== undefined) {
       this.abortRequest();
-      for (const tab of this.tabs) this.setTabView(tab, { status: "idle" });
+      for (const tab of this.tabs) {
+        this.setTabView(tab, { status: "idle" });
+      }
       this.tabs = [];
       this.activeId = null;
       this.urlDraft = "";
@@ -283,7 +278,9 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
     this.refreshRequested = false;
   }
   private setTabView(tab: ReaderTab, view: ReaderTab["view"]): void {
-    if (tab.view.status === "ready") tab.view.images?.dispose();
+    if (tab.view.status === "ready") {
+      tab.view.images?.dispose();
+    }
     tab.view = view;
   }
   private selectTab(id: string): void {
