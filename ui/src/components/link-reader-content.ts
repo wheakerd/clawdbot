@@ -153,9 +153,9 @@ function prepareImage(source: HTMLImageElement, base: string, loadImage?: LoadIm
       wrapper.append(open);
     }
     if (loadImage) {
-      void loadImage(url.href).then((dataUrl) => {
+      void loadImage(url.href).then((imageUrl) => {
         if (image.isConnected) {
-          image.src = dataUrl;
+          image.src = imageUrl;
         }
       }, unavailable);
     } else {

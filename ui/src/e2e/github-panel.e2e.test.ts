@@ -18,6 +18,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 
 const imageUrl = "https://user-images.githubusercontent.com/1/github-sidebar-proof.png";
+const fallbackImageUrl = "https://images.example/existing-reader-image.png";
 const sha = "abcdef1234567890abcdef1234567890abcdef12";
 const readers: ControlUiLinkReaderDescriptor[] = [
   {
@@ -45,6 +46,8 @@ const issue = {
   body:
     "Keep the conversation visible while reviewing **issues, pull requests, and commits**.\n\n- Read the discussion\n- Inspect the patch\n- Return to chat\n\n[Related pull request](../pull/43)\n\n![Architecture screenshot](" +
     imageUrl +
+    ")\n\n![Existing remote image](" +
+    fallbackImageUrl +
     ")",
   comments: [
     {
@@ -198,6 +201,25 @@ describe("GitHub side panel", () => {
           body: Buffer.from(png, "base64"),
         });
       });
+      const fallbackRequests: Array<Record<string, string>> = [];
+      await context.addCookies([
+        {
+          name: "reader_test_cookie",
+          value: "present",
+          domain: "images.example",
+          path: "/",
+          secure: true,
+          sameSite: "None",
+        },
+      ]);
+      await context.route(fallbackImageUrl, (route) => {
+        fallbackRequests.push(route.request().headers());
+        return route.fulfill({
+          contentType: "image/png",
+          headers: { "Access-Control-Allow-Origin": "*" },
+          body: Buffer.from(png, "base64"),
+        });
+      });
       const gateway = await installMockGateway(page, {
         controlUiLinkReaders: readers,
         models: [{ id: "reader-demo", name: "Demo", provider: "demo" }],
@@ -224,7 +246,18 @@ describe("GitHub side panel", () => {
           },
         ],
         methodResponses: {
-          "github.image": { url: imageUrl, dataUrl: `data:image/png;base64,${png}` },
+          "github.image": {
+            cases: [
+              {
+                match: { url: imageUrl },
+                response: { url: imageUrl, dataUrl: `data:image/png;base64,${png}` },
+              },
+              {
+                match: { url: fallbackImageUrl },
+                response: { url: fallbackImageUrl, dataUrl: "" },
+              },
+            ],
+          },
           "github.detail": {
             cases: [
               { match: { url: issue.url }, response: issue },
@@ -280,9 +313,12 @@ describe("GitHub side panel", () => {
                 ).length,
             ),
         )
-        .toBe(2);
+        .toBe(3);
       expect(mediaRequests).toEqual([]);
-      expect(await gateway.getRequests("github.image")).toHaveLength(1);
+      expect(fallbackRequests).toHaveLength(1);
+      expect(fallbackRequests[0]?.cookie).toBeUndefined();
+      expect(fallbackRequests[0]?.referer).toBeUndefined();
+      expect(await gateway.getRequests("github.image")).toHaveLength(2);
       expect(await active.textContent()).not.toContain("hidden-review-metadata");
       expect(await page.locator("body").getAttribute("data-reader-image-csp-blocked")).toBeNull();
       await expect.poll(() => panelHeader.getByRole("tab").count()).toBe(1);

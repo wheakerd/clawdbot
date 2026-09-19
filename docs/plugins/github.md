@@ -49,8 +49,9 @@ Markdown images and standalone HTML image attachments can display inline. The
 GitHub plugin fetches public user attachments anonymously through the Gateway,
 including GitHub's attachment redirects, so they do not need browser CORS headers.
 Requests send no GitHub credentials, cookies, or referrer. PNG, JPEG, GIF, and WebP
-attachments up to 2 MiB are supported. Other or unavailable images retain a
-full-size external link. Each loaded document bounds concurrent requests and
+attachments up to 2 MiB are supported by the resolver. If resolution fails, the
+reader preserves the original anonymous-CORS image path; images that still
+cannot load retain a full-size external link. Each loaded document bounds concurrent requests and
 cached image data; closing its tab or replacing the document retires that cache.
 Script and connection policies are unchanged; remote content cannot run scripts
 or app widgets.

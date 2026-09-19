@@ -481,6 +481,7 @@ base64 raster image data URL; SVG and HTML are not supported. Do not forward
 browser cookies or service credentials to image hosts. The host displays the
 validated image data without executing remote content. The host accepts PNG, JPEG, GIF, and WebP data up to
 2 MiB per image, queues at most four concurrent requests, and limits each
-document to 32 unique images and 8 MiB of encoded image data. Unsupported images
-retain an external link. Use an explicit error response for unavailable content
+document resolver to 32 unique images and 8 MiB of encoded image data. Images
+the resolver cannot serve retain the original anonymous-CORS path. If that also
+fails, they retain an external link. Use an explicit error response for unavailable content
 so the UI can offer retry and the original URL.

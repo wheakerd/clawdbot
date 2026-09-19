@@ -25,13 +25,23 @@ export class LinkReaderImages {
     if (existing) {
       return existing;
     }
-    if (this.cache.size >= MAX_IMAGES || this.abort.signal.aborted || !this.isCurrent()) {
+    if (this.abort.signal.aborted || !this.isCurrent()) {
       return Promise.reject(new Error("Reader image is unavailable"));
+    }
+    if (this.cache.size >= MAX_IMAGES) {
+      return Promise.resolve(url);
     }
     const result = new Promise<string>((resolve, reject) => {
       this.queue.push(() => {
         void this.request(url)
-          .then(resolve, reject)
+          .then(resolve, () => {
+            // Preserve anonymous-CORS images that the plugin resolver cannot serve.
+            if (!this.abort.signal.aborted && this.isCurrent()) {
+              resolve(url);
+            } else {
+              reject(new Error("Reader image is unavailable"));
+            }
+          })
           .finally(() => {
             this.active--;
             this.drain();

@@ -209,7 +209,7 @@ describe("Plugin link reader panel", () => {
     { url: "https://images.example/image.png", dataUrl: "data:image/svg+xml;base64,PHN2Zz4=" },
     { url: "https://images.example/image.png", dataUrl: "https://images.example/credentialed.png" },
   ])(
-    "keeps invalid image responses unavailable with an external escape: $dataUrl",
+    "falls back only to the original anonymous image URL after an invalid response: $dataUrl",
     async (response) => {
       const url = "https://images.example/image.png";
       const panel = await mount(
@@ -222,10 +222,8 @@ describe("Plugin link reader panel", () => {
       ];
       await panel.updateComplete;
       open(panel);
-      await waitForFast(() =>
-        expect(panel.renderRoot.textContent).toContain("Image unavailable: Screenshot"),
-      );
-      expect(panel.renderRoot.querySelector("img")?.hasAttribute("src")).toBe(false);
+      await waitForFast(() => expect(panel.renderRoot.querySelector("img")?.src).toBe(url));
+      expect(panel.renderRoot.querySelector("img")?.crossOrigin).toBe("anonymous");
       expect(panel.renderRoot.querySelector<HTMLAnchorElement>(".lr-image a")?.href).toBe(url);
     },
   );
