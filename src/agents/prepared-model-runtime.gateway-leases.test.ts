@@ -20,6 +20,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  acquireAgentRuntimeCleanupRegistries,
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
   refreshPreparedModelRuntimeSnapshots,
@@ -157,6 +158,38 @@ describe("prepared model runtime Gateway leases", () => {
     const rebuilt = await acquire("run-model-0");
     expect(rebuilt).not.toBe(first);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(12);
+  });
+
+  it("retains switched-away execution registries for agent-scoped session cleanup", async () => {
+    mocks.configuredAgentIds = ["default"];
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
+      createEmptyPluginRegistry(),
+    );
+    const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      catalogMode: "static",
+      gatewayLifecycle: true,
+    });
+    const previous = [];
+    for (const modelId of ["first", "second"]) {
+      await using lease = await acquireAgentRunPreparedModelRuntime({
+        agentId: "default",
+        agentDir: state.agentDir("default"),
+        config,
+        loadRuntimePlugins: true,
+        workspaceDir: state.workspaceDir,
+        runtimePluginSelections: [{ provider: "openai", modelId, runtime: "codex" }],
+      });
+      previous.push(lease.snapshot.pluginRegistry);
+    }
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
+    await using cleanup = await acquireAgentRuntimeCleanupRegistries(state.agentDir("default"));
+    for (const registry of previous) {
+      expect(cleanup.registries).toContain(registry);
+    }
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+    await using unrelated = await acquireAgentRuntimeCleanupRegistries(state.agentDir("other"));
+    expect(unrelated.registries).toEqual([]);
   });
 
   it("never evicts a configured owner acquired through the gateway run path", async () => {

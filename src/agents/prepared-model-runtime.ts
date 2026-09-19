@@ -2,6 +2,7 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
@@ -45,7 +46,10 @@ import {
   type PreparedModelRuntimeReplacementGateId,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
-import { releasePreparedPluginPublication } from "./prepared-model-runtime.plugin-lifetime.js";
+import {
+  releasePreparedPluginPublication,
+  retainPreparedPluginGeneration,
+} from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   notifyPreparedModelRuntimePublication,
   resetPreparedModelRuntimePublicationListenersForTest,
@@ -190,6 +194,51 @@ export async function acquirePreparedModelRuntimeSnapshot(
     preparedModelRuntimeLeaseContext,
     retainPublishedModelRuntimeOwner,
   );
+}
+
+export type AgentRuntimeCleanupRegistries = {
+  registries: readonly PluginRegistry[];
+  [Symbol.asyncDispose](): Promise<void>;
+};
+
+/** Retains existing execution owners, including switched-away models, without loading plugins. */
+export async function acquireAgentRuntimeCleanupRegistries(
+  agentDir: string,
+): Promise<AgentRuntimeCleanupRegistries> {
+  const normalizedAgentDir = normalizeOptionalDir(agentDir);
+  const registries = new Set<PluginRegistry>();
+  const releases: Array<() => Promise<void>> = [];
+  try {
+    for (const [key, owner] of owners) {
+      const generation = owner.pluginGeneration;
+      const registry = generation?.pluginRegistry;
+      if (
+        owner.input.agentDir !== normalizedAgentDir ||
+        owner.input.readOnly ||
+        owner.provenance === "ephemeral" ||
+        !generation ||
+        !registry ||
+        registries.has(registry) ||
+        (owner.provenance === "run" &&
+          !owner.leaseCount &&
+          !retainedGatewayRunOwners.has(key, owner) &&
+          !retainedDirectRunOwners.has(key, owner))
+      ) {
+        continue;
+      }
+      releases.push(retainPreparedPluginGeneration(generation));
+      registries.add(registry);
+    }
+  } catch (error) {
+    await Promise.allSettled(releases.map((release) => release()));
+    throw error;
+  }
+  return {
+    registries: [...registries],
+    async [Symbol.asyncDispose]() {
+      await Promise.all(releases.map((release) => release()));
+    },
+  };
 }
 
 async function loadPreparedModelRuntimeOwner<T>(

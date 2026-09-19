@@ -20,6 +20,7 @@ import {
 } from "../acp/runtime/session-meta.js";
 import {
   listAgentIds,
+  resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
@@ -29,6 +30,7 @@ import {
 } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
+import { acquireAgentRuntimeCleanupRegistries } from "../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
@@ -139,6 +141,34 @@ import {
 
 function resolveLifecycleAgentId(cfg: OpenClawConfig, agentId?: string): string {
   return normalizeAgentId(agentId ?? resolveAmbientOwnerAgentId(cfg));
+}
+
+async function resetSessionAgentHarnesses(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  target: { agentId?: string; canonicalKey?: string };
+  entry: SessionEntry;
+  reason: "reset" | "deleted";
+  assertCurrent?: () => void;
+}): Promise<void> {
+  const agentId = resolveLifecycleAgentId(params.cfg, params.target.agentId);
+  const sessionKey = params.target.canonicalKey ?? params.key;
+  params.assertCurrent?.();
+  await using owners = await acquireAgentRuntimeCleanupRegistries(
+    resolveAgentDir(params.cfg, agentId),
+  );
+  params.assertCurrent?.();
+  await resetRegisteredAgentHarnessSessions(
+    {
+      agentId,
+      sessionId: params.entry.sessionId,
+      sessionKey,
+      sessionFile: sessionKey,
+      reason: params.reason,
+    },
+    owners.registries,
+  );
+  params.assertCurrent?.();
 }
 
 type McpRunEndWatcherState = {
@@ -676,14 +706,14 @@ export async function cleanupSessionBeforeMutation(params: {
   if (params.entry?.sessionId) {
     // Clear physical harness ownership after the old run drains but before the
     // store can expose a successor generation to a new turn.
-    const resetParams = {
-      agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
-      sessionId: params.entry.sessionId,
-      sessionKey: params.target.canonicalKey ?? params.key,
-      sessionFile: params.target.canonicalKey ?? params.key,
+    await resetSessionAgentHarnesses({
+      cfg: params.cfg,
+      key: params.key,
+      target: params.target,
+      entry: params.entry,
       reason: params.reason === "session-reset" ? "reset" : "deleted",
-    } satisfies Parameters<typeof resetRegisteredAgentHarnessSessions>[0];
-    await resetRegisteredAgentHarnessSessions(resetParams);
+      assertCurrent: params.assertCurrent,
+    });
     params.assertCurrent?.();
   }
   return undefined;
@@ -1278,11 +1308,11 @@ export async function performGatewaySessionReset(params: {
         reason: "session-reset",
       });
       if (entry?.sessionId) {
-        await resetRegisteredAgentHarnessSessions({
-          agentId,
-          sessionId: entry.sessionId,
-          sessionKey: target.canonicalKey ?? params.key,
-          sessionFile: target.canonicalKey ?? params.key,
+        await resetSessionAgentHarnesses({
+          cfg,
+          key: params.key,
+          target,
+          entry,
           reason: "reset",
         });
       }
