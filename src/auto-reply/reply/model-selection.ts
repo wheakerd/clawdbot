@@ -12,7 +12,6 @@ import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
-import { resolveCliBoundModelRef } from "../../agents/model-runtime-aliases.js";
 import {
   type ModelAliasIndex,
   normalizeProviderId,
@@ -221,21 +220,13 @@ export async function createModelSelectionState(params: {
     agentId: params.agentId,
     sessionKey,
   });
-  const normalizedCurrentSelection = resolveCliBoundModelRef(
-    { provider, model },
-    cfg,
-    sessionEntry,
-  );
+  const normalizedCurrentSelection = { provider, model };
   const resolveDirectStoredOverrideState = (
     entry: SessionEntry | undefined,
     override: storedModelOverrides.StoredModelOverride | null,
   ) => {
     const normalizedOverride = override
-      ? resolveCliBoundModelRef(
-          { provider: override.provider ?? defaultProvider, model: override.model },
-          cfg,
-          entry,
-        )
+      ? { provider: override.provider ?? defaultProvider, model: override.model }
       : null;
     const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
       isHeartbeat: params.isHeartbeat,
@@ -320,14 +311,10 @@ export async function createModelSelectionState(params: {
     directStoredModelOverride &&
     !hasOneTurnModelOverride
   ) {
-    const normalizedOverride = resolveCliBoundModelRef(
-      {
-        ...directStoredModelOverride,
-        provider: directStoredModelOverride.provider ?? defaultProvider,
-      },
-      cfg,
-      sessionEntry,
-    );
+    const normalizedOverride = {
+      ...directStoredModelOverride,
+      provider: directStoredModelOverride.provider ?? defaultProvider,
+    };
     const key = buildModelCatalogRef(normalizedOverride.provider, normalizedOverride.model);
     const overrideAllowed =
       hasSessionAutoModelSelection(sessionEntry) || visibilityPolicy.allows(normalizedOverride);
@@ -434,11 +421,11 @@ export async function createModelSelectionState(params: {
             ...runtimeModelNormalization,
           })
         : null;
-    const normalizedStoredOverride = resolveCliBoundModelRef(
-      storedAlias ?? { provider: storedProvider, model: storedOverride.model },
-      cfg,
-      sessionEntry,
-    );
+    // A CLI provider names the execution route; a resume binding must not turn it into an API ref.
+    const normalizedStoredOverride = storedAlias ?? {
+      provider: storedProvider,
+      model: storedOverride.model,
+    };
     if (
       modelSelectionLocked ||
       usesStoredAutomaticSelection ||

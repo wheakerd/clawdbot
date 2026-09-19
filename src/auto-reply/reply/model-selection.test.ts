@@ -32,12 +32,6 @@ const DEFAULT_MOCK_CATALOG_ENTRIES = vi.hoisted(() => [
   { provider: "xai", id: "grok-4.20-reasoning", name: "Grok 4.20 (Reasoning)" },
 ]);
 
-const cliBackendsMocks = vi.hoisted(() => ({
-  resolveCliRuntimeCanonicalProvider: vi.fn(({ runtime }: { runtime: string }) =>
-    runtime === "claude-cli" ? "anthropic" : undefined,
-  ),
-}));
-
 const sessionPersistenceMocks = vi.hoisted(() => ({
   persistReplySessionEntry: vi.fn<PersistReplySessionEntry>(),
 }));
@@ -56,10 +50,6 @@ const catalogRuntimeMocks = vi.hoisted(() => {
     }),
   };
 });
-
-vi.mock("../../agents/cli-backends.js", () => ({
-  resolveCliRuntimeCanonicalProvider: cliBackendsMocks.resolveCliRuntimeCanonicalProvider,
-}));
 
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: vi.fn(() => []),
@@ -145,7 +135,6 @@ vi.mock("../../agents/auth-profiles/order.js", () => ({
 
 afterEach(() => {
   getContextWindowCaches().discoveredTokenCache.clear();
-  cliBackendsMocks.resolveCliRuntimeCanonicalProvider.mockClear();
   sessionPersistenceMocks.persistReplySessionEntry.mockReset();
   vi.mocked(loadManifestModelCatalog).mockReset();
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
@@ -1629,7 +1618,7 @@ describe("createModelSelectionState respects session model override", () => {
     });
 
     expect(state).toMatchObject({
-      provider: "anthropic",
+      provider: "claude-cli",
       model: "claude-opus-4-8",
       resetModelOverride: false,
     });
@@ -1638,46 +1627,6 @@ describe("createModelSelectionState respects session model override", () => {
       modelOverride: "claude-opus-4-8",
       modelSelectionLocked: true,
     });
-    const expectedCanonicalProviderRequest = {
-      runtime: "claude-cli",
-      config: cfg,
-      includeSetupRegistry: true,
-    };
-    expect(cliBackendsMocks.resolveCliRuntimeCanonicalProvider).toHaveBeenCalled();
-    for (const [request] of cliBackendsMocks.resolveCliRuntimeCanonicalProvider.mock.calls) {
-      expect(request).toEqual(expectedCanonicalProviderRequest);
-    }
-  });
-
-  it("keeps ordinary provider overrides off the CLI setup-registry path", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: { "custom-provider/custom-model": {} },
-        },
-      },
-    } as OpenClawConfig;
-    const sessionKey = "agent:main:custom-provider";
-    const sessionEntry = makeEntry({
-      providerOverride: "custom-provider",
-      modelOverride: "custom-model",
-    });
-
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      defaultProvider: "custom-provider",
-      defaultModel: "custom-model",
-      provider: "custom-provider",
-      model: "custom-model",
-      hasModelDirective: false,
-    });
-
-    expect(state).toMatchObject({ provider: "custom-provider", model: "custom-model" });
-    expect(cliBackendsMocks.resolveCliRuntimeCanonicalProvider).not.toHaveBeenCalled();
   });
 
   it.each([undefined, "gpt-4o", "stale-again"])(
