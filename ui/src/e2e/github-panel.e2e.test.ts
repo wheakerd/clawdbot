@@ -30,6 +30,7 @@ const readers: ControlUiLinkReaderDescriptor[] = [
       pathPattern: "^/[^/]+/[^/]+/(issues/[0-9]+|pull/[0-9]+(?:/files)?|commit/[a-f0-9]{7,40})$",
       detailMethod: "github.detail",
       previewMethod: "github.preview",
+      imageMethod: "github.image",
     },
   },
 ];
@@ -52,7 +53,7 @@ const issue = {
       author: "reviewer",
       createdAt: "2026-09-13T11:00:00Z",
       body:
-        'The sidebar keeps the review beside the conversation.\n\n<img src="' +
+        '<!-- hidden-review-metadata -->\n\nThe sidebar keeps the review beside the conversation.\n\n<img src="' +
         imageUrl +
         '" alt="Comment screenshot" width="320" />',
     },
@@ -194,7 +195,6 @@ describe("GitHub side panel", () => {
         mediaRequests.push(route.request().headers());
         return route.fulfill({
           contentType: "image/png",
-          headers: { "Access-Control-Allow-Origin": "*" },
           body: Buffer.from(png, "base64"),
         });
       });
@@ -204,7 +204,13 @@ describe("GitHub side panel", () => {
         agentModel: "demo/reader-demo",
         sessionInfo: { model: "reader-demo", modelProvider: "demo" },
         sessions: [{ key: "agent:main:main", model: "reader-demo", modelProvider: "demo" }],
-        featureMethods: ["chat.startup", "chat.metadata", "github.detail", "github.preview"],
+        featureMethods: [
+          "chat.startup",
+          "chat.metadata",
+          "github.detail",
+          "github.preview",
+          "github.image",
+        ],
         historyMessages: [
           {
             role: "assistant",
@@ -218,6 +224,7 @@ describe("GitHub side panel", () => {
           },
         ],
         methodResponses: {
+          "github.image": { url: imageUrl, dataUrl: `data:image/png;base64,${png}` },
           "github.detail": {
             cases: [
               { match: { url: issue.url }, response: issue },
@@ -274,7 +281,9 @@ describe("GitHub side panel", () => {
             ),
         )
         .toBe(2);
-      expect(mediaRequests.every((headers) => !headers.cookie && !headers.referer)).toBe(true);
+      expect(mediaRequests).toEqual([]);
+      expect(await gateway.getRequests("github.image")).toHaveLength(1);
+      expect(await active.textContent()).not.toContain("hidden-review-metadata");
       expect(await page.locator("body").getAttribute("data-reader-image-csp-blocked")).toBeNull();
       await expect.poll(() => panelHeader.getByRole("tab").count()).toBe(1);
       await capture(page, "github-issue-light", artifacts);
