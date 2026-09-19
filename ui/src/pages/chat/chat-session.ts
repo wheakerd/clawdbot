@@ -6,7 +6,6 @@ import {
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { FastMode, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -31,7 +30,11 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
+import {
+  confirmNativeRuntimePermissionRecovery,
+  getPendingChatPickerPatch,
+  patchChatSessionSettings,
+} from "./chat-settings-patches.ts";
 export { getPendingChatPickerPatch };
 
 type ChatSessionListHost = {
@@ -438,64 +441,23 @@ async function confirmChatNativeRuntimeRecovery(
   });
   const blocked = () =>
     setChatError(host, `${explanation} ${t("chat.nativeRuntimeRecovery.chooseAnother")}`, true);
-  const recovery = restriction.recovery;
-  const canRecover = () =>
-    ownsSelection() &&
-    selectionUnchanged() &&
-    Array.isArray(host.hello?.auth?.scopes) &&
-    hasOperatorAdminAccess(host.hello?.auth ?? null);
-  if (
-    restriction.reason === "sandbox-required" ||
-    !recovery ||
-    recovery.action !== "use-native-permissions" ||
-    recovery.sessionId !== expectedSessionId ||
-    !canRecover()
-  ) {
-    blocked();
-    return false;
-  }
-  // The dialog requires a browser document; ordinary send consumers also run without a DOM.
-  const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
-  if (!canRecover()) {
-    return false;
-  }
-  const confirmed = await showConfirmDialog({
-    title: t("chat.nativeRuntimeRecovery.title", { runtime: restriction.runtimeLabel }),
-    message: `${explanation}\n\n${t("chat.nativeRuntimeRecovery.confirmMessage", { runtime: restriction.runtimeLabel })}`,
-    confirmLabel: t("chat.nativeRuntimeRecovery.confirm"),
-    danger: true,
-    signal: owner.signal,
-  });
-  if (!canRecover()) {
-    return false;
-  }
-  if (!confirmed) {
-    blocked();
-    return false;
-  }
+  const canRecover = () => ownsSelection() && selectionUnchanged();
   try {
-    // One exact-target mutation; confirmation never submits or replays a prompt.
-    const recovered = await patchChatSessionSettings(
+    const recovered = await confirmNativeRuntimePermissionRecovery(
       host,
       targetSessionKey,
-      {
-        model: model || null,
-        agentRuntime: restriction.runtimeId,
-        nativeRuntimeConsent: restriction.runtimeId,
-        sandboxMode: "off",
-        permissionMode: "full",
-        expectedLifecycleRevision: recovery.lifecycleRevision,
-        expectedPermissionMode: recovery.expectedPermissionMode,
-        expectedSandboxMode: recovery.expectedSandboxMode,
-        expectedNativeRuntimeConsent: recovery.expectedNativeRuntimeConsent,
-      },
+      restriction,
       {
         ...agentScope,
-        expectedSessionId: recovery.sessionId,
-        ownsModelOverride: ownsSelection,
+        model: model || null,
+        expectedSessionId,
+        signal: owner.signal,
         canDispatch: canRecover,
       },
     );
+    if (!recovered && canRecover()) {
+      blocked();
+    }
     if (!ownsSelection() || !recovered) {
       return false;
     }

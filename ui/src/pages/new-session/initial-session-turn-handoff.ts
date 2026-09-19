@@ -1,6 +1,12 @@
+import { readAgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
+import { confirmNativeRuntimePermissionRecovery } from "../chat/chat-settings-patches.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
 import type { InstantThreadHandoff } from "./instant-thread-handoff.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
@@ -81,4 +87,36 @@ export async function completeInitialSessionTurn(
     instant?.commit.bind(instant),
   );
   options.finishNavigation();
+  const restriction =
+    initialRun.status === "rejected"
+      ? readAgentRuntimeRestrictionErrorDetails(initialRun.errorDetails)
+      : undefined;
+  if (restriction) {
+    const snapshot = context.gateway.snapshot;
+    const canDispatch = () =>
+      context.gateway.snapshot.phase === "connected" &&
+      context.gateway.snapshot.client === client &&
+      context.gateway.snapshot.hello === snapshot.hello &&
+      areUiSessionKeysEquivalent(context.gateway.snapshot.sessionKey, key);
+    try {
+      await confirmNativeRuntimePermissionRecovery(
+        { sessions: context.sessions, hello: snapshot.hello },
+        key,
+        restriction,
+        {
+          agentId,
+          expectedSessionId:
+            typeof result.entry?.sessionId === "string" ? result.entry.sessionId : undefined,
+          signal: context.lifecycleAbortSignal,
+          canDispatch,
+        },
+      );
+    } catch (error) {
+      if (canDispatch()) {
+        showToast({
+          message: t("chat.nativeRuntimeRecovery.failed", { error: formatUiError(error) }),
+        });
+      }
+    }
+  }
 }

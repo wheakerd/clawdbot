@@ -5,10 +5,89 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installMockGateway as installNewSessionGateway } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native runtime recovery" });
 
 suite.define(() => {
+  it("offers native permissions for a rejected first message without an extra send", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const key = "agent:main:first-native-message";
+      const sessionId = "first-native-incarnation";
+      const message = "Keep this first message until I retry.";
+      const row = {
+        key,
+        sessionId,
+        kind: "direct",
+        model: "synthetic-model",
+        modelProvider: "fixture",
+        agentRuntime: { id: "opencode", source: "session-key" },
+        updatedAt: 1,
+      };
+      const gateway = await installNewSessionGateway(page, {
+        agentModel: "fixture/synthetic-model",
+        sessionInfo: row,
+        sessions: [row],
+        operatorScopes: ["operator.admin"],
+        methodResponses: {
+          "sessions.create": {
+            key,
+            entry: { sessionId },
+            runStarted: false,
+            runError: {
+              code: "INVALID_REQUEST",
+              message: "Native runtime restricted",
+              details: {
+                code: "AGENT_RUNTIME_RESTRICTED",
+                runtimeId: "opencode",
+                runtimeLabel: "OpenCode",
+                reason: "tool-policy",
+                recovery: {
+                  action: "use-native-permissions",
+                  sessionId,
+                  lifecycleRevision: "first-native-revision",
+                  expectedPermissionMode: null,
+                  expectedSandboxMode: null,
+                  expectedNativeRuntimeConsent: null,
+                },
+              },
+            },
+          },
+          "sessions.patch": {
+            ok: true,
+            key,
+            entry: { sessionId, permissionMode: "full", sandboxMode: "off" },
+            resolved: { model: row.model, modelProvider: row.modelProvider },
+          },
+          "chat.send": { runId: "explicit-retry", status: "started" },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator(".new-session-page__message").fill(message);
+      await page.getByRole("button", { name: "Start session", exact: true }).click();
+      const modal = page.locator("openclaw-modal-dialog");
+      await modal.waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+      await modal.getByRole("button", { name: "Continue for this chat", exact: true }).click();
+      const patch = await gateway.waitForRequest("sessions.patch");
+      expect(patch.params).toMatchObject({
+        key,
+        expectedSessionId: sessionId,
+        nativeRuntimeConsent: "opencode",
+        permissionMode: "full",
+        sandboxMode: "off",
+        expectedLifecycleRevision: "first-native-revision",
+      });
+      await page.getByRole("button", { name: "Retry queued message" }).waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await page.getByRole("button", { name: "Retry queued message" }).click();
+      const retry = await gateway.waitForRequest("chat.send");
+      expect(retry.params).toMatchObject({ sessionKey: key, message });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+    });
+  });
+
   describe.each(["selection", "send"] as const)("%s refusal", (entrypoint) => {
     it.each(["confirm", "cancel", "mandatory", "non-admin"] as const)(
       "recovers native OpenCode only with explicit consent: %s",
