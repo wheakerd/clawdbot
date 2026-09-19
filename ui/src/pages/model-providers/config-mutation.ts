@@ -171,7 +171,7 @@ type ModelProviderConfigMutationOwner = {
   agentEpoch: number;
   isCurrentClient: () => boolean;
   isCurrentAgent: () => boolean;
-  refreshProviders: () => Promise<void>;
+  refreshProviders?: () => Promise<void>;
   setBusy: (busy: boolean) => void;
   setMessage: (message: ModelProviderRowMessage | null) => void;
 };
@@ -238,7 +238,7 @@ export async function runModelProviderConfigMutation(
       // and resolves refresh(), so rejection alone cannot detect them.
       warning = runtimeConfig.state.lastError;
       if (!warning && owner.isCurrentClient()) {
-        await owner.refreshProviders();
+        await owner.refreshProviders?.();
       }
     } catch (error) {
       // An acknowledged config patch is already committed; a later refresh

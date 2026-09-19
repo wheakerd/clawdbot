@@ -42,7 +42,6 @@ type InstalledAgentsOptions = {
   gateway: GatewayPageController;
   getContext: () => ApplicationContext;
   isConfigBusy: () => boolean;
-  refreshModels: () => Promise<void>;
 };
 
 export class InstalledAgentsController {
@@ -142,7 +141,6 @@ export class InstalledAgentsController {
         agentEpoch: 0,
         isCurrentClient: isCurrent,
         isCurrentAgent: () => true,
-        refreshProviders: this.options.refreshModels,
         // Pending state settles after the authoritative list read below.
         setBusy: () => this.host.requestUpdate(),
         setMessage: (message) => {

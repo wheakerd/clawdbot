@@ -169,7 +169,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     gateway: this.gateway,
     getContext: () => this.context,
     isConfigBusy: () => modelProviderConfigBusy(this.context),
-    refreshModels: () => this.refresh("forced"),
   });
   private readonly profileActions = new ModelProviderProfileActionsController({
     getAgentEpoch: () => this.agentEpoch,

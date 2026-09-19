@@ -123,6 +123,35 @@ describe("ModelProvidersPage installed agents", () => {
     expect(toggle().checked).toBe(false);
   });
 
+  it("settles a missing agent's toggle without waiting for provider discovery", async () => {
+    let enabled = true;
+    const { context, runtimeConfig, deferNextAuthStatus } = createAgentsHarness(async () => ({
+      agents: [agent("pi", "Pi", { installation: "missing", enabled })],
+    }));
+    const page = appendPage(context);
+    await waitForProviders(page);
+    await waitForFast(() => expect(agentRow(page, "pi")).not.toBeNull());
+    vi.mocked(runtimeConfig.patch).mockImplementation(async () => {
+      enabled = false;
+      return true;
+    });
+    const releaseAuthStatus = deferNextAuthStatus();
+    try {
+      agentRow(page, "pi")!.querySelector<HTMLElement>(".settings-row__title")!.click();
+      await waitForFast(() => {
+        const toggle = agentRow(page, "pi")!.querySelector("wa-switch") as HTMLElement & {
+          checked: boolean;
+        };
+        expect(toggle.checked).toBe(false);
+        expect(toggle.hasAttribute("disabled")).toBe(false);
+        expect(agentRow(page, "pi")?.textContent).toContain("Not detected");
+      });
+    } finally {
+      releaseAuthStatus();
+      await page.updateComplete;
+    }
+  });
+
   it("reads a concurrent edit after a rejected save and keeps the error visible", async () => {
     let enabled = true;
     const { context, runtimeConfig, publishEvent } = createAgentsHarness(async () => ({
