@@ -156,8 +156,10 @@ It publishes a commit status named `openclaw/ci-gate` that requires both the
 applicable approvals and a successful native CI gate from the latest CI run for
 the current PR head. The existing CI job retains its check with the same name.
 GitHub requires both the check and the commit status when both share a required
-context. Missing approval or incomplete CI fails the review status; CI completion
-automatically evaluates it again. Approval comments do not rerun the test suite.
+context. Missing approval, failed CI, or evaluation errors fail the review status.
+Missing or running CI leaves it pending and keeps merging blocked; the review job
+exits normally instead of reporting a false failure. CI completion automatically
+evaluates it again. Approval comments do not rerun the test suite.
 
 The **Security Sensitive Guard** publishes `openclaw/security-sensitive-review`.
 Its inventory in `.github/security-review-policy.yml` covers Gateway

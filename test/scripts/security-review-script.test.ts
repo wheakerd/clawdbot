@@ -129,12 +129,12 @@ describe("combined security review entry point", () => {
   it("requires successful CI and both guard decisions on the actual PR head", () => {
     const result = evaluate();
     expect(result.status, result.stderr).toBe(0);
-    expect(result.combined).toEqual(["failure", "success"]);
+    expect(result.combined).toEqual(["pending", "success"]);
     expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
     expect(
       result.requests
         .filter((entry) => entry.path.includes("/statuses/"))
-        .every((entry) => entry.path.endsWith(head) && entry.body?.state !== "pending"),
+        .every((entry) => entry.path.endsWith(head)),
     ).toBe(true);
   });
 
@@ -187,7 +187,7 @@ describe("combined security review entry point", () => {
       "GET /repos/openclaw/openclaw/pulls/8": other,
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.combined).toEqual(["failure", "success"]);
+    expect(result.combined).toEqual(["pending", "success"]);
   });
 
   it.each(["openclaw/ci-gate", "openclaw/dependency-review", "openclaw/security-sensitive-review"])(
@@ -230,7 +230,7 @@ describe("combined security review entry point", () => {
       [`GET ${actions}/runs/10`]: fallback,
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.combined).toEqual(["failure", "success"]);
+    expect(result.combined).toEqual(["pending", "success"]);
   });
 
   it("does not accept a manual historical-target run as current PR proof", () => {
@@ -240,8 +240,8 @@ describe("combined security review entry point", () => {
         workflow_runs: [{ ...run, event: "workflow_dispatch", display_title: "CI" }],
       },
     });
-    expect(result.status).toBe(1);
-    expect(result.combined).not.toContain("success");
+    expect(result.status).toBe(0);
+    expect(result.combined).toEqual(["pending", "pending"]);
   });
 
   it("finds the CI gate beyond the first page of a large CI run", () => {
@@ -261,16 +261,16 @@ describe("combined security review entry point", () => {
       },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.combined).toEqual(["failure", "success"]);
+    expect(result.combined).toEqual(["pending", "success"]);
     expect(result.requests.filter((entry) => `GET ${entry.path}` === jobsPath)).toHaveLength(2);
   });
 
   it.each([
     { name: "missing CI", response: { total_count: 0, workflow_runs: [] } },
-    {
-      name: "unfinished CI",
-      response: { total_count: 1, workflow_runs: [{ ...run, status: "in_progress" }] },
-    },
+    ...["queued", "in_progress", "waiting", "requested", "pending"].map((status) => ({
+      name: `${status} CI`,
+      response: { total_count: 1, workflow_runs: [{ ...run, status }] },
+    })),
     {
       name: "another workflow",
       response: {
@@ -288,16 +288,51 @@ describe("combined security review entry point", () => {
     },
   ])("does not turn $name into a passing combined gate", ({ response }) => {
     const result = evaluate({ [runsPath]: response });
-    expect(result.status).toBe(1);
-    expect(result.combined).not.toContain("success");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.combined).toEqual(["pending", "pending"]);
+    expect(result.stdout).toContain("Waiting for CI");
   });
+
+  it.each([
+    { field: "status", value: undefined },
+    { field: "status", value: "unknown" },
+    { field: "run_attempt", value: undefined },
+    { field: "run_attempt", value: 0 },
+    { field: "id", value: undefined },
+    { field: "id", value: 0 },
+  ])("fails malformed CI metadata instead of waiting: $field=$value", ({ field, value }) => {
+    const malformed = { ...run, [field]: value };
+    for (const routes of [
+      { [runsPath]: { total_count: 1, workflow_runs: [malformed] } },
+      { [`GET ${actions}/runs/10`]: malformed },
+    ]) {
+      const result = evaluate(routes);
+      expect(result.status).toBe(1);
+      expect(result.combined).toEqual(["pending", "failure"]);
+    }
+  });
+
+  it.each([0, -1, undefined, "invalid"])(
+    "rejects malformed eligible run ID %s before selecting older successful CI",
+    (id) => {
+      const result = evaluate({
+        [runsPath]: {
+          total_count: 2,
+          workflow_runs: [run, { ...run, id, status: "queued" }],
+        },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("invalid run identity");
+      expect(result.combined).toEqual(["pending", "failure"]);
+    },
+  );
 
   it.each(["failure", "cancelled", "skipped", "neutral"])(
     "does not hide a %s CI gate",
     (conclusion) => {
       const result = evaluate({ [jobsPath]: { ...jobs, jobs: [{ ...jobs.jobs[0], conclusion }] } });
       expect(result.status).toBe(1);
-      expect(result.combined).not.toContain("success");
+      expect(result.combined).toEqual(["pending", "failure"]);
     },
   );
 
@@ -305,14 +340,23 @@ describe("combined security review entry point", () => {
     const result = evaluate({
       [`GET ${actions}/runs/10`]: { ...run, run_attempt: 2, status: "in_progress" },
     });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.combined).toEqual(["pending", "pending"]);
+  });
+
+  it("fails evaluation when a replacement CI attempt has already completed", () => {
+    const result = evaluate({
+      [`GET ${actions}/runs/10`]: { ...run, run_attempt: 2 },
+    });
     expect(result.status).toBe(1);
-    expect(result.combined).not.toContain("success");
+    expect(result.stderr).toContain("completed CI attempt changed");
+    expect(result.combined).toEqual(["pending", "failure"]);
   });
 
   it("publishes both review notices even when both approvals are missing", () => {
     const result = evaluate({ [rolePath]: { role_name: "write" } });
     expect(result.status).toBe(1);
-    expect(result.combined).toEqual(["failure"]);
+    expect(result.combined).toEqual(["pending", "failure"]);
     const notices = result.requests.filter(
       (entry) => entry.method === "POST" && entry.path.endsWith("/comments"),
     );
@@ -348,7 +392,7 @@ describe("combined security review entry point", () => {
       },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.combined).toEqual(["failure", "success"]);
+    expect(result.combined).toEqual(["pending", "success"]);
     expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
   });
 
@@ -378,7 +422,7 @@ describe("combined security review entry point", () => {
   it("grandfathers an old branch without issuing reusable standalone successes or notices", () => {
     const result = evaluate(exemptRoutes);
     expect(result.status, result.stderr).toBe(0);
-    expect(result.combined).toEqual(["failure", "success"]);
+    expect(result.combined).toEqual(["pending", "success"]);
     expect(result.reviews).toEqual([]);
     expect(result.requests.some((entry) => entry.path.includes("/issues/"))).toBe(false);
     expect(result.requests.some((entry) => entry.path.endsWith("/files"))).toBe(false);
@@ -386,8 +430,8 @@ describe("combined security review entry point", () => {
 
   it("still requires real CI for a grandfathered PR", () => {
     const result = evaluate({ ...exemptRoutes, [runsPath]: { total_count: 0, workflow_runs: [] } });
-    expect(result.status).toBe(1);
-    expect(result.combined).not.toContain("success");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.combined).toEqual(["pending", "pending"]);
     expect(result.reviews).toEqual([]);
   });
 
@@ -419,7 +463,7 @@ describe("combined security review entry point", () => {
   it("leaves the combined gate failed when rollout metadata cannot be read", () => {
     const result = evaluate({ "GET /repos/openclaw/openclaw/pulls/152415": { httpError: 403 } });
     expect(result.status).toBe(1);
-    expect(result.combined).toEqual(["failure"]);
+    expect(result.combined).toEqual(["pending", "failure"]);
     expect(result.reviews).toEqual([]);
   });
 });
