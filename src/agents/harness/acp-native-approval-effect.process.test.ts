@@ -17,6 +17,7 @@ import {
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { cancelAgentRuntimeBoundApprovals } from "../../gateway/server-methods/approval-run-cancellation.js";
 import { createPluginApprovalHandlers } from "../../gateway/server-methods/plugin-approval.js";
+import { dispatchGatewayMethodInProcessRaw } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   registerAgentRunDelegatedAuthorityClosedHandler,
   validateAgentRunDelegatedAuthority,
@@ -37,8 +38,8 @@ import { runAgentHarnessAttempt } from "./selection.js";
 
 useNativeProcessFixture();
 
-it.for(["allow", "deny", "cancel"] as const)(
-  "fences real native effects while the Gateway approval waits: %s",
+it.for(["allow", "deny", "cancel", "always-only"] as const)(
+  "fences delegated native writes while the Gateway approval waits: %s",
   { timeout: 60000 },
   async (kind, test) => {
     await withOpenClawTestState({ label: "acp-native-approval-effect" }, async (state) => {
@@ -47,7 +48,7 @@ it.for(["allow", "deny", "cancel"] as const)(
       };
       const disabledConfig: OpenClawConfig = {
         ...config,
-        plugins: { entries: { acpx: { config: { nativeAgents: { opencode: false } } } } },
+        plugins: { entries: { acpx: { config: { nativeAgents: { qwen: false } } } } },
       };
       const manager = createTestApprovalManager<PluginApprovalRequestPayload>(test, {
         approvalKind: "plugin",
@@ -76,8 +77,10 @@ it.for(["allow", "deny", "cancel"] as const)(
       );
       let native: Awaited<ReturnType<typeof registerNative>> | undefined;
       try {
-        native = await registerNative(state, config, "approval-effect-agent.mjs");
-        const attempt = await attemptFor(state, config, "opencode", "full");
+        native = await registerNative(state, config, "approval-effect-agent.mjs", {
+          allowAlwaysOnly: kind === "always-only",
+        });
+        const attempt = await attemptFor(state, config, "qwen", "full");
         bindGatewayContextResolver(attempt.input.admittedRunContext, () => context);
         const entered = createDeferred<string>();
         const awaitDecision = manager.awaitDecision.bind(manager);
@@ -106,13 +109,15 @@ it.for(["allow", "deny", "cancel"] as const)(
               runId: attempt.input.runId,
               sessionKey: attempt.input.sessionKey,
               toolCallId: "native-write",
-              allowedDecisions: ["allow-once", "deny"],
+              allowedDecisions: kind === "always-only" ? ["deny"] : ["allow-once", "deny"],
             },
           });
           expect(
             JSON.parse(await fs.readFile(state.path("peer", "permission-request.json"), "utf8")),
           ).toMatchObject({ toolCallId: "native-write", kind: "edit" });
-          expect(await fs.readdir(state.path("peer", "effects"))).toEqual([]);
+          await expect(
+            fs.readFile(path.join(state.workspaceDir, "native-effect.txt"), "utf8"),
+          ).rejects.toMatchObject({ code: "ENOENT" });
           if (kind === "allow") {
             const plan = buildGatewayReloadPlan(
               diffGatewayReloadPaths(config, disabledConfig, listConfigReloadRefinementPrefixes()),
@@ -120,13 +125,33 @@ it.for(["allow", "deny", "cancel"] as const)(
             expect(isNoopGatewayReloadPlan(plan)).toBe(true);
             native.getRuntimeConfig.mockReturnValue(disabledConfig);
           }
+          if (kind === "always-only") {
+            await expect(
+              dispatchGatewayMethodInProcessRaw(
+                "plugin.approval.resolve",
+                { id: approvalId, decision: "allow-once" },
+                {
+                  forceSyntheticClient: true,
+                  operatorRoleActor: { kind: "system" },
+                  syntheticScopes: ["operator.approvals"],
+                  resolveGatewayContext: () => context,
+                },
+              ),
+            ).resolves.toMatchObject({
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                details: { allowedDecisions: ["deny"] },
+              },
+            });
+          }
           if (kind === "cancel") {
             abort.abort();
           }
           // A late allow cannot revive the cancelled native permission request.
           const resolution = manager.resolveDetailed(
             approvalId,
-            kind === "deny" ? "deny" : "allow-once",
+            kind === "deny" || kind === "always-only" ? "deny" : "allow-once",
             {
               kind: "device",
               id: "test-reviewer",
@@ -142,13 +167,13 @@ it.for(["allow", "deny", "cancel"] as const)(
             const transcript = await readVisibleSessionTranscriptMessageEntries(attempt.target);
             expect(transcript.map((row) => row.role)).toEqual(["user", "assistant"]);
             attempt.close();
-            const next = await attemptFor(state, disabledConfig, "opencode", "full");
+            const next = await attemptFor(state, disabledConfig, "qwen", "full");
             try {
               await expect(runAgentHarnessAttempt(next.input)).rejects.toThrow("disabled");
               expect(await readVisibleSessionTranscriptMessageEntries(attempt.target)).toEqual(
                 transcript,
               );
-              const harness = getRegisteredAgentHarness("acp-opencode")?.harness;
+              const harness = getRegisteredAgentHarness("acp-qwen")?.harness;
               if (!harness?.loadModelCatalog) {
                 throw new Error("Native catalog operation missing");
               }
@@ -184,16 +209,18 @@ it.for(["allow", "deny", "cancel"] as const)(
         await gatewayWork.drain();
       }
       // Inspect after shutdown so a late native permission reply cannot race this assertion.
-      expect(await fs.readdir(state.path("peer", "effects"))).toEqual(
-        kind === "allow" ? ["native-effect.txt"] : [],
-      );
-      if (kind === "deny") {
+      if (kind !== "allow") {
+        await expect(
+          fs.readFile(path.join(state.workspaceDir, "native-effect.txt"), "utf8"),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      if (kind === "deny" || kind === "always-only") {
         expect(
           JSON.parse(await fs.readFile(state.path("peer", "permission-result.json"), "utf8")),
         ).toMatchObject({ outcome: { outcome: "selected", optionId: "deny" } });
       }
       if (kind === "allow") {
-        expect(await fs.readFile(state.path("peer", "effects", "native-effect.txt"), "utf8")).toBe(
+        expect(await fs.readFile(path.join(state.workspaceDir, "native-effect.txt"), "utf8")).toBe(
           "approved native effect",
         );
         expect(

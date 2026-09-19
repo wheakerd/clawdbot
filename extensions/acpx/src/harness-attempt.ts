@@ -203,6 +203,10 @@ export async function runAcpHarnessAttempt(params: {
         assertActive();
         const approvalSignal = AbortSignal.any([signal, context.signal]);
         const detail = JSON.stringify(request.raw.toolCall);
+        // ACPX falls back from allow_once to allow_always; never widen the user's grant.
+        const supportsAllowOnce = request.raw.options.some(
+          (option) => option.kind === "allow_once",
+        );
         const requestResult = await input.hostCapabilities.requestApproval({
           title: `${params.label} permission request`,
           description: request.raw.toolCall.title ?? "Native tool action",
@@ -211,7 +215,7 @@ export async function runAcpHarnessAttempt(params: {
           severity: "warning",
           toolName: request.inferredKind ?? "other",
           toolCallId: request.raw.toolCall.toolCallId,
-          allowedDecisions: ["allow-once", "deny"],
+          allowedDecisions: supportsAllowOnce ? ["allow-once", "deny"] : ["deny"],
           timeoutMs: DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
           transportTimeoutMs: DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000,
         });
@@ -225,8 +229,9 @@ export async function runAcpHarnessAttempt(params: {
           : undefined;
         assertActive();
         approvalSignal.throwIfAborted();
-        denied ||= result?.decision !== "allow-once";
-        return { outcome: result?.decision === "allow-once" ? "allow_once" : "reject_once" };
+        const allowed = supportsAllowOnce && result?.decision === "allow-once";
+        denied ||= !allowed;
+        return { outcome: allowed ? "allow_once" : "reject_once" };
       } catch (error) {
         if (!signal.aborted && !context.signal.aborted) {
           approvalFailure = toErrorObject(error, "Native approval request failed");

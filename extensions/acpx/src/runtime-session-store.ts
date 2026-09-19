@@ -63,6 +63,7 @@ export type AcpxGeneration = {
   records: Map<string, NonNullable<AcpLoadedSessionRecord>>;
   closeCompleted: boolean;
   delegate?: BaseAcpxRuntime;
+  nativeTools?: boolean;
 };
 export function captureGenerationRecord(
   generation: AcpxGeneration,

@@ -43,17 +43,22 @@ Native picker runtimes run on the Gateway host and use the native app's permissi
 OpenClaw checks that execution choice before dispatching a chat turn; ACP runners do not
 implement OpenClaw sandboxing or workspace-only filesystem confinement.
 
-When an administrator selects a native model in an optionally sandboxed chat,
-**Run without sandbox** explicitly selects the model and grants Full access for that
-chat only. Cancel keeps the existing selection and restrictions. This does not
-change agent-wide or global sandbox settings. Stop an active run before changing
-its sandbox setting.
+When optional chat restrictions cannot be enforced, an administrator can choose
+**Continue for this chat** to use the native app's permissions. This grants Full Access
+and turns off optional sandboxing for that chat only; agent-wide and global settings
+stay unchanged. After a refused message, confirmation retries that message once.
+Confirming a model selection without a pending message does not send anything.
 
-A creator-role-required sandbox cannot be removed, even by this action. Configured
-workspace-only access, remote execution placement, and other tool restrictions
-still apply; choose a compatible runtime when those boundaries must remain.
+A creator-role-required sandbox cannot be removed, and remote execution placement
+is not supported. Choose a compatible runtime when those boundaries must remain.
 OpenClaw's Read Only, Guarded, and Workspace permission modes are not supported
 by these native runtimes.
+
+Native tool permission requests still require their one-shot approval. Once approved,
+delegated filesystem writes do not encounter a second ACPX terminal approval gate.
+Classic ACP sessions keep their configured `permissionMode`. The ACP client's
+delegated filesystem remains rooted at its session cwd; this is not a sandbox for
+the native process's own filesystem access.
 
 Catalog refresh closes its local connection. The native agent owns any history it creates.
 Reset and deletion close the local session and prevent its reuse, including after a Gateway restart.

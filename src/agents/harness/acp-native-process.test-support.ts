@@ -61,7 +61,11 @@ export async function registerNative(
   state: OpenClawTestState,
   config: OpenClawConfig,
   peerName: "owner-agent.mjs" | "approval-effect-agent.mjs",
-  peerOptions: { holdModeControl?: boolean; holdNewSession?: boolean } = {},
+  peerOptions: {
+    holdModeControl?: boolean;
+    holdNewSession?: boolean;
+    allowAlwaysOnly?: boolean;
+  } = {},
 ) {
   const peer = fileURLToPath(
     {
@@ -102,6 +106,7 @@ export async function registerNative(
               ...(peerName === "owner-agent.mjs" ? ["--model-controls"] : []),
               ...(peerOptions.holdModeControl ? ["--hold-mode-control"] : []),
               ...(peerOptions.holdNewSession ? ["--hold-new-session"] : []),
+              ...(peerOptions.allowAlwaysOnly ? ["--allow-always-only"] : []),
             ],
           },
         ]),

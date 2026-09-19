@@ -6,6 +6,8 @@ import { Readable, Writable } from "node:stream";
 import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 
 const directory = process.argv[2];
+const allowAlwaysOnly = process.argv.includes("--allow-always-only");
+const workspaces = new Map();
 const describe = () => ({
   configOptions: [
     {
@@ -19,7 +21,7 @@ const describe = () => ({
   ],
 });
 
-// The native peer owns this write. OpenClaw can prevent it only through the ACP reply.
+// Match native agents that delegate an approved write back to their ACP client.
 const connection = new AgentSideConnection(
   (client) => ({
     async initialize() {
@@ -29,26 +31,34 @@ const connection = new AgentSideConnection(
         authMethods: [],
       };
     },
-    async newSession() {
-      return { sessionId: randomUUID(), ...describe() };
+    async newSession({ cwd }) {
+      const sessionId = randomUUID();
+      workspaces.set(sessionId, cwd);
+      return { sessionId, ...describe() };
     },
-    async loadSession() {
+    async loadSession({ sessionId, cwd }) {
+      workspaces.set(sessionId, cwd);
       return describe();
     },
     async prompt({ sessionId }) {
+      const effectPath = path.join(workspaces.get(sessionId), "native-effect.txt");
       const toolCall = {
         toolCallId: "native-write",
         title: "Write the approved native effect",
         kind: "edit",
         status: "pending",
-        rawInput: { path: "native-effect.txt", content: "approved native effect" },
+        rawInput: { path: effectPath, content: "approved native effect" },
       };
       await fs.writeFile(path.join(directory, "permission-request.json"), JSON.stringify(toolCall));
       const permission = await client.requestPermission({
         sessionId,
         toolCall,
         options: [
-          { kind: "allow_once", name: "Allow once", optionId: "allow" },
+          {
+            kind: allowAlwaysOnly ? "allow_always" : "allow_once",
+            name: allowAlwaysOnly ? "Allow always" : "Allow once",
+            optionId: "allow",
+          },
           { kind: "reject_once", name: "Deny", optionId: "deny" },
         ],
       });
@@ -57,10 +67,11 @@ const connection = new AgentSideConnection(
         JSON.stringify(permission),
       );
       if (permission.outcome.outcome === "selected" && permission.outcome.optionId === "allow") {
-        await fs.writeFile(
-          path.join(directory, "effects", "native-effect.txt"),
-          "approved native effect",
-        );
+        await client.writeTextFile({
+          sessionId,
+          path: effectPath,
+          content: "approved native effect",
+        });
       }
       await client.sessionUpdate({
         sessionId,
