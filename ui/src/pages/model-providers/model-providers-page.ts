@@ -417,7 +417,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         agentEpoch,
         isCurrentClient: () => this.gateway.isCurrent({ client, epoch: clientEpoch }),
         isCurrentAgent: () => this.agentEpoch === agentEpoch,
-        refreshProviders: () => this.refresh("forced"),
         setBusy: (busy) => this.setBusy(params.key, busy),
         setMessage: (message) => this.setMessage(params.key, message),
       },
@@ -588,15 +587,15 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!defaults) {
       return;
     }
-    const result = await this.patchConfig({
+    await this.patchConfig({
       key: "defaults",
       raw: buildDefaultsPatch(defaults),
       note: t("modelProviders.notes.defaultModel"),
       replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
     });
     // Global defaults outlive agent selection. Connection resets clear the draft;
-    // object identity protects newer edits. Retain committed values if refresh failed.
-    if (this.defaultsDraft === defaults && (!result.ok || !result.warning)) {
+    // object identity protects newer edits.
+    if (this.defaultsDraft === defaults) {
       this.defaultsDraft = null;
     }
   }

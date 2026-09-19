@@ -171,7 +171,6 @@ type ModelProviderConfigMutationOwner = {
   agentEpoch: number;
   isCurrentClient: () => boolean;
   isCurrentAgent: () => boolean;
-  refreshProviders?: () => Promise<void>;
   setBusy: (busy: boolean) => void;
   setMessage: (message: ModelProviderRowMessage | null) => void;
 };
@@ -198,8 +197,8 @@ export function modelProviderErrorMessage(error: unknown): string {
 }
 
 /**
- * Config patches are global; the initiating agent owns only busy/message UI.
- * Refresh warnings must preserve an already acknowledged mutation.
+ * The config owner adopts the committed snapshot and reconciles application.
+ * Saving ends at its acknowledgement, not at a second read or provider discovery.
  */
 export async function runModelProviderConfigMutation(
   owner: ModelProviderConfigMutationOwner,
@@ -230,28 +229,7 @@ export async function runModelProviderConfigMutation(
       }
       return { ok: false };
     }
-
-    let warning: string | null = null;
-    try {
-      await runtimeConfig.refresh();
-      // The config owner records ordinary config.get failures in lastError
-      // and resolves refresh(), so rejection alone cannot detect them.
-      warning = runtimeConfig.state.lastError;
-      if (!warning && owner.isCurrentClient()) {
-        await owner.refreshProviders?.();
-      }
-    } catch (error) {
-      // An acknowledged config patch is already committed; a later refresh
-      // failure must not turn it into a failed credential edit.
-      warning = modelProviderErrorMessage(error);
-    }
-    if (!owner.isCurrentClient()) {
-      return { ok: false };
-    }
-    if (owner.isCurrentAgent() && warning) {
-      owner.setMessage({ kind: "warning", text: warning });
-    }
-    return { ok: true, agentEpoch, warning };
+    return { ok: true, agentEpoch, warning: null };
   } catch (error) {
     if (owner.isCurrentClient() && owner.isCurrentAgent()) {
       owner.setMessage({ kind: "error", text: modelProviderErrorMessage(error) });
@@ -266,7 +244,7 @@ export async function runModelProviderConfigMutation(
 
 /** Credential writes share config serialization and retain acknowledged success during refresh. */
 export async function runModelProviderApiKeyMutation(
-  owner: Omit<ModelProviderConfigMutationOwner, "refreshProviders"> & {
+  owner: ModelProviderConfigMutationOwner & {
     canMutate: () => boolean;
     refreshProviders: () => Promise<string | null>;
   },

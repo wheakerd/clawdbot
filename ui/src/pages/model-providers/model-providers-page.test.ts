@@ -527,30 +527,6 @@ describe("ModelProvidersPage agent scope", () => {
     ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
   });
 
-  it("keeps committed default models visible until their authoritative refresh succeeds", async () => {
-    const { context, runtimeConfig } = createHarness("main");
-    runtimeConfig.refresh.mockImplementationOnce(async () => {
-      runtimeConfig.state.lastError = "config.get failed after saving default models";
-    });
-    const page = appendPage(context);
-    await waitForProviders(page);
-    const selection: DefaultModelSelection = {
-      primary: "openai/gpt-5",
-      fallbacks: [],
-      utilityModel: null,
-    };
-    page.defaultsDraft = selection;
-
-    await page.saveDefaults();
-
-    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
-    expect(page.defaultsDraft).toBe(selection);
-    expect(page.messages.defaults).toEqual({
-      kind: "warning",
-      text: "config.get failed after saving default models",
-    });
-  });
-
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
     const { settingsAgentSelection, context, notifySelection, runtimeConfig } =
       createHarness("main");

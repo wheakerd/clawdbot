@@ -1,4 +1,5 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -12,6 +13,7 @@ import {
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import {
@@ -141,8 +143,12 @@ export class InstalledAgentsController {
         agentEpoch: 0,
         isCurrentClient: isCurrent,
         isCurrentAgent: () => true,
-        // Pending state settles after the authoritative list read below.
-        setBusy: () => this.host.requestUpdate(),
+        setBusy: (busy) => {
+          if (!busy) {
+            this.pending.delete(agent.id);
+          }
+          this.host.requestUpdate();
+        },
         setMessage: (message) => {
           if (message) {
             this.messages.set(agent.id, message);
@@ -159,25 +165,15 @@ export class InstalledAgentsController {
         },
         note: t("modelProviders.installedAgents.note"),
       },
-    ).then(async (result) => {
-      if (!isCurrent()) {
-        return;
-      }
-      if (result.ok) {
-        this.agents =
-          this.agents?.map((entry) => (entry.id === agent.id ? { ...entry, enabled } : entry)) ??
-          null;
-      }
-      await this.list.run();
+    ).then(() => {
       if (isCurrent()) {
-        this.pending.delete(agent.id);
-        this.host.requestUpdate();
+        void this.list.run();
       }
     });
     return true;
   }
 
-  private renderAgent(agent: InstalledAgent, blocked: boolean) {
+  private renderAgent(agent: InstalledAgent, blocked: boolean, configuredEnabled: unknown) {
     const pending = this.pending.get(agent.id);
     const status = INSTALLATION_STATUS[agent.installation];
     const message = this.messages.get(agent.id);
@@ -204,7 +200,8 @@ export class InstalledAgentsController {
                   >${renderSettingsStatus({ kind: status.kind, label: t(status.labelKey) })}</span
                 >`
               : renderSettingsStatus({ kind: "muted", label: t("modelProviders.saving") }),
-          checked: pending ?? agent.enabled,
+          checked:
+            pending ?? (typeof configuredEnabled === "boolean" ? configuredEnabled : agent.enabled),
           disabled: blocked || pending !== undefined,
           onChange: (checked) => this.setEnabled(agent, checked),
         })}
@@ -228,6 +225,10 @@ export class InstalledAgentsController {
     }
     const blockedReason = this.blockedReason();
     const blocked = blockedReason !== null || this.options.isConfigBusy();
+    const config = currentConfigObject(this.options.getContext().runtimeConfig.state);
+    const entries = asRecord(asRecord(config?.plugins)?.entries);
+    const nativeConfig = asRecord(asRecord(entries?.acpx)?.config);
+    const nativeFlags = asRecord(nativeConfig?.nativeAgents);
     const errorRow = this.error
       ? html`<div class="settings-row">
           <div class="settings-row__text">
@@ -252,7 +253,9 @@ export class InstalledAgentsController {
         : html`${errorRow}${
             this.agents.length === 0
               ? renderSettingsEmpty(t("modelProviders.installedAgents.empty"))
-              : this.agents.map((agent) => this.renderAgent(agent, blocked))
+              : this.agents.map((agent) =>
+                  this.renderAgent(agent, blocked, nativeFlags?.[agent.id]),
+                )
           }`;
     const checkLabel = this.loading
       ? t("modelProviders.installedAgents.checking")

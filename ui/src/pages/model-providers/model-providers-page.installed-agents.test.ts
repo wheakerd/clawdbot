@@ -2,6 +2,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { ConfigPatchAck } from "../../lib/config/config-gateway-operations.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   appendPage,
@@ -123,32 +125,64 @@ describe("ModelProvidersPage installed agents", () => {
     expect(toggle().checked).toBe(false);
   });
 
-  it("settles a missing agent's toggle without waiting for provider discovery", async () => {
-    let enabled = true;
-    const { context, runtimeConfig, deferNextAuthStatus } = createAgentsHarness(async () => ({
-      agents: [agent("pi", "Pi", { installation: "missing", enabled })],
-    }));
-    const page = appendPage(context);
-    await waitForProviders(page);
-    await waitForFast(() => expect(agentRow(page, "pi")).not.toBeNull());
-    vi.mocked(runtimeConfig.patch).mockImplementation(async () => {
-      enabled = false;
-      return true;
+  it("finishes saving at the config acknowledgement while readbacks are still pending", async () => {
+    const config = (enabled: boolean) => ({
+      plugins: { entries: { acpx: { config: { nativeAgents: { opencode: enabled } } } } },
     });
+    const acknowledgement = deferred<ConfigPatchAck>();
+    const configRead = deferred<unknown>();
+    const agentRead = deferred<unknown>();
+    let holdReads = false;
+    const { context, request, deferNextAuthStatus } = createAgentsHarness(async () =>
+      holdReads ? agentRead.promise : { agents: [agent("opencode", "OpenCode")] },
+    );
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) => {
+      if (method === "config.get") {
+        return holdReads
+          ? configRead.promise
+          : { config: config(true), hash: "before", valid: true };
+      }
+      if (method === "config.patch") {
+        return acknowledgement.promise;
+      }
+      return originalRequest(method);
+    });
+    const runtimeConfig = createRuntimeConfigCapability(context.gateway);
+    const page = appendPage({ ...context, runtimeConfig });
+    await waitForProviders(page, config(true));
+    await waitForFast(() => expect(agentRow(page, "opencode")).not.toBeNull());
     const releaseAuthStatus = deferNextAuthStatus();
     try {
-      agentRow(page, "pi")!.querySelector<HTMLElement>(".settings-row__title")!.click();
-      await waitForFast(() => {
-        const toggle = agentRow(page, "pi")!.querySelector("wa-switch") as HTMLElement & {
+      holdReads = true;
+      agentRow(page, "opencode")!.querySelector<HTMLElement>(".settings-row__title")!.click();
+      await waitForFast(() => expect(agentRow(page, "opencode")?.textContent).toContain("Saving"));
+      acknowledgement.resolve({ config: config(false), hash: "saved" });
+      const toggle = () =>
+        agentRow(page, "opencode")!.querySelector("wa-switch") as HTMLElement & {
           checked: boolean;
         };
-        expect(toggle.checked).toBe(false);
-        expect(toggle.hasAttribute("disabled")).toBe(false);
-        expect(agentRow(page, "pi")?.textContent).toContain("Not detected");
+      await waitForFast(() => {
+        expect(agentRow(page, "opencode")?.textContent).not.toContain("Saving");
+        expect(toggle().checked).toBe(false);
       });
-    } finally {
+
+      // Installation metadata can still reflect the previous runtime generation.
+      agentRead.resolve({ agents: [agent("opencode", "OpenCode", { enabled: true })] });
+      configRead.resolve({ config: config(false), hash: "saved", valid: true });
       releaseAuthStatus();
-      await page.updateComplete;
+      await waitForFast(() =>
+        expect(
+          page.querySelector<HTMLButtonElement>(".model-providers__refresh-button")?.disabled,
+        ).toBe(false),
+      );
+      expect(toggle().checked).toBe(false);
+    } finally {
+      acknowledgement.resolve({ config: config(false), hash: "saved" });
+      configRead.resolve({ config: config(false), hash: "saved", valid: true });
+      agentRead.resolve({ agents: [agent("opencode", "OpenCode", { enabled: true })] });
+      releaseAuthStatus();
+      runtimeConfig.dispose();
     }
   });
 
