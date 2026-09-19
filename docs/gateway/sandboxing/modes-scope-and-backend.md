@@ -57,10 +57,12 @@ administrator explicitly chooses the native agent's own permissions. This
 combines the optional sandbox opt-out with Full access and consent bound to that
 chat and runtime. Optional native tool and workspace restrictions are then
 delegated to the native agent; OpenClaw-hosted tools keep their existing policy.
-The action does not send the draft or change global settings. The native consent
-is cleared on reset or runtime change and is never inherited by a fork. Required
-sandboxing, required workspace boundaries, and remote execution placement remain
-independently enforced. See [native runtime permissions](/tools/acp-agents-setup#permissions-for-native-chat-runtimes).
+After a refused send, confirmation saves the permissions and retries that message
+once. Selection-only confirmation does not send the draft. Neither changes global
+settings. Native consent is cleared on reset or runtime change and is never
+inherited by a fork. Required sandboxing, required workspace boundaries, and remote
+execution placement remain independently enforced. See
+[native runtime permissions](/tools/acp-agents-setup#permissions-for-native-chat-runtimes).
 
 ### Scope and backend
 

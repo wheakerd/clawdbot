@@ -6,7 +6,6 @@ import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/model-setup.css";
 import type { ModelProviderLoginController } from "../model-providers/login-controller.ts";
 import { renderCandidateRows } from "./candidate-models.ts";
@@ -67,7 +66,6 @@ type ModelSetupViewProps = {
   onStartAuth: (option: AuthOption) => void;
   onStartPrepare: (option: ModelSetupPrepareOption) => void;
   onManualProviderChange: (providerId: string) => void;
-  onUseManualProvider: (providerId: string) => void;
   onManualApiKeyChange: (apiKey: string) => void;
   onManualConnect: () => void;
   onMoreSignInToggle: (open: boolean) => void;
@@ -110,81 +108,6 @@ function renderEmptyState(props: ModelSetupViewProps, result: SystemAgentSetupDe
             </div>
           `,
         )}
-      </div>
-    </section>
-  `;
-}
-
-function renderUnavailable(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
-  if (!result.unavailableCandidates?.length) {
-    return nothing;
-  }
-  return html`
-    <section class="settings-section">
-      <div class="settings-section__header">
-        <h2>${t("modelSetup.unavailable.title")}</h2>
-      </div>
-      <div class="model-setup__rows">
-        ${result.unavailableCandidates.map((candidate) => {
-          const authOption = (result.authOptions ?? []).find(
-            (option) => option.id === candidate.authOptionId,
-          );
-          const manualProvider = result.manualProviders.find(
-            (provider) => provider.id === candidate.manualProviderId,
-          );
-          return html`
-            <div
-              class="model-setup__row model-setup__row--info"
-              data-unavailable-candidate=${candidate.id}
-            >
-              <div class="model-setup__provider-copy">
-                ${renderProviderIcon(props, candidate)}
-                <div>
-                  <div>
-                    <strong>${candidate.label}</strong> — ${formatUiExternalText(candidate.detail)}
-                  </div>
-                  <div class="muted">${formatUiExternalText(candidate.reason)}</div>
-                </div>
-              </div>
-              <div class="model-setup__row-actions">
-                ${
-                  authOption
-                    ? html`<button
-                        type="button"
-                        class="btn primary"
-                        ?disabled=${props.actionsDisabled}
-                        @click=${() => props.onStartAuth(authOption)}
-                      >
-                        ${t("modelSetup.unavailable.signIn", {
-                          provider: authOption.groupLabel ?? authOption.label,
-                        })}
-                      </button>`
-                    : nothing
-                }
-                ${
-                  manualProvider
-                    ? html`<button
-                        type="button"
-                        class="btn"
-                        ?disabled=${props.actionsDisabled}
-                        @click=${() => props.onUseManualProvider(manualProvider.id)}
-                      >
-                        ${t("modelSetup.unavailable.useApiKey")}
-                      </button>`
-                    : nothing
-                }
-                <button
-                  type="button"
-                  class="btn"
-                  ?disabled=${props.actionsDisabled}
-                  @click=${props.onDetect}
-                >
-                  ${t("modelSetup.checkAgain")}
-                </button>
-              </div>
-            </div>
-          `;
-        })}
       </div>
     </section>
   `;
@@ -443,8 +366,7 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
   return html`
     ${current} ${renderNativeSessionDiscovery(props, result)} ${renderEmptyState(props, result)}
     ${props.nativeModels?.render()} ${renderCandidateRows(props, result)}
-    ${renderUnavailable(props, result)} ${renderPrepare(props, result)}
-    ${renderSignIn(props, result)} ${renderManual(props, result)}
+    ${renderPrepare(props, result)} ${renderSignIn(props, result)} ${renderManual(props, result)}
   `;
 }
 

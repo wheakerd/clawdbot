@@ -77,7 +77,9 @@ vi.mock("../../logging/subsystem.js", async () => {
   };
 });
 
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createGatewaySession } from "../session-create-service.js";
+import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
@@ -115,15 +117,6 @@ const nativeModel: ModelCatalogEntry = {
   nativeRuntime: "claude-cli",
 };
 type TestClient = GatewayClient & { connId: string; invalidated: boolean };
-type TestContext = Pick<
-  GatewayRequestContext,
-  | "getRuntimeConfig"
-  | "loadGatewayModelCatalogSnapshot"
-  | "broadcastToConnIds"
-  | "getSessionEventSubscriberConnIds"
-  | "chatAbortControllers"
-  | "getClientConnIds"
->;
 
 function catalogSnapshot(entries = modelCatalog) {
   return {
@@ -139,20 +132,18 @@ function catalogSnapshot(entries = modelCatalog) {
 
 function context(clients = new Set<TestClient>()) {
   return {
-    getRuntimeConfig: () => cfg,
+    ...createDirectChatContext({ getRuntimeConfig: () => cfg }),
     loadGatewayModelCatalogSnapshot: vi.fn<
       GatewayRequestContext["loadGatewayModelCatalogSnapshot"]
     >(async () => catalogSnapshot()),
-    broadcastToConnIds: vi.fn(),
-    getSessionEventSubscriberConnIds: () => new Set<string>(),
-    chatAbortControllers: new Map(),
+    broadcastToConnIds: vi.fn<GatewayRequestContext["broadcastToConnIds"]>(),
     getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
       new Set(
         [...clients]
           .filter((candidate) => !candidate.invalidated && (!filter || filter(candidate)))
           .map((candidate) => candidate.connId),
       ),
-  } satisfies TestContext;
+  } satisfies GatewayRequestContext;
 }
 
 function client(scopes: string[]): TestClient {
@@ -184,7 +175,7 @@ function personClient(profileId: string, scopes = ["operator.write"]): TestClien
 async function patchSession(
   params: Record<string, unknown>,
   scopes = ["operator.admin"],
-  requestContext: TestContext = context(),
+  requestContext: GatewayRequestContext = context(),
   requestClient: GatewayClient = client(scopes),
 ) {
   const responses: Parameters<RespondFn>[] = [];
@@ -192,7 +183,7 @@ async function patchSession(
     req: { type: "req", id: "sticky-model-patch", method: "sessions.patch", params },
     params,
     client: requestClient,
-    context: requestContext as GatewayRequestContext,
+    context: requestContext,
     isWebchatConnect: () => true,
     respond: (...response: Parameters<RespondFn>) => responses.push(response),
   });
@@ -500,6 +491,8 @@ describe("native runtime permission consent", () => {
     } = fixture.patch;
     const respond = vi.fn();
     await sessionMutationHandlers["sessions.patchMany"]!({
+      req: { type: "req", id: "native-consent-batch", method: "sessions.patchMany" },
+      isWebchatConnect: () => true,
       params: {
         targets: [
           {
@@ -514,9 +507,9 @@ describe("native runtime permission consent", () => {
         patch,
       },
       client: client(["operator.admin"]),
-      context: fixture.requestContext as GatewayRequestContext,
+      context: fixture.requestContext,
       respond,
-    } as never);
+    });
     expect(respond).toHaveBeenCalledWith(true, { outcomes: [{ key, ok: true }] }, undefined);
     expect(loadSessionEntry(fixture.scope)?.nativeRuntimeConsent).toBe(harness.id);
   });
@@ -876,15 +869,11 @@ describe("sessions.patch personal model-account ownership", () => {
     const caller = personClient(accountOwnerId);
     const connections = new Set([caller]);
     const release = vi.fn();
-    const terminalSessions: Pick<
-      NonNullable<GatewayRequestContext["terminalSessions"]>,
-      "beginAgentSessionDrain"
-    > = {
-      beginAgentSessionDrain: () => {
-        connections.delete(caller);
-        return { drained: Promise.resolve(), hasWork: () => false, release };
-      },
-    };
+    const terminalSessions = new TerminalSessionManager({ emit: vi.fn() });
+    vi.spyOn(terminalSessions, "beginAgentSessionDrain").mockImplementation(() => {
+      connections.delete(caller);
+      return { drained: Promise.resolve(), hasWork: () => false, release };
+    });
     const requestContext = {
       ...context(connections),
       terminalSessions,

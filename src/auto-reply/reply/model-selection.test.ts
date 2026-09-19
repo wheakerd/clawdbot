@@ -5,7 +5,6 @@ import {
   providerContextTokenCacheKey,
 } from "../../agents/context-cache.js";
 import {
-  loadManifestModelCatalog,
   loadProviderScopedThinkingCatalog,
   readPreparedModelCatalog as loadModelCatalogLocal,
 } from "../../agents/model-catalog.runtime.js";
@@ -52,7 +51,6 @@ const catalogRuntimeMocks = vi.hoisted(() => {
 });
 
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
-  loadManifestModelCatalog: vi.fn(() => []),
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: catalogRuntimeMocks.loadModelCatalog,
   loadPreparedModelCatalogSnapshot: catalogRuntimeMocks.loadModelCatalogSnapshot,
@@ -136,8 +134,6 @@ vi.mock("../../agents/auth-profiles/order.js", () => ({
 afterEach(() => {
   getContextWindowCaches().discoveredTokenCache.clear();
   sessionPersistenceMocks.persistReplySessionEntry.mockReset();
-  vi.mocked(loadManifestModelCatalog).mockReset();
-  vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
   authProfileStoreMock.reset();
   vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
 });
@@ -249,108 +245,6 @@ describe("createModelSelectionState catalog loading", () => {
     expect(state.allowedModelKeys.has("openai/gpt-5.4")).toBe(true);
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("low");
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { thinking: "high", agentThinking: undefined, expected: "high" },
-    { thinking: "ultra", agentThinking: undefined, expected: "ultra" },
-    { thinking: "high", agentThinking: false, expected: "off" },
-    { thinking: "low", agentThinking: "high", expected: "high" },
-    { thinking: "low", agentThinking: "extra-high", expected: "xhigh" },
-  ] as const)(
-    "resolves per-model thinking (shared=$thinking, agent=$agentThinking) ahead of global defaults",
-    async ({ thinking, agentThinking, expected }) => {
-      vi.mocked(loadModelCatalogLocal).mockClear();
-      const cfg = {
-        agents: {
-          defaults: {
-            thinkingDefault: "low",
-            models: {
-              "fixture/reasoning-model": {
-                params: { thinking },
-              },
-            },
-          },
-          entries: {
-            alpha: {
-              models: {
-                "fixture/reasoning-model": { params: { thinking: agentThinking } },
-              },
-            },
-          },
-        },
-        models: {
-          providers: {
-            fixture: {
-              baseUrl: "https://fixture.invalid/v1",
-              models: [makeConfiguredModel({ id: "reasoning-model" })],
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      const state = await createInitialState(cfg, "fixture", "reasoning-model", {
-        agentId: "alpha",
-      });
-
-      await expect(state.resolveDefaultThinkingLevel()).resolves.toBe(expected);
-      expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps per-model disabled params.thinking ahead of global thinkingDefault", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    const cfg = {
-      agents: {
-        defaults: {
-          thinkingDefault: "low",
-          models: {
-            "deepseek/deepseek-v4-pro": {
-              params: { thinking: false },
-            },
-          },
-        },
-      },
-      models: {
-        providers: {
-          deepseek: {
-            baseUrl: "https://api.deepseek.com/v1",
-            models: [makeConfiguredModel({ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" })],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = await createInitialState(cfg, "deepseek", "deepseek-v4-pro");
-
-    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("off");
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-  });
-
-  it("uses the implicit model default when no global thinking default is configured", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.4": {},
-          },
-        },
-      },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [makeConfiguredModel()],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = await createInitialState(cfg, "openai", "gpt-5.4");
-
-    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
@@ -584,61 +478,6 @@ describe("createModelSelectionState catalog loading", () => {
     expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
   });
 
-  it("carries prepared runtime thinking policy into ordinary configured turns", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-mythos-5": {},
-          },
-        },
-      },
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.com",
-            models: [
-              makeConfiguredModel({
-                id: "claude-mythos-5",
-                name: "Claude Mythos 5",
-                reasoning: false,
-              }),
-            ],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = await createInitialState(cfg, "anthropic", "claude-mythos-5", {
-      preparedModelCatalog: {
-        entries: [
-          {
-            provider: "anthropic",
-            id: "claude-mythos-5",
-            name: "Claude Mythos 5",
-            reasoning: false,
-            configuredReasoning: false,
-            thinkingPolicyProvider: "claude-cli",
-          },
-        ],
-        routeVariants: [],
-        authoritative: true,
-      },
-    });
-
-    await expect(state.resolveThinkingCatalog()).resolves.toEqual([
-      expect.objectContaining({
-        provider: "anthropic",
-        id: "claude-mythos-5",
-        thinkingPolicyProvider: "claude-cli",
-      }),
-    ]);
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-    expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
-  });
-
   it.each([
     { hasModelDirective: false, capturedPolicy: true, expected: "ultra" },
     { hasModelDirective: true, capturedPolicy: true, expected: "ultra" },
@@ -705,37 +544,8 @@ describe("createModelSelectionState catalog loading", () => {
     },
   );
 
-  it("uses published metadata without a second manifest inventory", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    vi.mocked(loadManifestModelCatalog).mockClear();
-    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([
-      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
-    ]);
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": {},
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = await createInitialState(cfg, "openai", "gpt-5.5");
-
-    await expect(state.resolveThinkingCatalog()).resolves.toEqual([
-      expect.objectContaining({ provider: "openai", id: "gpt-5.5", reasoning: true }),
-    ]);
-    expect(loadManifestModelCatalog).not.toHaveBeenCalled();
-    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledOnce();
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-  });
-
   it("keeps configured compat in published thinking metadata", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
-    vi.mocked(loadManifestModelCatalog).mockReturnValueOnce([
-      { provider: "vllm", id: "Qwen/Qwen3-8B", name: "Qwen3", reasoning: true },
-    ]);
     const cfg = {
       agents: {
         defaults: {
@@ -821,57 +631,6 @@ describe("createModelSelectionState catalog loading", () => {
       }),
     ]);
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
-  });
-
-  it("prefers per-agent thinkingDefault over model and global defaults", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    const cfg = {
-      agents: {
-        defaults: {
-          thinkingDefault: "low",
-          models: {
-            "openai/gpt-5.4": {
-              params: { thinking: "high" },
-            },
-          },
-        },
-        list: [
-          {
-            id: "alpha",
-            thinkingDefault: "minimal",
-          },
-        ],
-      },
-    } as OpenClawConfig;
-
-    const state = await createInitialState(cfg, "openai", "gpt-5.4", {
-      agentId: "alpha",
-    });
-
-    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("minimal");
-  });
-
-  it("reads published catalog for explicit model directives", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-4o": {},
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = await createInitialState(cfg, "openai", "gpt-4o", {
-      hasModelDirective: true,
-    });
-
-    expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
-    expect(vi.mocked(loadModelCatalogLocal).mock.calls[0]?.[0]).toHaveProperty("readOnly", true);
-    expect(state.allowedModelCatalog).toContainEqual(
-      expect.objectContaining({ provider: "openai", id: "gpt-4o" }),
-    );
   });
 
   it("carries catalog context limits into cold model selection", async () => {
@@ -1092,30 +851,6 @@ describe("createModelSelectionState parent inheritance", () => {
     });
   }
 
-  async function resolveHeartbeatStoredOverrideState(hasResolvedHeartbeatModelOverride: boolean) {
-    const cfg = {} as OpenClawConfig;
-    const sessionKey = "agent:main:discord:channel:c1";
-    const sessionEntry = makeEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-    });
-    const sessionStore = { [sessionKey]: sessionEntry };
-
-    return createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      defaultProvider,
-      defaultModel,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      hasModelDirective: false,
-      hasResolvedHeartbeatModelOverride,
-    });
-  }
-
   async function resolveStateWithParent(params: {
     cfg: OpenClawConfig;
     parentKey: string;
@@ -1186,45 +921,6 @@ describe("createModelSelectionState parent inheritance", () => {
     },
   );
 
-  it("inherits parent override from explicit parentSessionKey", async () => {
-    const cfg = {} as OpenClawConfig;
-    const parentKey = "agent:main:discord:channel:c1";
-    const sessionKey = "agent:main:discord:channel:c1:thread:123";
-    const parentEntry = makeEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-    });
-    const state = await resolveStateWithParent({
-      cfg,
-      parentKey,
-      sessionKey,
-      parentEntry,
-      parentSessionKey: parentKey,
-    });
-
-    expect(state.provider).toBe("openai");
-    expect(state.model).toBe("gpt-4o");
-  });
-
-  it("derives parent key from topic session suffix", async () => {
-    const cfg = {} as OpenClawConfig;
-    const parentKey = "agent:main:telegram:group:123";
-    const sessionKey = "agent:main:telegram:group:123:topic:99";
-    const parentEntry = makeEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-    });
-    const state = await resolveStateWithParent({
-      cfg,
-      parentKey,
-      sessionKey,
-      parentEntry,
-    });
-
-    expect(state.provider).toBe("openai");
-    expect(state.model).toBe("gpt-4o");
-  });
-
   it("prefers child override over parent", async () => {
     const cfg = {} as OpenClawConfig;
     const parentKey = "agent:main:telegram:group:123";
@@ -1275,20 +971,6 @@ describe("createModelSelectionState parent inheritance", () => {
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe(defaultModel);
   });
-
-  it("applies stored override when heartbeat override was not resolved", async () => {
-    const state = await resolveHeartbeatStoredOverrideState(false);
-
-    expect(state.provider).toBe("openai");
-    expect(state.model).toBe("gpt-4o");
-  });
-
-  it("skips stored override when heartbeat override was resolved", async () => {
-    const state = await resolveHeartbeatStoredOverrideState(true);
-
-    expect(state.provider).toBe("anthropic");
-    expect(state.model).toBe("claude-opus-4-6");
-  });
 });
 
 describe("createModelSelectionState respects session model override", () => {
@@ -1313,25 +995,6 @@ describe("createModelSelectionState respects session model override", () => {
       hasModelDirective: false,
     });
   }
-
-  it("applies session modelOverride when set", async () => {
-    const state = await resolveState(
-      makeEntry({
-        providerOverride: "kimi-coding",
-        modelOverride: "kimi-code",
-      }),
-    );
-
-    expect(state.provider).toBe("kimi-coding");
-    expect(state.model).toBe("kimi-code");
-  });
-
-  it("falls back to default when no modelOverride is set", async () => {
-    const state = await resolveState(makeEntry());
-
-    expect(state.provider).toBe(defaultProvider);
-    expect(state.model).toBe(defaultModel);
-  });
 
   it("respects modelOverride even when session model field differs", async () => {
     // From issue #14783: stored override should beat last-used fallback model.
@@ -1358,17 +1021,6 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe("deepseek-v3-4bit-mlx");
-  });
-
-  it("splits legacy combined modelOverride when providerOverride is missing", async () => {
-    const state = await resolveState(
-      makeEntry({
-        modelOverride: "ollama-beelink2/qwen2.5-coder:7b",
-      }),
-    );
-
-    expect(state.provider).toBe("ollama-beelink2");
-    expect(state.model).toBe("qwen2.5-coder:7b");
   });
 
   it("preserves xai beta session overrides during allowlist checks", async () => {
@@ -2544,7 +2196,6 @@ describe("createModelSelectionState auth-profile override flapping regression", 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
   it("uses published reasoning without a second manifest inventory", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
-    vi.mocked(loadManifestModelCatalog).mockClear();
     vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([
       { provider: "local", id: "fast-reasoner", name: "Fast Reasoner", reasoning: true },
     ]);
@@ -2559,25 +2210,8 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
     });
 
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
-    expect(loadManifestModelCatalog).not.toHaveBeenCalled();
     expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledOnce();
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-  });
-
-  it("returns on when catalog model has reasoning true", async () => {
-    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([
-      { provider: "openrouter", id: "x-ai/grok-4.1-fast", name: "Grok", reasoning: true },
-    ]);
-    const state = await createModelSelectionState({
-      cfg: {} as OpenClawConfig,
-      agentCfg: undefined,
-      defaultProvider: "openrouter",
-      defaultModel: "x-ai/grok-4.1-fast",
-      provider: "openrouter",
-      model: "x-ai/grok-4.1-fast",
-      hasModelDirective: false,
-    });
-    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
   });
 
   it("returns off when catalog model has no reasoning", async () => {

@@ -81,11 +81,11 @@ own permissions on the Gateway host. OpenClaw does not claim to enforce its
 optional tool restrictions inside that agent. Other chats and global settings
 stay unchanged, and tools hosted by OpenClaw retain their existing policy.
 
-Declining changes nothing. Confirmation preserves the draft and never sends or
-replays it; submit the message after reviewing the new permissions. Consent is
-not inherited by another chat and is cleared when the session resets or the
-selected runtime changes. Older hosts that do not recognize consent retain
-their previous restriction checks.
+Declining changes nothing. After a refused send, confirmation saves the permissions
+and retries that message once, including a chat's first message.
+Selection-only confirmation does not send the draft. Consent is not inherited by
+another chat and is cleared when the session resets or the selected runtime changes.
+Older hosts that do not recognize consent retain their previous restriction checks.
 
 Required sandboxes, required workspace boundaries, and incompatible remote
 execution placement cannot be waived by this confirmation. A restricted user

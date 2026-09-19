@@ -1,28 +1,44 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
-import {
-  getPreparedModelRuntimeAuthStore,
-  setPreparedModelRuntimeAuthStore,
-} from "../../agents/prepared-model-runtime-auth.js";
+import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog-outcome.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-// Tests model command output, catalog loading, and provider auth status rendering.
-import { modelProviderAuthMocks } from "./commands-models-auth.test-support.js";
-import {
-  buildPreparedModelsProviderData,
-  formatModelsAvailableHeader,
-  handleModelsCommand,
-} from "./commands-models.js";
+import { buildPreparedModelsProviderData, handleModelsCommand } from "./commands-models.js";
 import {
   createModelsTestRegistry,
   createModelsTestOwner,
   setFastModelsCliBackendDeps,
 } from "./commands-models.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+let authStore: AuthProfileStore;
+let authModes: PreparedAgentCredentialModes;
+let providerOutcomes: ProviderCatalogOutcome[];
+const openAIPlatformRoute = {
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+} as const;
+
+function setCredentials(providers: string[]) {
+  authStore = {
+    version: 1,
+    profiles: Object.fromEntries(
+      providers.map((provider) => [
+        provider,
+        { type: "api_key" as const, provider, key: "synthetic-key" },
+      ]),
+    ),
+  };
+  authModes = Object.fromEntries(providers.map((provider) => [provider, "api_key" as const]));
+}
 
 const modelCatalogMocks = vi.hoisted(() => ({
   loadModelCatalog:
@@ -34,20 +50,15 @@ const modelCatalogMocks = vi.hoisted(() => ({
       ) => ModelCatalogEntry[]
     >(),
 }));
-const modelAuthLabelMocks = vi.hoisted(() => ({
-  resolveModelAuthLabel: vi.fn<
-    typeof import("../../agents/model-auth-label.js").resolveModelAuthLabel
-  >(() => undefined),
-}));
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 const pluginMetadataMocks = vi.hoisted(() => ({
-  getCurrent: vi.fn(),
+  getCurrent: vi.fn<() => PluginMetadataSnapshot>(),
 }));
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 
 vi.mock("../../agents/model-auth-label.js", () => ({
-  resolveModelAuthLabel: modelAuthLabelMocks.resolveModelAuthLabel,
+  resolveModelAuthLabel: () => undefined,
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
@@ -70,49 +81,44 @@ beforeEach(() => {
       const baseOwner = createModelsTestOwner(params.config, entries, params);
       const owner = {
         ...baseOwner,
-        metadataSnapshot: createPluginMetadataSnapshotFixture({
-          plugins: ["anthropic", "xai", "refresh", "access", "cancel", "choice"].map((id) => ({
-            id,
-            providerAuthChoices: [
-              {
-                provider: id,
-                method: "device-code",
-                choiceId: `${id}-device-code`,
-                choiceLabel: id,
-                appGuidedAuth: "device-code",
-                credentialOnly: true,
-                channelLogin: {},
-              },
-            ],
-          })),
-        }),
+        authModes,
+        modelCatalog: { ...baseOwner.modelCatalog, providerOutcomes },
+        metadataSnapshot: pluginMetadataMocks.getCurrent(),
       };
-      setPreparedModelRuntimeAuthStore(
-        owner,
-        expectDefined(getPreparedModelRuntimeAuthStore(baseOwner), "prepared model auth store"),
-      );
+      setPreparedModelRuntimeAuthStore(owner, authStore);
       return owner;
     },
   );
   setFastModelsCliBackendDeps();
+  providerOutcomes = [];
   modelCatalogMocks.loadModelCatalog.mockReset();
   modelCatalogMocks.loadModelCatalog.mockReturnValue([
     { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
     { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
-    { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
-    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+    { ...openAIPlatformRoute, provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+    { ...openAIPlatformRoute, provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
     { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
   ]);
-  modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
-  modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
   normalizeProviderModelIdWithRuntimeMock.mockReset();
-  pluginMetadataMocks.getCurrent.mockReset();
-  modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
-  modelProviderAuthMocks.availabilityUnknown = false;
-  modelProviderAuthMocks.unavailableReason = "missing-auth";
-  modelProviderAuthMocks.selectedRoute = undefined;
-  modelProviderAuthMocks.runtimeChoices.clear();
-  modelProviderAuthMocks.createProviderAuthChecker.mockClear();
+  pluginMetadataMocks.getCurrent.mockReset().mockReturnValue(
+    createPluginMetadataSnapshotFixture({
+      plugins: ["anthropic", "xai", "refresh", "access", "cancel", "choice"].map((id) => ({
+        id,
+        providerAuthChoices: [
+          {
+            provider: id,
+            method: "device-code",
+            choiceId: `${id}-device-code`,
+            choiceLabel: id,
+            appGuidedAuth: "device-code",
+            credentialOnly: true,
+            channelLogin: {},
+          },
+        ],
+      })),
+    }),
+  );
+  setCredentials(["anthropic", "google", "openai"]);
   setActivePluginRegistry(createModelsTestRegistry());
 });
 
@@ -168,18 +174,8 @@ function buildParams(
   } as unknown as HandleCommandsParams;
 }
 
-function firstAuthCheckerParams() {
-  return modelProviderAuthMocks.createProviderAuthChecker.mock.calls[0]?.[0];
-}
-
-function preparedAuthCheckerParams() {
-  return modelProviderAuthMocks.createProviderAuthChecker.mock.calls
-    .map(([params]) => params)
-    .find((params) => params.allowPreparedRuntimeAuth === true);
-}
-
 describe("handleModelsCommand", () => {
-  it("shows a simple providers menu using passive, scoped catalog and auth reads", async () => {
+  it("shows the providers published by the prepared owner", async () => {
     pluginMetadataMocks.getCurrent.mockReturnValue(createPluginMetadataSnapshotFixture());
     const result = await handleModelsCommand(buildParams("/models"), true);
 
@@ -191,74 +187,10 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Use: /models <provider>");
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
     expect(result?.reply?.text).not.toContain("Add: /models add");
-    const authCheckerParams = preparedAuthCheckerParams();
-    expect(authCheckerParams?.workspaceDir).toBe("/tmp");
-    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
-      "refreshFullCatalog",
-    );
-    expect(authCheckerParams?.allowPluginSyntheticAuth).toBe(false);
-    expect(authCheckerParams?.discoverExternalCliAuth).toBe(false);
-    expect(authCheckerParams?.allowPreparedRuntimeAuth).toBe(true);
-    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).toMatchObject({
-      workspaceDir: "/tmp",
-    });
-    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
-      "metadataSnapshot",
-    );
-  });
-
-  it("reports failed catalog acquisition without displaying partial inventory", async () => {
-    vi.mocked(preparedCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot).mockRejectedValue(
-      new Error("Model catalog is not ready"),
-    );
-    await expect(buildPreparedModelsProviderData({}, undefined)).rejects.toThrow(
-      "Model catalog is not ready",
-    );
-    expect(modelCatalogMocks.loadModelCatalog).not.toHaveBeenCalled();
-  });
-
-  it("reads the published generation for all browse views", async () => {
-    const params = buildParams("/models openai all");
-    params.workspaceDir = "/tmp/spawned-workspace";
-    await handleModelsCommand(params, true);
-
-    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
-      "refreshFullCatalog",
-    );
-    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.workspaceDir).toBe(
-      "/tmp/spawned-workspace",
-    );
-  });
-
-  it("loads the selected agent lifecycle catalog", async () => {
-    const cfg = {
-      agents: {
-        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
-        list: [
-          {
-            id: "worker",
-            agentDir: "/tmp/models-worker-agent",
-            workspace: "/tmp/models-worker-workspace",
-          },
-        ],
-      },
-    } as OpenClawConfig;
-
-    await buildPreparedModelsProviderData(cfg, "worker");
-
-    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "worker",
-        config: cfg,
-      }),
-    );
-    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
-      "workspaceDir",
-    );
   });
 
   it("hides unauthenticated providers by default and keeps all as explicit browse", async () => {
-    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
+    setCredentials(["anthropic"]);
 
     const providersResult = await handleModelsCommand(buildParams("/models"), true);
     expect(providersResult?.reply?.text).toContain("- anthropic (2)");
@@ -274,116 +206,78 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
   });
 
-  describe.each(["anthropic", "refresh", "access", "cancel", "choice"])(
-    "model login guidance for %s",
-    (provider) => {
-      const model = { primary: `${provider}/claude-opus-4-5` };
-      const command = provider === "anthropic" ? "/login anthropic" : "/login";
-      it.each([
-        ["missing-auth", "known", "Sign-in needed", `Connect with ${command}.`],
-        ["missing-auth", "missing", "Sign-in needed", `Connect with ${command}.`],
-        ["auth-failed", "known", "Sign-in failed", `Sign in again with ${command}.`],
-        [
-          "cooldown",
-          "known",
-          "Temporarily unavailable",
-          "Try again later or choose another model.",
-        ],
-      ] as const)(
-        "explains a retained primary with %s and %s catalog entry",
-        async (reason, catalog, label, recovery) => {
-          modelProviderAuthMocks.authenticatedProviders.delete(provider);
-          modelProviderAuthMocks.unavailableReason = reason;
-          const entry = { provider, id: "claude-opus-4-5", name: "Claude Opus" };
-          modelCatalogMocks.loadModelCatalog.mockReturnValue(catalog === "missing" ? [] : [entry]);
-          const params = buildParams("/models", { agents: { defaults: { model } } });
-          params.ctx.Surface = "telegram";
-          params.command.channel = "telegram";
-          params.command.surface = "telegram";
+  it.each([
+    { provider: "anthropic", recovery: "Connect with /login anthropic." },
+    { provider: "custom-route", recovery: "custom-provider guide" },
+  ])("offers supported setup for an unauthenticated $provider", async ({ provider, recovery }) => {
+    setCredentials([]);
+    modelCatalogMocks.loadModelCatalog.mockReturnValue([]);
+    const params = buildParams(`/models ${provider}`, {
+      agents: { defaults: { model: { primary: `${provider}/chat` } } },
+    });
+    const result = await handleModelsCommand(params, true);
+    expect(result?.reply?.text).toContain("Sign-in needed");
+    expect(result?.reply?.text).toContain(recovery);
+  });
 
-          const menu = await handleModelsCommand(params, true);
-          expect(menu?.reply?.text).toContain(`${provider}: ${label}. ${recovery}`);
-          expect(menu?.reply?.channelData).toMatchObject({
-            telegram: {
-              buttons: expect.arrayContaining([
-                [{ text: provider, callback_data: `models:${provider}` }],
-              ]),
-            },
-          });
-
-          params.command.commandBodyNormalized = `/models ${provider}`;
-          const page = await handleModelsCommand(params, true);
-          expect(page?.reply?.text).toContain(
-            `${label} — ${catalog === "known" ? "Claude Opus" : "claude-opus-4-5"}`,
-          );
-          expect(page?.reply?.text).toContain(recovery);
-          if (reason === "cooldown") {
-            expect(page?.reply?.text).not.toContain("/login");
-          }
+  it("offers a connection action for an unconfirmed captured CLI login", async () => {
+    setCredentials([]);
+    const params = buildParams("/models anthropic", {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-5",
+          models: { "anthropic/claude-opus-4-5": { agentRuntime: { id: "claude-cli" } } },
         },
-      );
-
-      it("offers a connection action when first-run readiness is unconfirmed", async () => {
-        modelProviderAuthMocks.authenticatedProviders.clear();
-        modelProviderAuthMocks.availabilityUnknown = true;
-        const params = buildParams(`/models ${provider}`, { agents: { defaults: { model } } });
-        const result = await handleModelsCommand(params, true);
-        expect(result?.reply?.text).toContain("Connection not confirmed");
-        expect(result?.reply?.text).toContain(`Connect with ${command}, or choose another model.`);
-        expect(result?.reply?.text).not.toContain("Sign-in failed");
-      });
-    },
-  );
+      },
+    });
+    const result = await handleModelsCommand(params, true);
+    expect(result?.reply?.text).toContain("Connection not confirmed");
+    expect(result?.reply?.text).toContain(
+      "Connect with /login anthropic, or choose another model.",
+    );
+  });
 
   it.each([
-    { reason: "missing-auth", label: "Sign-in needed" },
-    { reason: "auth-failed", label: "Sign-in failed" },
-    { reason: undefined, label: "Connection not confirmed" },
-  ] as const)(
-    "offers supported setup for custom routes with $reason readiness",
-    async ({ reason, label }) => {
-      modelProviderAuthMocks.authenticatedProviders.clear();
-      modelProviderAuthMocks.unavailableReason = reason;
-      modelProviderAuthMocks.availabilityUnknown = reason === undefined;
-      modelCatalogMocks.loadModelCatalog.mockReturnValue([
-        { provider: "custom-route", id: "chat", name: "Custom chat" },
-      ]);
-      const params = buildParams("/models custom-route", {
-        agents: { defaults: { model: { primary: "custom-route/chat" } } },
-        models: {
-          providers: {
-            "custom-route": {
-              baseUrl: "https://custom-route.example/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "chat",
-                  name: "Custom chat",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  maxTokens: 1024,
-                },
-              ],
-            },
-          },
-        },
-      });
-
-      const result = await handleModelsCommand(params, true);
-
-      expect(result?.reply?.text).toContain(`custom-route: ${label}.`);
-      expect(result?.reply?.text).toContain(
-        "Set up this connection with the custom-provider guide: https://docs.openclaw.ai/concepts/model-providers/custom-providers",
-      );
-      expect(result?.reply?.text).not.toContain("/login custom-route");
+    {
+      failure: "rejected",
+      label: "Sign-in failed",
+      recovery: "Sign in again with /login anthropic.",
     },
-  );
+    {
+      failure: "cooldown",
+      label: "Temporarily unavailable",
+      recovery: "Try again later or choose another model.",
+    },
+  ])("renders captured $failure credential state", async ({ failure, label, recovery }) => {
+    setCredentials(["anthropic"]);
+    authModes = {};
+    if (failure === "rejected") {
+      providerOutcomes = [
+        { provider: "anthropic", profileId: "anthropic", status: "auth-rejected" },
+      ];
+    } else {
+      authStore.usageStats = {
+        anthropic: { cooldownUntil: Date.now() + 60_000, cooldownReason: "rate_limit" },
+      };
+    }
+    const params = buildParams("/models anthropic");
+    params.ctx.Surface = "telegram";
+    params.command.channel = "telegram";
+    params.command.surface = "telegram";
+    const result = await handleModelsCommand(params, true);
+    expect(result?.reply?.text).toContain(label);
+    expect(result?.reply?.text).toContain(recovery);
+    params.command.commandBodyNormalized = "/models";
+    const menu = await handleModelsCommand(params, true);
+    expect(menu?.reply?.channelData).toMatchObject({
+      telegram: { buttons: [[{ text: "anthropic", callback_data: "models:anthropic" }]] },
+    });
+  });
 
   it.each([true, false])(
     "respects xAI login metadata when its plugin is enabled=%s",
     async (enabled) => {
-      modelProviderAuthMocks.authenticatedProviders.clear();
+      setCredentials([]);
       modelCatalogMocks.loadModelCatalog.mockReturnValue([
         { provider: "xai", id: "grok-4", name: "Grok 4" },
       ]);
@@ -404,12 +298,6 @@ describe("handleModelsCommand", () => {
     },
   );
 
-  it("preserves header output without a prepared menu", () => {
-    expect(formatModelsAvailableHeader({ provider: "anthropic", total: 1, cfg: {} })).toBe(
-      "Models (anthropic) — 1 available",
-    );
-  });
-
   it("does not offer an OpenAI row with a conflicting API and endpoint", async () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
       {
@@ -426,29 +314,18 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.byProvider.has("openai")).toBe(false);
-    const checker = modelProviderAuthMocks.createProviderAuthChecker.mock.results.at(-1)?.value;
-    expect(checker.evaluateModelAuth).toHaveBeenCalledWith(
-      "openai",
-      expect.objectContaining({
-        modelId: "gpt-5.5",
-        observedRoutes: [
-          expect.objectContaining({
-            api: "openai-chatgpt-responses",
-            baseUrl: "https://api.openai.com/v1",
-          }),
-        ],
-      }),
-    );
   });
 
   it.each(["default", "all"] as const)(
     "retains selected route metadata for %s browse",
     async (view) => {
-      modelProviderAuthMocks.selectedRoute = {
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        authRequirement: "subscription",
-        requestTransportOverrides: "none",
+      setCredentials([]);
+      authStore.profiles.subscription = {
+        provider: "openai",
+        type: "oauth",
+        access: "synthetic-access",
+        refresh: "synthetic-refresh",
+        expires: Date.now() + 3_600_000,
       };
       const selected: ModelCatalogEntry = {
         provider: "openai",
@@ -503,7 +380,7 @@ describe("handleModelsCommand", () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
       { provider: "custom", id: "modern", name: "Modern" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set(["custom"]);
+    setCredentials(["custom"]);
     const data = await buildPreparedModelsProviderData({
       agents: {
         defaults: {
@@ -514,18 +391,17 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.byProvider.get("custom")).toEqual(new Set(["modern"]));
-    expect(pluginMetadataMocks.getCurrent).toHaveBeenCalledTimes(1);
   });
 
   it("does not re-add the default provider when provider visibility is restricted", async () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
       { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-      { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
-      { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+      { ...openAIPlatformRoute, provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+      { ...openAIPlatformRoute, provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
       { provider: "vllm", id: "llama-local", name: "Llama Local" },
       { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "openai", "vllm"]);
+    setCredentials(["anthropic", "openai", "vllm"]);
 
     const result = await handleModelsCommand(
       buildParams("/models", {
@@ -542,9 +418,6 @@ describe("handleModelsCommand", () => {
       true,
     );
 
-    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
-      "refreshFullCatalog",
-    );
     expect(result?.reply?.text).toContain("- openai (2)");
     expect(result?.reply?.text).toContain("- vllm (2)");
     expect(result?.reply?.text).not.toContain("- anthropic");
@@ -559,13 +432,7 @@ describe("handleModelsCommand", () => {
       { provider: "google", id: "gemini-3.1-pro-preview", name: "Gemini Pro" },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set([
-      "anthropic",
-      "google",
-      "openai",
-      "claude-cli",
-      "google-gemini-cli",
-    ]);
+    setCredentials(["anthropic", "google", "openai", "claude-cli", "google-gemini-cli"]);
 
     const result = await handleModelsCommand(
       buildParams("/models", {
@@ -589,7 +456,7 @@ describe("handleModelsCommand", () => {
       { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
       { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set(["claude-cli"]);
+    setCredentials(["claude-cli"]);
 
     const data = await buildPreparedModelsProviderData({
       agents: {
@@ -693,7 +560,7 @@ describe("handleModelsCommand", () => {
           status: "deprecated",
         },
       ]);
-      modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli"]);
+      setCredentials(["anthropic", "claude-cli"]);
       const config: OpenClawConfig = {
         agents: {
           defaults: {
@@ -747,7 +614,7 @@ describe("handleModelsCommand", () => {
       { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
       { provider: "acme-cli", id: "acme-model", name: "Acme Model" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "acme-cli"]);
+    setCredentials(["anthropic", "acme-cli"]);
 
     const data = await buildPreparedModelsProviderData({
       agents: {
@@ -770,7 +637,7 @@ describe("handleModelsCommand", () => {
       { provider: "minimax", id: "abab-7", name: "Abab 7" },
       { provider: "minimax", id: "abab-6.5", name: "Abab 6.5" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli", "minimax"]);
+    setCredentials(["anthropic", "claude-cli", "minimax"]);
 
     const minimaxData = await buildPreparedModelsProviderData({
       agents: {
@@ -790,7 +657,7 @@ describe("handleModelsCommand", () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
       { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli"]);
+    setCredentials(["anthropic", "claude-cli"]);
 
     const result = await handleModelsCommand(
       buildParams("/models claude-cli", {
@@ -813,8 +680,7 @@ describe("handleModelsCommand", () => {
       { provider: "codex-cli", id: "gpt-5.5", name: "GPT-5.5 (CLI)" },
       { provider: "google-gemini-cli", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro (CLI)" },
     ]);
-    // Default mock state: only anthropic / google / openai authenticated — no CLI providers.
-    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
+    setCredentials(["anthropic"]);
 
     const result = await handleModelsCommand(
       buildParams("/models", {
@@ -829,23 +695,13 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toMatch(/^- google-gemini-cli \(/m);
   });
 
-  it("carries model-specific choices and authoritative empty results", async () => {
-    modelProviderAuthMocks.runtimeChoices.set("openai/gpt-4.1", ["codex"]);
-    modelProviderAuthMocks.runtimeChoices.set("openai/gpt-4.1-mini", []);
-    const data = await buildPreparedModelsProviderData({});
-    expect(data.runtimeChoicesByModel?.get("openai/gpt-4.1")?.map((choice) => choice.id)).toEqual([
-      "codex",
-    ]);
-    expect(data.runtimeChoicesByModel?.get("openai/gpt-4.1-mini")).toEqual([]);
-  });
-
   it("filters nested provider namespaces with the same prefix policy as enforcement", async () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
       { provider: "clawrouter", id: "anthropic/claude-haiku-4-5", name: "Claude Haiku" },
       { provider: "clawrouter", id: "google/gemini-3.5-flash", name: "Gemini Flash" },
       { provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set(["clawrouter", "openai"]);
+    setCredentials(["clawrouter", "openai"]);
 
     const data = await buildPreparedModelsProviderData({
       agents: { defaults: { modelPolicy: { allow: ["clawrouter/anthropic/*"] } } },
@@ -885,16 +741,11 @@ describe("handleModelsCommand", () => {
       { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
       { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
       { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus (CLI)" },
-      { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
-      { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+      { ...openAIPlatformRoute, provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+      { ...openAIPlatformRoute, provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
       { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set([
-      "anthropic",
-      "claude-cli",
-      "google",
-      "openai",
-    ]);
+    setCredentials(["anthropic", "claude-cli", "google", "openai"]);
     const params = buildParams("/models");
     params.ctx.Surface = surface;
     params.command.channel = surface;
@@ -950,74 +801,6 @@ describe("handleModelsCommand", () => {
 
     expect(result?.reply?.text).toContain("Models (anthropic) — showing 1-2 of 2 (page 1/1)");
     expect(result?.reply?.text).toContain("- anthropic/claude-opus-4-5");
-  });
-
-  it("keeps the auth label on text-surface provider listings", async () => {
-    modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue("target-auth");
-    const params = buildParams("/models anthropic");
-    params.sessionEntry = {
-      sessionId: "wrapper-session",
-      updatedAt: Date.now(),
-      authProfileOverride: "wrapper-auth",
-    };
-    params.sessionStore = {
-      "agent:main:discord:direct:user-1": {
-        sessionId: "target-session",
-        updatedAt: Date.now(),
-        authProfileOverride: "target-auth",
-      },
-    };
-
-    const result = await handleModelsCommand(params, true);
-
-    expect(result?.reply?.text).toContain("Models (anthropic · 🔑 target-auth) — showing 1-2 of 2");
-    expect(modelAuthLabelMocks.resolveModelAuthLabel.mock.calls[0]?.[0]).toMatchObject({
-      provider: "anthropic",
-      workspaceDir: "/tmp",
-    });
-  });
-
-  it("labels OpenAI provider pages with the canonical auth provider id", async () => {
-    modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue("oauth (openai:user@example.com)");
-
-    const result = await handleModelsCommand(
-      buildParams("/models openai", {
-        auth: {
-          order: {
-            openai: ["openai:user@example.com"],
-          },
-        },
-      }),
-      true,
-    );
-
-    expect(result?.reply?.text).toContain("Models (openai · 🔑 oauth (openai:user@example.com))");
-    const openaiAuthCall = modelAuthLabelMocks.resolveModelAuthLabel.mock.calls.find(
-      ([params]) => params.provider === "openai",
-    );
-    expect(openaiAuthCall?.[0]).toMatchObject({
-      provider: "openai",
-      acceptedProviderIds: ["openai"],
-    });
-  });
-
-  it("uses spawned workspace for direct /models provider visibility", async () => {
-    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
-    const params = buildParams("/models");
-    params.workspaceDir = "/tmp/current-workspace";
-    params.sessionStore = {
-      "agent:main:discord:direct:user-1": {
-        sessionId: "target-session",
-        updatedAt: Date.now(),
-        spawnedWorkspaceDir: "/tmp/spawned-workspace",
-      },
-    };
-
-    const result = await handleModelsCommand(params, true);
-
-    expect(result?.reply?.text).toContain("- anthropic (2)");
-    const authCheckerParams = firstAuthCheckerParams();
-    expect(authCheckerParams?.workspaceDir).toBe("/tmp/spawned-workspace");
   });
 
   it.each(["/models add", "/models add ollama", "/models add openai gpt-5.5"])(

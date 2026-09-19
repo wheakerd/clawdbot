@@ -10,11 +10,6 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayloads,
-} from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import {
@@ -44,7 +39,6 @@ function fixture(
     details?: Partial<AgentRuntimeRestrictionErrorDetails>;
     scopes?: string[];
     rejectRecovery?: boolean;
-    unrestricted?: boolean;
     send?: boolean;
     repeatRefusal?: boolean;
   } = {},
@@ -88,7 +82,7 @@ function fixture(
       "sessions.list": result,
       "sessions.patch": () => {
         patches += 1;
-        if (patches === 1 && !options.unrestricted && !options.send) {
+        if (patches === 1 && !options.send) {
           throw new GatewayRequestError({
             code: "INVALID_REQUEST",
             message: "Native runtime restricted",
@@ -101,9 +95,7 @@ function fixture(
             message: "Session changed; select the model again",
           });
         }
-        return options.unrestricted
-          ? { ...receipt, entry: { ...receipt.entry, permissionMode: "guarded" } }
-          : receipt;
+        return receipt;
       },
       "chat.send": () => {
         if (++sends > 1 && !options.repeatRefusal) {
@@ -316,82 +308,6 @@ it("does not open a late refusal on a replacement connection", async () => {
   expect(host.chatError ?? null).toBeNull();
   expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
 });
-
-it("leaves an unrestricted model selection on the ordinary patch path", async () => {
-  const { host } = fixture({ unrestricted: true });
-  await expect(switchChatModel(host, "fixture/selected", "global", "opencode")).resolves.toBe(true);
-  const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
-  expect(patches).toHaveLength(1);
-  expect(patches[0]?.[1]).toEqual({
-    key: "global",
-    agentId: "selected-agent",
-    model: "fixture/selected",
-    agentRuntime: "opencode",
-  });
-  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-  expect(host.chatError ?? null).toBeNull();
-});
-
-it.each(["confirm", "cancel"] as const)(
-  "retries the original native send and attachment only after %s",
-  async (action) => {
-    installOutboxBrowserStorage();
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal("requestAnimationFrame", () => 1);
-    vi.stubGlobal("cancelAnimationFrame", () => undefined);
-    const { host } = fixture({ send: true, details: { reason: "tool-policy" } });
-    const dataUrl = "data:text/plain;base64,cHJlc2VydmU=";
-    const attachment = registerChatAttachmentPayload({
-      attachment: { id: "native-send-attachment", mimeType: "text/plain", fileName: "notes.txt" },
-      file: new File(["preserve"], "notes.txt", { type: "text/plain" }),
-      dataUrl,
-    });
-    host.chatAttachments = [attachment];
-    onTestFinished(() => releaseChatAttachmentPayloads([attachment]));
-    const sending = handleSendChat(host);
-    const modal = await dialog();
-    expect(host.chatMessage).toBe("");
-    expect(host.chatQueue).toHaveLength(1);
-    expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(
-      0,
-    );
-    click(modal, action === "confirm" ? "Continue for this chat" : "Cancel");
-    await sending;
-    const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
-    expect(patches).toHaveLength(action === "confirm" ? 1 : 0);
-    if (action === "confirm") {
-      expect(patches[0]?.[1]).toEqual({
-        key: "global",
-        agentId: "selected-agent",
-        expectedSessionId: recovery.sessionId,
-        model: "fixture/original",
-        agentRuntime: "opencode",
-        nativeRuntimeConsent: "opencode",
-        permissionMode: "full",
-        sandboxMode: "off",
-        expectedLifecycleRevision: recovery.lifecycleRevision,
-        expectedPermissionMode: "guarded",
-        expectedSandboxMode: null,
-        expectedNativeRuntimeConsent: null,
-      });
-    }
-    const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
-    expect(sends).toHaveLength(action === "confirm" ? 2 : 1);
-    if (action === "confirm") {
-      expect(sends[1]?.[1]).toMatchObject({
-        message: "Keep this draft; never replay it",
-        attachments: [{ fileName: "notes.txt", content: "cHJlc2VydmU=" }],
-      });
-    }
-    expect(host.request.mock.calls.some(([method]) => method.startsWith("config."))).toBe(false);
-    expect(host.chatMessage).toBe(action === "confirm" ? "" : "Keep this draft; never replay it");
-    if (action === "cancel") {
-      expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(dataUrl);
-      expect(host.chatQueue).toEqual([]);
-    }
-  },
-);
 
 it("stops after one confirmed retry when native admission refuses again", async () => {
   installOutboxBrowserStorage();

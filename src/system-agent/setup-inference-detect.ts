@@ -34,7 +34,6 @@ import {
   type DetectSetupInferenceDeps,
   type SetupInferenceCandidate,
   type SetupInferenceDetection,
-  type SetupInferenceUnavailableCandidate,
   invalidSetupConfigError,
   setupInferenceLog,
   resolveCandidatePresentation,
@@ -334,7 +333,6 @@ async function discoverSetupInference(
     (await import("../commands/onboard-inference.js")).detectInferenceBackends;
   const detected = await detect({ config: cfg, agentId: targetAgentId });
   signal.throwIfAborted();
-  const unavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const configuredModel = detected.find(
     (candidate) => candidate.kind === "existing-model",
   )?.modelRef;
@@ -378,7 +376,6 @@ async function discoverSetupInference(
   onPartial({
     ...partial,
     candidates: [...offeredCandidates],
-    unavailableCandidates,
     ...(configuredModel ? { configuredModel } : {}),
     setupComplete: Boolean(configuredModel),
   });
@@ -455,7 +452,6 @@ async function discoverSetupInference(
   return {
     ...partial,
     candidates: offeredCandidates,
-    unavailableCandidates,
     ...(configuredModel ? { configuredModel } : {}),
     setupComplete: Boolean(configuredModel),
   };

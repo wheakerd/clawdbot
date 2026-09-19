@@ -17,6 +17,7 @@ import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import {
+  modelProviderConfigBusy,
   modelProviderConfigMutationBlockedReason,
   modelProviderErrorMessage,
   runModelProviderConfigMutation,
@@ -43,7 +44,6 @@ const INSTALLATION_STATUS = {
 type InstalledAgentsOptions = {
   gateway: GatewayPageController;
   getContext: () => ApplicationContext;
-  isConfigBusy: () => boolean;
 };
 
 export class InstalledAgentsController {
@@ -129,7 +129,7 @@ export class InstalledAgentsController {
     if (
       !scope ||
       this.blockedReason() ||
-      this.options.isConfigBusy() ||
+      modelProviderConfigBusy(this.options.getContext()) ||
       this.pending.has(agent.id)
     ) {
       return false;
@@ -140,7 +140,6 @@ export class InstalledAgentsController {
     void runModelProviderConfigMutation(
       {
         runtimeConfig: this.options.getContext().runtimeConfig,
-        agentEpoch: 0,
         isCurrentClient: isCurrent,
         isCurrentAgent: () => true,
         setBusy: (busy) => {
@@ -224,7 +223,7 @@ export class InstalledAgentsController {
       return nothing;
     }
     const blockedReason = this.blockedReason();
-    const blocked = blockedReason !== null || this.options.isConfigBusy();
+    const blocked = blockedReason !== null || modelProviderConfigBusy(this.options.getContext());
     const config = currentConfigObject(this.options.getContext().runtimeConfig.state);
     const entries = asRecord(asRecord(config?.plugins)?.entries);
     const nativeConfig = asRecord(asRecord(entries?.acpx)?.config);

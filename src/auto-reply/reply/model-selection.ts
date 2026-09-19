@@ -88,7 +88,6 @@ type ModelSelectionState = {
   hasConfiguredThinkingDefault?: boolean;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: (selection?: ThinkingDefaultSelection) => Promise<"on" | "off">;
-  needsModelCatalog: boolean;
   modelContextWindow?: number;
   modelContextTokens?: number;
 };
@@ -220,14 +219,16 @@ export async function createModelSelectionState(params: {
     agentId: params.agentId,
     sessionKey,
   });
-  const normalizedCurrentSelection = { provider, model };
-  const resolveDirectStoredOverrideState = (
+  const directOverrideRef = directStoredModelOverride
+    ? {
+        provider: directStoredModelOverride.provider ?? defaultProvider,
+        model: directStoredModelOverride.model,
+      }
+    : undefined;
+  const isStaleStoredOverride = (
     entry: SessionEntry | undefined,
     override: storedModelOverrides.StoredModelOverride | null,
   ) => {
-    const normalizedOverride = override
-      ? { provider: override.provider ?? defaultProvider, model: override.model }
-      : null;
     const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
       isHeartbeat: params.isHeartbeat,
       hasResolvedHeartbeatModelOverride: params.hasResolvedHeartbeatModelOverride,
@@ -250,19 +251,15 @@ export async function createModelSelectionState(params: {
     const staleLegacyAutoFallbackWithoutOrigin =
       override?.source === "session" &&
       hasLegacyAutoFallbackWithoutOrigin(entry) &&
-      normalizedOverride !== null &&
-      (normalizedCurrentSelection.provider !== normalizedOverride.provider ||
-        normalizedCurrentSelection.model !== normalizedOverride.model);
-    return {
-      normalizedOverride,
-      stale:
-        staleHeartbeatAutoFallbackOverride ||
-        staleLegacyOpenAICodexAutoOverride ||
-        staleLegacyAutoFallbackWithoutOrigin,
-    };
+      (params.provider !== (override.provider ?? defaultProvider) ||
+        params.model !== override.model);
+    return (
+      staleHeartbeatAutoFallbackOverride ||
+      staleLegacyOpenAICodexAutoOverride ||
+      staleLegacyAutoFallbackWithoutOrigin
+    );
   };
-  const { normalizedOverride: normalizedDirectOverride, stale: staleDirectStoredOverride } =
-    resolveDirectStoredOverrideState(sessionEntry, directStoredModelOverride);
+  const staleDirectStoredOverride = isStaleStoredOverride(sessionEntry, directStoredModelOverride);
 
   if (needsModelCatalog) {
     const catalogSnapshot = await loadRuntimeCatalogSnapshot();
@@ -304,20 +301,10 @@ export async function createModelSelectionState(params: {
     );
   }
 
-  if (
-    sessionEntry &&
-    sessionStore &&
-    sessionKey &&
-    directStoredModelOverride &&
-    !hasOneTurnModelOverride
-  ) {
-    const normalizedOverride = {
-      ...directStoredModelOverride,
-      provider: directStoredModelOverride.provider ?? defaultProvider,
-    };
-    const key = buildModelCatalogRef(normalizedOverride.provider, normalizedOverride.model);
+  if (sessionEntry && sessionStore && sessionKey && directOverrideRef && !hasOneTurnModelOverride) {
+    const key = buildModelCatalogRef(directOverrideRef.provider, directOverrideRef.model);
     const overrideAllowed =
-      hasSessionAutoModelSelection(sessionEntry) || visibilityPolicy.allows(normalizedOverride);
+      hasSessionAutoModelSelection(sessionEntry) || visibilityPolicy.allows(directOverrideRef);
     // A degraded catalog cannot prove a pin is disallowed. Preserve it while the turn falls back
     // to primary, then re-evaluate after discovery recovers; config-proven stale pins still reset.
     const shouldResetOverride =
@@ -367,14 +354,13 @@ export async function createModelSelectionState(params: {
       }
     }
   }
-  if (staleDirectStoredOverride) {
-    if (
-      normalizedCurrentSelection.provider === normalizedDirectOverride?.provider &&
-      normalizedCurrentSelection.model === normalizedDirectOverride.model
-    ) {
-      provider = primaryProvider;
-      model = primaryModel;
-    }
+  if (
+    staleDirectStoredOverride &&
+    params.provider === directOverrideRef?.provider &&
+    params.model === directOverrideRef.model
+  ) {
+    provider = primaryProvider;
+    model = primaryModel;
   }
 
   const storedOverride = storedModelOverrides.resolveStoredModelOverrideCore({
@@ -399,7 +385,7 @@ export async function createModelSelectionState(params: {
     !skipStoredOverride &&
     storedOverride?.source === "session" &&
     hasSessionAutoModelSelection(sessionEntry) &&
-    !resolveDirectStoredOverrideState(sessionEntry, storedOverride).stale;
+    !isStaleStoredOverride(sessionEntry, storedOverride);
 
   if (storedOverride?.model && !skipStoredOverride) {
     const storedProvider = storedOverride.provider || defaultProvider;
@@ -630,7 +616,6 @@ export async function createModelSelectionState(params: {
     resolveDefaultThinkingLevel,
     hasConfiguredThinkingDefault,
     resolveDefaultReasoningLevel,
-    needsModelCatalog,
     modelContextWindow: selectedCatalogEntry?.contextWindow,
     modelContextTokens: selectedCatalogEntry?.contextTokens,
   };

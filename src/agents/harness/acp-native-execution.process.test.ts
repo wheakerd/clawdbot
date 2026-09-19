@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it, vi } from "vitest";
+import { waitForFixtureFile } from "../../../test/helpers/process-wait.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   buildExternalRunFailureReply,
@@ -166,15 +167,21 @@ it.each(["revoke", "active"] as const)(
       let run: ReturnType<typeof runAgentHarnessAttempt> | undefined;
       try {
         const runtime = await native.service.getRuntime(native.context);
-        const handle = await runtime.ensureSession({
+        const nativeTarget = {
           agentId: "main",
           sessionKey: `agent:main:harness:acp-opencode:${attempt.input.sessionId}`,
           agent: "opencode",
           cwd: state.workspaceDir,
-          mode: "persistent",
+          mode: "persistent" as const,
+          bridgeSession: {
+            agentId: "main",
+            sessionKey: attempt.target.sessionKey,
+            native: true,
+          },
           model: "initial",
           modelExplicit: true,
-        });
+        };
+        const handle = await runtime.ensureSession(nativeTarget);
         const getStatus = runtime.getStatus.bind(runtime);
         const initial = await getStatus({ handle });
         expect(initial.models?.currentModelId).toBe("initial");
@@ -182,11 +189,11 @@ it.each(["revoke", "active"] as const)(
         const controls = vi.spyOn(runtime, "setModel");
         holdingControl = runtime.setMode({ handle, mode: "review" });
         void holdingControl.catch(() => {});
-        await expect
-          .poll(async () =>
-            fs.readFile(path.join(native.peerDirectory, "mode-control-entered"), "utf8"),
-          )
-          .toBe("review");
+        await waitForFixtureFile(
+          path.join(native.peerDirectory, "mode-control-entered"),
+          holdingControl,
+          "review",
+        );
         const require = createRequire(
           new URL("../../../extensions/acpx/package.json", import.meta.url),
         );
@@ -200,8 +207,8 @@ it.each(["revoke", "active"] as const)(
         void run.catch(() => {});
         await Promise.race([
           waitForBoundary(),
-          run.then(() => {
-            throw new Error("Attempt ended before native control boundary");
+          run.then((result) => {
+            throw new Error("Attempt ended before native control boundary", { cause: result });
           }),
         ]);
         expect(controls).toHaveBeenCalledOnce();
@@ -274,9 +281,7 @@ it.each([
       const run = runAgentHarnessAttempt(attempt.input);
       void run.catch(() => {});
       try {
-        await expect
-          .poll(() => fs.readFile(path.join(native.peerDirectory, "session-new-entered"), "utf8"))
-          .toEqual(expect.any(String));
+        await waitForFixtureFile(path.join(native.peerDirectory, "session-new-entered"), run);
         const transcriptBeforeRelease = await readVisibleSessionTranscriptMessageEntries(
           attempt.target,
         );

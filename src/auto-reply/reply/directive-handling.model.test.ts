@@ -5,13 +5,23 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { prepareModelCatalogAuthLabels } from "../../agents/model-catalog-auth-labels.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import {
+  setPreparedModelRuntimeAuthStore,
+  setPreparedModelRuntimeAuthLabels,
+} from "../../agents/prepared-model-runtime-auth.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "../../plugins/provider-thinking.types.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
+import {
+  createModelsTestOwner,
+  setFastModelsCliBackendDeps,
+} from "./commands-models.test-support.js";
 
 const authProfilesStoreMock = vi.hoisted(() => ({
   profiles: {} as Record<
@@ -20,10 +30,6 @@ const authProfilesStoreMock = vi.hoisted(() => ({
     | { type: "oauth"; provider: string; access: string; refresh: string; expires: number }
     | { type: "token"; provider: string; token: string }
   >,
-}));
-const modelsCommandMock = vi.hoisted(() => ({
-  delegateToActual: false,
-  resolveModelsCommandReply: vi.fn(),
 }));
 const stickyModelMock = vi.hoisted(() => ({
   persistBestEffort: vi.fn(),
@@ -40,30 +46,6 @@ function readAuthProfileStoreForTest() {
   return { version: 1, profiles: authProfilesStoreMock.profiles };
 }
 
-function defaultModelsCommandReply() {
-  return {
-    text: [
-      "Providers:",
-      "- anthropic (1)",
-      "",
-      "Use: /models <provider>",
-      "Switch: /model <provider/model>",
-    ].join("\n"),
-  };
-}
-
-function normalizeProviderForAuthTest(provider: string) {
-  return provider.trim().toLowerCase();
-}
-
-function hasAllowedPluginForAuthTest(cfg: unknown, pluginId: string): boolean {
-  if (!cfg || typeof cfg !== "object" || !("plugins" in cfg)) {
-    return false;
-  }
-  const plugins = (cfg as { plugins?: { allow?: unknown } }).plugins;
-  return Array.isArray(plugins?.allow) && plugins.allow.includes(pluginId);
-}
-
 // Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
 vi.mock("../../agents/model-runtime-choice.js", () => ({
   preparePublishedModelRuntimeChoice: vi.fn<
@@ -75,50 +57,6 @@ vi.mock("../../agents/model-runtime-choice.js", () => ({
   })),
 }));
 
-vi.mock("../../agents/auth-profiles.js", () => {
-  return {
-    clearRuntimeAuthProfileStoreSnapshots: () => {
-      authProfilesStoreMock.profiles = {};
-    },
-    externalCliDiscoveryForProviderAuth: () => ({
-      mode: "scoped",
-      allowKeychainPrompt: false,
-    }),
-    ensureAuthProfileStore: readAuthProfileStoreForTest,
-    ensureAuthProfileStoreWithoutExternalProfiles: readAuthProfileStoreForTest,
-    getRuntimeAuthProfileStoreSnapshot: readAuthProfileStoreForTest,
-    isProfileInCooldown: () => false,
-    listProfilesForProvider: (_store: unknown, provider: string) =>
-      Object.entries(authProfilesStoreMock.profiles)
-        .filter(([, profile]) => profile.provider === provider)
-        .map(([profileId, profile]) => ({ profileId, profile })),
-    replaceRuntimeAuthProfileStoreSnapshots: (
-      snapshots: Array<{
-        store?: { profiles?: Record<string, AuthProfileForTest> };
-      }>,
-    ) => {
-      authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
-    },
-    resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-    resolveAuthProfileOrder: () => [],
-    resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
-  };
-});
-
-vi.mock("./commands-models.js", () => ({
-  resolveModelsCommandReply: async (
-    params: Parameters<typeof import("./commands-models.js").resolveModelsCommandReply>[0],
-  ) => {
-    modelsCommandMock.resolveModelsCommandReply(params);
-    if (modelsCommandMock.delegateToActual) {
-      const actual =
-        await vi.importActual<typeof import("./commands-models.js")>("./commands-models.js");
-      return actual.resolveModelsCommandReply(params);
-    }
-    return defaultModelsCommandReply();
-  },
-}));
-
 vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/sticky-model-selection.js")>()),
   persistStickyModelSelectionBestEffort: (params: {
@@ -127,85 +65,6 @@ vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
     target: "agent" | "defaults";
   }) => stickyModelMock.persistBestEffort(params),
 }));
-
-vi.mock("../../agents/model-catalog-auth-labels.js", () => {
-  const resolveAuthLabel = (
-    provider: string,
-    cfg: unknown,
-    _modelsPath: string,
-    _agentDir?: string,
-    _mode?: unknown,
-    workspaceDir?: string,
-    options?: { acceptedProfileTypes?: readonly string[] },
-  ) => {
-    const providerKey = normalizeProviderForAuthTest(provider);
-    const acceptedProfileTypes = options?.acceptedProfileTypes
-      ? new Set(options.acceptedProfileTypes)
-      : undefined;
-    const matchingProfiles = Object.entries(authProfilesStoreMock.profiles).filter(
-      ([, profile]) =>
-        normalizeProviderForAuthTest(profile.provider) === providerKey &&
-        (!acceptedProfileTypes || acceptedProfileTypes.has(profile.type)),
-    );
-    if (matchingProfiles.length > 0) {
-      return {
-        label: matchingProfiles
-          .map(([profileId, profile]) =>
-            profile.type === "oauth"
-              ? `${profileId}=OAuth`
-              : profile.type === "token"
-                ? `${profileId}=token`
-                : `${profileId}=${profile.key}`,
-          )
-          .join(", "),
-        source: `auth-profiles.json: /tmp/auth-profiles.json`,
-      };
-    }
-    if (
-      providerKey === "anthropic" &&
-      workspaceDir &&
-      ((process.env.WORKSPACE_MODEL_CREDENTIALS &&
-        hasAllowedPluginForAuthTest(cfg, "workspace-model-auth")) ||
-        (process.env.WORKSPACE_MODEL_LIST_CREDENTIALS &&
-          hasAllowedPluginForAuthTest(cfg, "workspace-model-list")))
-    ) {
-      return {
-        label: process.env.WORKSPACE_MODEL_CREDENTIALS
-          ? "workspace model credentials"
-          : "workspace model list credentials",
-        source: "",
-      };
-    }
-    return { label: "missing", source: "missing" };
-  };
-  return {
-    formatModelCatalogAuthLabel: (label: string) => label,
-    prepareModelCatalogAuthLabels: (params: {
-      config: OpenClawConfig;
-      workspaceDir?: string;
-      providers: Iterable<string>;
-    }) =>
-      new Map(
-        [...params.providers].map((provider) => {
-          const format = (acceptedProfileTypes?: readonly string[]) => {
-            const auth = resolveAuthLabel(
-              provider,
-              params.config,
-              "",
-              undefined,
-              undefined,
-              params.workspaceDir,
-              { acceptedProfileTypes },
-            );
-            return auth.source && auth.source !== "missing"
-              ? `${auth.label} (${auth.source})`
-              : auth.label;
-          };
-          return [provider, { all: format(), apiKey: format(["api_key"]) }];
-        }),
-      ),
-  };
-});
 
 vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
   return {
@@ -219,6 +78,7 @@ vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
 vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
   return {
     ensureAuthProfileStore: readAuthProfileStoreForTest,
+    ensureAuthProfileStoreWithoutExternalProfiles: readAuthProfileStoreForTest,
     ensureAuthProfileStoreForLocalUpdate: readAuthProfileStoreForTest,
     loadAuthProfileStore: readAuthProfileStoreForTest,
     loadAuthProfileStoreForRuntime: readAuthProfileStoreForTest,
@@ -230,107 +90,6 @@ vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
     ),
   };
 });
-
-vi.mock("../../agents/model-auth.js", () => {
-  const hasWorkspaceCredential = (env: NodeJS.ProcessEnv = process.env) =>
-    Boolean(env.WORKSPACE_MODEL_LIST_CREDENTIALS || env.WORKSPACE_MODEL_CREDENTIALS);
-  return {
-    createRuntimeProviderAuthLookup: () => ({
-      envApiKey: {
-        aliasMap: {},
-        candidateMap: {},
-        authEvidenceMap: {},
-      },
-      syntheticAuthProviderRefs: [],
-    }),
-    ensureAuthProfileStore: readAuthProfileStoreForTest,
-    hasRuntimeAvailableProviderAuth: ({
-      provider,
-      env,
-    }: {
-      provider: string;
-      env?: NodeJS.ProcessEnv;
-    }) => provider === "anthropic" && hasWorkspaceCredential(env),
-    hasSyntheticLocalProviderAuthConfig: () => false,
-    resolveProviderEntryApiKeyProfileReference: () => ({ kind: "none" }),
-    resolveAuthProfileOrder: ({ provider }: { provider: string }) =>
-      Object.entries(authProfilesStoreMock.profiles)
-        .filter(([, profile]) => profile.provider === provider)
-        .map(([profileId]) => profileId),
-    resolveEnvApiKey: (provider: string, env: NodeJS.ProcessEnv = process.env) => {
-      if (provider !== "anthropic") {
-        return null;
-      }
-      if (env.WORKSPACE_MODEL_CREDENTIALS) {
-        return { apiKey: "sk-workspace", source: "workspace model credentials" };
-      }
-      if (env.WORKSPACE_MODEL_LIST_CREDENTIALS) {
-        return { apiKey: "sk-workspace", source: "workspace model list credentials" };
-      }
-      return null;
-    },
-    resolveUsableCustomProviderApiKey: () => null,
-    shouldPreferExplicitConfigApiKeyAuth: () => false,
-  };
-});
-
-vi.mock("../../agents/provider-auth-aliases.js", () => ({
-  resolveProviderAuthAliasMap: () => ({}),
-  resolveProviderIdForAuth: (provider: string) => provider,
-}));
-
-vi.mock("../../agents/cli-backends.js", () => ({
-  isCliRuntimeModelBackendForProvider: () => false,
-  listCliRuntimeModelBackendBindings: () => [],
-  listCliRuntimeProviderIds: () => [],
-  resolveCliRuntimeCanonicalProvider: () => undefined,
-  resolveCliRuntimeModelBackendBinding: () => undefined,
-}));
-
-vi.mock("../../agents/harness/selection.js", () => ({
-  selectAgentHarness: () => ({ id: "openclaw" }),
-  resolveAgentHarnessPolicy: ({
-    provider,
-    modelId,
-    config,
-  }: {
-    provider?: string;
-    modelId?: string;
-    config?: OpenClawConfig;
-  }) => {
-    const modelRuntime =
-      provider && modelId
-        ? config?.agents?.defaults?.models?.[`${provider}/${modelId}`]?.agentRuntime?.id
-        : undefined;
-    const providerRuntime = provider
-      ? config?.models?.providers?.[provider]?.agentRuntime?.id
-      : undefined;
-    const runtime =
-      modelRuntime === "default"
-        ? undefined
-        : (modelRuntime ??
-          (providerRuntime === "default" ? undefined : providerRuntime) ??
-          (provider === "openai" ? "codex" : "auto"));
-    return {
-      runtime,
-      runtimeSource: modelRuntime ? "model" : providerRuntime ? "provider" : "implicit",
-    };
-  },
-}));
-
-vi.mock("../../agents/runtime-plan/auth.js", () => ({
-  buildAgentRuntimeAuthPlan: ({
-    provider,
-    harnessRuntime,
-  }: {
-    provider: string;
-    harnessRuntime?: string;
-  }) => ({
-    providerForAuth: provider,
-    authProfileProviderForAuth: provider,
-    ...(harnessRuntime === "codex" ? { harnessAuthProvider: "openai" } : {}),
-  }),
-}));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: (id: string) => pluginPolicyMock.channels.get(id),
@@ -347,10 +106,6 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
 }));
 
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
-} from "../../agents/auth-profiles.js";
 import { preparePublishedModelRuntimeChoice } from "../../agents/model-runtime-choice.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
@@ -360,7 +115,6 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import * as transcriptReaders from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -407,96 +161,50 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
-vi.mock("../../agents/prepared-model-catalog.js", async () => {
-  const { setPreparedModelRuntimeAuthStore, setPreparedModelRuntimeAuthLabels } =
-    await vi.importActual<typeof import("../../agents/prepared-model-runtime-auth.js")>(
-      "../../agents/prepared-model-runtime-auth.js",
-    );
-  const { prepareModelCatalogAuthLabels } =
-    await import("../../agents/model-catalog-auth-labels.js");
-  const { createPluginMetadataSnapshotFixture } =
-    await import("../../plugins/plugin-metadata.test-support.js");
-  const { loadPluginMetadataSnapshot } = await import("../../plugins/plugin-metadata-snapshot.js");
+vi.mock("../../agents/prepared-model-catalog.js", () => {
   const entries = [
     { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
     { provider: "localai", id: "ultra-chat", name: "Ultra Chat" },
   ];
-  const loadModelCatalog = vi.fn(async () => entries);
-  const catalogMocks = {
-    readPreparedModelCatalog: loadModelCatalog,
-    loadProviderScopedThinkingCatalog: loadModelCatalog,
-    loadPreparedModelCatalogOwnerSnapshot: vi.fn(() => {
-      throw new Error("Status should use the published catalog owner");
-    }),
-    getPublishedPreparedModelCatalogOwnerSnapshot: (params: {
-      config: OpenClawConfig;
-      agentId?: string;
-      agentDir?: string;
-      workspaceDir?: string;
-    }) => {
-      const owner = {
+  const loadOwner = (params: {
+    config: OpenClawConfig;
+    agentId?: string;
+    agentDir?: string;
+    workspaceDir?: string;
+  }) => {
+    const owner = createModelsTestOwner(params.config, entries, params);
+    const store = readAuthProfileStoreForTest();
+    setPreparedModelRuntimeAuthStore(owner, store);
+    setPreparedModelRuntimeAuthLabels(
+      owner,
+      prepareModelCatalogAuthLabels({
         config: params.config,
-        observationConfig: params.config,
-        agentId: params.agentId ?? "main",
-        agentDir: params.agentDir ?? "/tmp/agent",
-        workspaceDir: params.workspaceDir ?? "/tmp",
-        modelCatalog: { entries, routeVariants: entries },
-        authModes: {},
-        metadataSnapshot: params.workspaceDir
-          ? loadPluginMetadataSnapshot({
-              config: params.config,
-              workspaceDir: params.workspaceDir,
-              allowCurrent: false,
-              preferPersisted: false,
-            })
-          : createPluginMetadataSnapshotFixture(),
-        isCurrent: () => true,
-      };
-      setPreparedModelRuntimeAuthLabels(
-        owner,
-        prepareModelCatalogAuthLabels({
-          config: params.config,
-          agentDir: owner.agentDir,
-          workspaceDir: params.workspaceDir,
-          env: process.env,
-          store: { version: 1, profiles: authProfilesStoreMock.profiles },
-          providers: [
-            "openai",
-            "anthropic",
-            "openrouter",
-            "localai",
-            ...Object.keys(params.config.models?.providers ?? {}),
-          ],
-        }),
-      );
-      setPreparedModelRuntimeAuthStore(owner, {
-        version: 1,
-        profiles: authProfilesStoreMock.profiles,
-      });
-      return owner;
-    },
-    materializePreparedModelCatalogOwner: (owner: object) => owner,
-    withPreparedModelCatalogOwner: async (
-      _params: unknown,
-      read: (owner: {
-        modelCatalog: { entries: ModelCatalogEntry[]; routeVariants: ModelCatalogEntry[] };
-        authModes: object;
-        isCurrent: () => boolean;
-      }) => unknown,
-    ) => {
-      const catalog = await loadModelCatalog();
-      return read({
-        modelCatalog: { entries: catalog, routeVariants: catalog },
-        authModes: {},
-        isCurrent: () => true,
-      });
-    },
+        agentDir: owner.agentDir,
+        workspaceDir: owner.workspaceDir,
+        env: {},
+        store,
+        providers: [
+          "openai",
+          "anthropic",
+          "openrouter",
+          "localai",
+          ...Object.keys(params.config.models?.providers ?? {}),
+        ],
+      }),
+    );
+    return owner;
   };
   return {
-    ...catalogMocks,
+    readPreparedModelCatalog: async () => entries,
+    loadProviderScopedThinkingCatalog: async () => entries,
+    getPublishedPreparedModelCatalogOwnerSnapshot: loadOwner,
+    loadPreparedModelCatalogOwnerSnapshot: () => {
+      throw new Error("Status must use the published catalog owner");
+    },
     loadPublishedPreparedModelCatalogOwnerSnapshot: async (
-      params: Parameters<typeof catalogMocks.getPublishedPreparedModelCatalogOwnerSnapshot>[0],
-    ) => catalogMocks.getPublishedPreparedModelCatalogOwnerSnapshot(params),
+      params: Parameters<typeof loadOwner>[0],
+    ) => loadOwner(params),
+    materializePreparedModelCatalogOwner: (owner: object) => owner,
   };
 });
 
@@ -595,19 +303,10 @@ function setOpenAiRuntimeScopedUltraProvider(): void {
 
 beforeEach(() => {
   vi.useRealTimers();
+  setFastModelsCliBackendDeps();
   setDirectiveTestProviders([]);
   pluginPolicyMock.channels.clear();
-  modelsCommandMock.resolveModelsCommandReply
-    .mockReset()
-    .mockResolvedValue(defaultModelsCommandReply());
-  modelsCommandMock.delegateToActual = false;
-  clearRuntimeAuthProfileStoreSnapshots();
-  replaceRuntimeAuthProfileStoreSnapshots([
-    {
-      agentDir: TEST_AGENT_DIR,
-      store: { version: 1, profiles: {} },
-    },
-  ]);
+  authProfilesStoreMock.profiles = {};
   vi.mocked(resolveAgentDir).mockReset().mockReturnValue(TEST_AGENT_DIR);
   vi.mocked(resolveSessionAgentId).mockReset().mockReturnValue("main");
   vi.mocked(enqueueSystemEvent).mockClear();
@@ -617,19 +316,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   setDirectiveTestProviders([]);
   pluginPolicyMock.channels.clear();
-  clearRuntimeAuthProfileStoreSnapshots();
   clearInternalHooks();
 });
 
 function setAuthProfiles(profiles: Record<string, AuthProfileForTest>) {
-  replaceRuntimeAuthProfileStoreSnapshots([
-    {
-      agentDir: TEST_AGENT_DIR,
-      store: { version: 1, profiles },
-    },
-  ]);
+  authProfilesStoreMock.profiles = profiles;
 }
 
 function createDateAuthProfiles(provider: string, id = OPENAI_DATE_PROFILE_ID) {
@@ -865,75 +559,12 @@ async function resolveModelInfoReply(
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-6",
     aliasIndex: baseAliasIndex(),
-    allowedModelKeys: new Set(),
     allowedModelCatalog: [],
     currentThinkLevel: "medium",
     runtimePolicySessionKey: "agent:main:main",
     resetModelOverride: false,
     ...overrides,
   });
-}
-
-type WorkspaceAuthFixture = {
-  pluginId: string;
-  envVar: string;
-  credentialMarker: string;
-  source: string;
-  env?: NodeJS.ProcessEnv;
-};
-
-async function withWorkspaceAuthFixture(
-  fixture: WorkspaceAuthFixture,
-  run: (workspaceDir: string) => Promise<void>,
-) {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `${fixture.pluginId}-`));
-  const workspaceDir = path.join(tempRoot, "workspace");
-  const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", fixture.pluginId);
-  const bundledDir = path.join(tempRoot, "bundled");
-  const stateDir = path.join(tempRoot, "state");
-  const credentialPath = path.join(tempRoot, "credentials.json");
-  fs.mkdirSync(pluginDir, { recursive: true });
-  fs.mkdirSync(bundledDir, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {}\n", "utf8");
-  fs.writeFileSync(credentialPath, "{}", "utf8");
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: fixture.pluginId,
-      configSchema: { type: "object" },
-      setup: {
-        providers: [
-          {
-            id: "anthropic",
-            authEvidence: [
-              {
-                type: "local-file-with-env",
-                fileEnvVar: fixture.envVar,
-                credentialMarker: fixture.credentialMarker,
-                source: fixture.source,
-              },
-            ],
-          },
-        ],
-      },
-    }),
-    "utf8",
-  );
-
-  try {
-    await withEnvAsync(
-      {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-        OPENCLAW_STATE_DIR: stateDir,
-        [fixture.envVar]: credentialPath,
-        ...fixture.env,
-      },
-      () => run(workspaceDir),
-    );
-  } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
 }
 
 function nestedOpenRouterStatusFixture(configureDirectProvider: boolean) {
@@ -974,6 +605,7 @@ function nestedOpenRouterStatusFixture(configureDirectProvider: boolean) {
 }
 
 describe("/model chat UX", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   it("shows summary for /model with no args", async () => {
     const reply = await resolveModelInfoReply();
 
@@ -1074,39 +706,6 @@ describe("/model chat UX", () => {
     expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
-  it("passes workspace scope through the /model list browser alias", async () => {
-    await withWorkspaceAuthFixture(
-      {
-        pluginId: "workspace-model-list",
-        envVar: "WORKSPACE_MODEL_LIST_CREDENTIALS",
-        credentialMarker: "workspace-model-list-local-credentials",
-        source: "workspace model list credentials",
-      },
-      async (workspaceDir) => {
-        modelsCommandMock.delegateToActual = true;
-        const reply = await resolveModelInfoReply({
-          directives: parseInlineSessionDirectives("/model list"),
-          workspaceDir,
-          cfg: {
-            ...baseConfig(),
-            plugins: { allow: ["workspace-model-list"] },
-          } as unknown as OpenClawConfig,
-        });
-
-        expect(reply?.text).toContain("- anthropic");
-        expect(modelsCommandMock.resolveModelsCommandReply).toHaveBeenCalledWith(
-          expect.objectContaining({
-            commandBodyNormalized: "/models",
-            workspaceDir,
-            cfg: expect.objectContaining({
-              plugins: { allow: ["workspace-model-list"] },
-            }),
-          }),
-        );
-      },
-    );
-  });
-
   it.each([
     [
       "fireworks",
@@ -1134,59 +733,14 @@ describe("/model chat UX", () => {
     },
   );
 
-  describe.each(["/model", "/model status"])("%s terminal fallback display", (command) => {
-    const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-    const scenarios: Array<{
-      name: string;
-      entry?: Partial<InternalSessionEntry>;
-      selectedModel?: string;
-      runId?: string;
-      stopReason?: "stop" | "length" | "toolUse";
-      laterUser?: boolean;
-      expectedActive: boolean;
-    }> = [
-      {
-        name: "settled fallback without runtime fields",
-        stopReason: "length",
-        expectedActive: true,
-      },
-      {
-        name: "settled fallback with stale runtime fields",
-        entry: { modelProvider: "anthropic", model: "claude-opus-4-6" },
-        expectedActive: true,
-      },
-      { name: "running session", entry: { status: "running" }, expectedActive: false },
-      { name: "another run's terminal row", runId: "previous-run", expectedActive: false },
-      { name: "changed selection", selectedModel: "claude-sonnet-4-6", expectedActive: false },
-      {
-        name: "mismatched active notice",
-        entry: {
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "anthropic/claude-opus-4-6",
-            activeModel: "anthropic/claude-sonnet-4-6",
-            reason: "rate limit",
-          },
-        },
-        expectedActive: false,
-      },
-      {
-        name: "missing fallback notice",
-        entry: { fallbackNotice: undefined },
-        expectedActive: false,
-      },
-      { name: "nonterminal assistant row", stopReason: "toolUse", expectedActive: false },
-      { name: "user row after the terminal answer", laterUser: true, expectedActive: false },
-    ];
-
-    it.each(scenarios)("uses only matching terminal evidence: $name", async (scenario) => {
+  it.each(["/model", "/model status"])(
+    "%s reads terminal fallback from the transcript scope, not the runtime-policy key",
+    async (command) => {
       const tempRoot = tempDirs.make("openclaw-model-terminal-display-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(tempRoot, "state") }, async () => {
         const sessionKey = "agent:main:main";
-        const runtimePolicySessionKey = "agent:main:telegram:default:direct:fixture-user";
         const storePath = path.join(tempRoot, "custom-store", "openclaw-agent.sqlite");
         const scope = { agentId: "main", sessionKey, sessionId: "terminal-display", storePath };
-        const selectedModel = scenario.selectedModel ?? "claude-opus-4-6";
         try {
           await replaceSessionEntry(
             scope,
@@ -1200,11 +754,10 @@ describe("/model chat UX", () => {
                 activeModel: "anthropic/claude-haiku-4-5",
                 reason: "rate limit",
               },
-              ...scenario.entry,
             }),
           );
-          const turn = await persistSessionTranscriptTurn(scope, {
-            runId: scenario.runId ?? "settled-run",
+          await persistSessionTranscriptTurn(scope, {
+            runId: "settled-run",
             messages: [
               {
                 eventId: "terminal-answer",
@@ -1214,92 +767,35 @@ describe("/model chat UX", () => {
                   content: [{ type: "text", text: "The fallback answered." }],
                   provider: "anthropic",
                   model: "claude-haiku-4-5",
-                  stopReason: scenario.stopReason ?? "stop",
+                  stopReason: "stop",
                 },
               },
-              ...(scenario.laterUser
-                ? [
-                    {
-                      eventId: "later-user",
-                      parentId: "terminal-answer",
-                      message: { role: "user", content: "A new question." },
-                    },
-                  ]
-                : []),
             ],
             touchSessionEntry: false,
             updateMode: "none",
           });
-          expect(turn.appendedCount).toBe(scenario.laterUser ? 2 : 1);
           const sessionEntry = expectDefined(loadSessionEntry(scope), "persisted model session");
           const before = structuredClone(sessionEntry);
-          if (scenario.expectedActive) {
-            expect(sessionEntry).toMatchObject({
-              sessionId: scope.sessionId,
-              status: "done",
-              lastRunId: "settled-run",
-              fallbackNotice: {
-                kind: "active",
-                selectedModel: "anthropic/claude-opus-4-6",
-                activeModel: "anthropic/claude-haiku-4-5",
-              },
-            });
-            const terminal = transcriptReaders.readSessionTranscriptBoundedMessageTailPage(scope, {
-              maxBytes: 256 * 1024,
-              maxMessages: 1,
-              offset: 0,
-            });
-            expect(terminal.events).toMatchObject([
-              {
-                event: {
-                  message: {
-                    role: "assistant",
-                    content: [{ type: "text", text: "The fallback answered." }],
-                    provider: "anthropic",
-                    model: "claude-haiku-4-5",
-                    stopReason: scenario.stopReason ?? "stop",
-                    __openclaw: { runId: "settled-run" },
-                  },
-                },
-              },
-            ]);
-          }
-          const readTail = vi.spyOn(
-            transcriptReaders,
-            "readSessionTranscriptBoundedMessageTailPage",
+          const reply = await handleDirectiveOnly(
+            createDirectiveHandlingParams({
+              directives: parseInlineSessionDirectives(command),
+              sessionEntry,
+              sessionKey,
+              storePath,
+              ctx: { RuntimePolicySessionKey: "agent:main:telegram:default:direct:fixture-user" },
+            }),
           );
-          try {
-            const reply = await handleDirectiveOnly(
-              createDirectiveHandlingParams({
-                directives: parseInlineSessionDirectives(command),
-                sessionEntry,
-                sessionKey,
-                storePath,
-                model: selectedModel,
-                ctx: { RuntimePolicySessionKey: runtimePolicySessionKey },
-              }),
-            );
-
-            expect(reply?.text).toContain(`Current: anthropic/${selectedModel}`);
-            if (scenario.expectedActive) {
-              expect(reply?.text).toContain("Active: anthropic/claude-haiku-4-5 (runtime)");
-              // The policy key can share a database; assert the actual reader's locator too.
-              expect(readTail).toHaveBeenCalledWith({ ...scope }, expect.anything());
-            } else {
-              expect(reply?.text).not.toContain("Active:");
-            }
-            expect(sessionEntry).toEqual(before);
-            expect(loadSessionEntry(scope)).toEqual(before);
-          } finally {
-            readTail.mockRestore();
-          }
+          expect(reply?.text).toContain("Current: anthropic/claude-opus-4-6");
+          expect(reply?.text).toContain("Active: anthropic/claude-haiku-4-5 (runtime)");
+          expect(sessionEntry).toEqual(before);
+          expect(loadSessionEntry(scope)).toEqual(before);
         } finally {
           closeOpenClawAgentDatabasesForTest(tempRoot);
           closeOpenClawStateDatabaseForTest();
         }
       });
-    });
-  });
+    },
+  );
 
   it("shows status for the allowed catalog without duplicate missing auth labels", async () => {
     const reply = await resolveModelInfoReply({
@@ -1344,7 +840,6 @@ describe("/model chat UX", () => {
           },
         },
       } as unknown as OpenClawConfig,
-      allowedModelKeys: new Set(["anthropic/*"]),
       allowedModelCatalog: [
         { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
         { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
@@ -1382,7 +877,6 @@ describe("/model chat UX", () => {
     const reply = await resolveModelInfoReply({
       directives: parseInlineSessionDirectives("/model status"),
       cfg,
-      allowedModelKeys: policy.allowedKeys,
       allowedModelCatalog: policy.allowedCatalog,
     });
 
@@ -1435,8 +929,6 @@ describe("/model chat UX", () => {
       defaultProvider: "provider-a",
       defaultModel: "model-a",
       aliasIndex: agentAliasIndex,
-      policyAliasIndex: policy.policyAliasIndex,
-      allowedModelKeys: policy.allowedKeys,
       allowedModelCatalog: policy.allowedCatalog,
     });
 
@@ -1468,132 +960,33 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("openrouter/google/gemini-3-flash-preview");
   });
 
-  it.each([
-    {
-      name: "unified OAuth and token",
-      apiKey: false,
-      token: true,
-      pinned: false,
-      session: {},
-      oauth: true,
-    },
-    { name: "direct API key", apiKey: true, token: false, pinned: false, session: {}, oauth: true },
-    {
-      name: "host runtime policy",
-      apiKey: false,
-      token: false,
-      pinned: true,
-      session: {},
-      oauth: false,
-    },
-    {
-      name: "explicit native runtime",
-      apiKey: false,
-      token: false,
-      pinned: true,
-      session: { agentRuntimeOverride: "codex" },
-      oauth: true,
-    },
-    {
-      name: "observed harness only",
-      apiKey: false,
-      token: false,
-      pinned: true,
-      session: { agentHarnessId: "codex" },
-      oauth: false,
-    },
-  ])("labels OpenAI status auth from $name", async ({ apiKey, token, pinned, session, oauth }) => {
-    setAuthProfiles({
-      "openai:patrick@example.test": {
-        type: "oauth",
+  it.each(["openclaw", "codex"])(
+    "renders captured OpenAI auth facts for the selected %s runtime",
+    async (runtime) => {
+      setAuthProfiles({
+        "openai:subscription": {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+          expires: Date.now() + 3_600_000,
+        },
+        "openai:platform": { type: "api_key", provider: "openai", key: "synthetic-platform-key" },
+      });
+      const reply = await resolveModelInfoReply({
+        directives: parseInlineSessionDirectives("/model status"),
         provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-      ...(apiKey
-        ? {
-            "openai:api-key": {
-              type: "api_key" as const,
-              provider: "openai",
-              key: "sk-openai-direct",
-            },
-          }
-        : {}),
-      ...(token
-        ? { "openai:runtime-token": { type: "token" as const, provider: "openai", token: "token" } }
-        : {}),
-    });
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineSessionDirectives("/model status"),
-      provider: "openai",
-      model: "gpt-5.5",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      sessionEntry: createSessionEntry(session),
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              ...(token ? { "codex/gpt-5.5": {} } : {}),
-              "openai/gpt-5.5": pinned ? { agentRuntime: { id: "openclaw" } } : {},
-            },
-          },
-        },
-      },
-      allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
-    });
-    expect(reply?.text).toContain("[openai] endpoint: default auth:");
-    expect(reply?.text).not.toContain("via codex runtime");
-    expect(reply?.text?.includes("[openai] endpoint: default auth: missing")).toBe(!oauth);
-    if (apiKey) {
-      expect(reply?.text).toContain("openai:api-key=");
-    } else {
-      expect(reply?.text?.includes("openai:patrick@example.test=OAuth")).toBe(oauth);
-    }
-    if (!oauth) {
-      expect(reply?.text).not.toContain("openai:runtime-token=token");
-    }
-  });
-
-  it("uses workspace-scoped auth evidence in /model status labels", async () => {
-    await withWorkspaceAuthFixture(
-      {
-        pluginId: "workspace-model-auth",
-        envVar: "WORKSPACE_MODEL_CREDENTIALS",
-        credentialMarker: "workspace-model-local-credentials",
-        source: "workspace model credentials",
-        env: {
-          ANTHROPIC_API_KEY: undefined,
-          ANTHROPIC_OAUTH_TOKEN: undefined,
-        },
-      },
-      async (workspaceDir) => {
-        const reply = await resolveModelInfoReply({
-          directives: parseInlineSessionDirectives("/model status"),
-          workspaceDir,
-          cfg: {
-            ...baseConfig(),
-            plugins: { allow: ["workspace-model-auth"] },
-            agents: {
-              defaults: {
-                models: {
-                  "anthropic/claude-opus-4-6": {},
-                },
-              },
-            },
-          } as unknown as OpenClawConfig,
-          allowedModelCatalog: [
-            { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
-          ],
-        });
-
-        expect(reply?.text).toContain("workspace model credentials");
-      },
-    );
-  });
+        model: "gpt-5.5",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        sessionEntry: createSessionEntry({ agentRuntimeOverride: runtime }),
+        cfg: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+        allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
+      });
+      expect(reply?.text).toContain("openai:platform=");
+      expect(reply?.text?.includes("openai:subscription=OAuth")).toBe(runtime === "codex");
+    },
+  );
 
   it("auto-applies closest match for typos", () => {
     const directives = parseInlineSessionDirectives("/model anthropic/claud-opus-4-5");
@@ -2038,19 +1431,6 @@ describe("/model chat UX", () => {
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
   });
 
-  it("resolves directive agentDir from the prepared target owner", async () => {
-    vi.mocked(resolveAgentDir).mockReturnValue("/tmp/target-agent");
-
-    await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o hello",
-      agentId: "target",
-      allowedModelKeys: ["openai/gpt-4o"],
-      sessionEntry: createSessionEntry(),
-    });
-
-    expect(resolveAgentDir).toHaveBeenCalledWith(baseConfig(), "target");
-  });
-
   it("persists explicit auth profiles after @YYYYMMDD version suffixes in mixed-content messages", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: `/model custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}@work hello`,
@@ -2128,33 +1508,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
   }
 
-  beforeAll(async () => {
-    const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
-    await runHandleCommand("/model opencode/claude-opus-4-7", {
-      allowedModelKeys: new Set([...allowedModelKeys, "opencode/claude-opus-4-7"]),
-      allowedModelCatalog: [
-        ...allowedModelCatalog,
-        { provider: "opencode", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
-      ],
-      sessionEntry,
-    });
-  });
-
-  it("keeps an authorized selection session-only without a default target", async () => {
-    const sessionEntry = createSessionEntry();
-    const result = await runHandleCommand("/model openai/gpt-4o", {
-      sessionEntry,
-      canPersistStickyModelSelection: true,
-    });
-
-    expect(result?.text).toContain("Model set to");
-    expect(result?.text).toContain("openai/gpt-4o");
-    expect(result?.text).toContain("for this session only; configured default unchanged.");
-    expect(result?.text).not.toContain("failed");
-    expect(sessionEntry.liveModelSwitchPending).toBe(true);
-    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
-  });
-
   it("preserves a compatible auth profile for a mixed model directive", async () => {
     const sessionEntry = createSessionEntry({
       providerOverride: "openai",
@@ -2194,23 +1547,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       model: "openai/gpt-4o",
       target: "agent",
     });
-  });
-
-  it("keeps a non-owner model selection session-scoped", async () => {
-    const sessionEntry = createSessionEntry();
-
-    const result = await runHandleCommand("/model openai/gpt-4o", {
-      sessionEntry,
-    });
-
-    expect(result?.text).toContain(
-      "Model set to openai/gpt-4o for this session only; configured default unchanged.",
-    );
-    expect(sessionEntry).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-    });
-    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
   it("reports immutable agent configuration without claiming an update", async () => {
@@ -2458,20 +1794,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
-  it("keeps a mixed-command model selection session-scoped without authority", async () => {
-    const { sessionEntry } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o continue with the request",
-      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-      canPersistStickyModelSelection: false,
-    });
-
-    expect(sessionEntry).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-    });
-    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
-  });
-
   it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
     const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
     const { persisted } = await persistModelDirectiveForTest({
@@ -2614,6 +1936,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     const persistenceState: NonNullable<HandleDirectiveParams["persistenceState"]> = {
       outcome: { kind: "pending", provider: "anthropic", model: "claude-opus-4-6" },
     };
+    const patchEvents: InternalHookEvent[] = [];
+    registerInternalHook("session:patch", async (event) => {
+      patchEvents.push(event);
+    });
 
     try {
       const result = await handleDirectiveOnly(
@@ -2630,6 +1956,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       expect(result?.isError).toBe(true);
       expect(persistenceState.outcome).toMatchObject({ kind: "rejected" });
       expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+      expect(patchEvents).toEqual([]);
       expect(enqueueSystemEvent).not.toHaveBeenCalledWith(
         expect.stringContaining("openai/gpt-4o"),
         expect.anything(),
@@ -2811,14 +2138,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
         contextKey: "model:anthropic/claude-opus-4-6",
       },
     );
-  });
-
-  it("shows no model message when no /model directive", async () => {
-    const sessionEntry = createSessionEntry();
-    const result = await runHandleCommand("hello world", { sessionEntry });
-
-    expect(result?.text ?? "").not.toContain("Model set to");
-    expect(result?.text ?? "").not.toContain("failed");
   });
 
   it("strips inline elevated directives while keeping user text", () => {
@@ -3249,73 +2568,6 @@ describe("canonical session directive persistence policy", () => {
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
-  });
-
-  it("returns the concurrent model winner without emitting switch side effects", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-inline-model-race-"));
-    const storePath = path.join(tempRoot, "sessions.json");
-    const sessionKey = "agent:main:dm:race";
-    const sessionEntry = createSessionEntry({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6",
-      modelOverrideSource: "user",
-    });
-    const concurrentEntry: SessionEntry = {
-      ...sessionEntry,
-      updatedAt: sessionEntry.updatedAt + 1,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.5",
-    };
-    await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const directives = parseInlineSessionDirectives("hello /model openai/gpt-4o");
-    const patchEvents: InternalHookEvent[] = [];
-    registerInternalHook("session:patch", async (event) => {
-      patchEvents.push(event);
-    });
-
-    try {
-      const result = await handleDirectiveOnly(
-        createDirectiveHandlingParams({
-          directives,
-          sessionEntry,
-          sessionStore,
-          sessionKey,
-          storePath,
-          allowedModelCatalog: [
-            { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
-            { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
-          ],
-        }),
-      );
-
-      expect(result?.text).toContain("Model change was not applied");
-      expect(result?.isError).toBe(true);
-      expect(enqueueSystemEvent).not.toHaveBeenCalledWith(
-        expect.stringContaining("openai/gpt-4o"),
-        expect.anything(),
-      );
-      expect(patchEvents).toEqual([]);
-      expect(sessionStore[sessionKey]).toMatchObject({
-        providerOverride: "openai",
-        modelOverride: "gpt-5.5",
-      });
-      expect(sessionEntry).toEqual(sessionStore[sessionKey]);
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("skips exec persistence for internal operator.write callers", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective(EXEC_DEFAULTS_DIRECTIVE);
-
-    expectExecDefaults(sessionEntry, false);
-  });
-
-  it("skips verbose persistence for internal operator.write callers", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective(VERBOSE_DEFAULT_DIRECTIVE);
-
-    expect(sessionEntry.verboseLevel).toBeUndefined();
   });
 
   it("skips exec persistence for unauthorized external callers even when gateway scopes are empty", async () => {

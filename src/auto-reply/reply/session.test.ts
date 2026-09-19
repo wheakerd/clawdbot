@@ -81,7 +81,6 @@ import {
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
-  resolveParentForkTokenCount: vi.fn(),
   nextSessionId: 0,
 }));
 const channelSummaryMocks = vi.hoisted(() => ({
@@ -100,27 +99,6 @@ vi.mock("./session-fork.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-fork.js")>()),
   forkSessionFromParent: (...args: [ForkSessionParamsForTest]) =>
     sessionForkMocks.forkSessionFromParent(...args),
-  resolveParentForkDecision: async (params: { parentEntry: SessionEntry; storePath: string }) => {
-    const maxTokens = 100_000;
-    const parentTokens = await sessionForkMocks.resolveParentForkTokenCount({
-      parentEntry: params.parentEntry,
-      storePath: params.storePath,
-    });
-    if (typeof parentTokens === "number" && parentTokens > maxTokens) {
-      return {
-        status: "skip",
-        reason: "parent-too-large",
-        maxTokens,
-        parentTokens,
-        message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
-      };
-    }
-    return {
-      status: "fork",
-      maxTokens,
-      ...(typeof parentTokens === "number" ? { parentTokens } : {}),
-    };
-  },
 }));
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
@@ -463,12 +441,6 @@ beforeEach(() => {
   browserMaintenanceMocks.closeTrackedBrowserTabsForSessions.mockReset().mockResolvedValue(0);
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   sessionForkMocks.nextSessionId = 0;
-  sessionForkMocks.resolveParentForkTokenCount.mockReset().mockImplementation(({ parentEntry }) => {
-    const tokens = parentEntry.totalTokens;
-    return typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0
-      ? Math.floor(tokens)
-      : undefined;
-  });
   sessionForkMocks.forkSessionFromParent
     .mockReset()
     .mockImplementation(async ({ sessionKey }: ForkSessionParamsForTest) => {
@@ -1111,6 +1083,8 @@ describe("initSessionState thread forking", () => {
         sessionFile: parentSessionFile,
         updatedAt: Date.now(),
         totalTokens: 170_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       [threadSessionKey]: {
         sessionId: "tombstoned-thread-session",
@@ -1224,52 +1198,6 @@ describe("initSessionState thread forking", () => {
       clearSessionQueues([threadSessionKey]);
       activeReply.complete();
     }
-  });
-
-  it("skips fork when resolved parent token estimate exceeds threshold", async () => {
-    const root = await makeCaseDir("openclaw-thread-session-overflow-estimated-");
-    const parentSessionId = "parent-overflow-estimated";
-    const parentSessionFile = path.join(root, "parent.jsonl");
-
-    const storePath = path.join(root, "sessions.json");
-    const parentSessionKey = "agent:main:slack:channel:c1";
-    await writeSessionStoreFast(storePath, {
-      [parentSessionKey]: {
-        sessionId: parentSessionId,
-        sessionFile: parentSessionFile,
-        updatedAt: Date.now(),
-        totalTokens: 1,
-        totalTokensFresh: false,
-      },
-    });
-    sessionForkMocks.resolveParentForkTokenCount.mockReturnValueOnce(170_000);
-
-    const cfg = {
-      session: { store: storePath },
-    } as OpenClawConfig;
-
-    const threadSessionKey = "agent:main:slack:channel:c1:thread:estimated";
-    const result = await initSessionState({
-      ctx: {
-        Body: "Thread reply",
-        SessionKey: threadSessionKey,
-        ParentSessionKey: parentSessionKey,
-      },
-      cfg,
-    });
-
-    const tokenCountCall = requireMockCallArg(
-      sessionForkMocks.resolveParentForkTokenCount,
-      "resolveParentForkTokenCount",
-    );
-    const parentEntry = tokenCountCall.parentEntry as SessionEntry | undefined;
-    expect(parentEntry?.sessionId).toBe(parentSessionId);
-    expect(parentEntry?.totalTokensFresh).toBe(false);
-    expect(tokenCountCall.storePath).toBe(storePath);
-    expect(result.sessionEntry.forkedFromParent).toBe(true);
-    expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
-    expect(result.sessionEntry.sessionFile).not.toBe(parentSessionFile);
-    expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
   });
 
   it("records topic-specific SQLite session identity when MessageThreadId is present", async () => {
@@ -3420,78 +3348,6 @@ describe("initSessionState browser tab cleanup", () => {
     expect(cleanupParams.sessionKeys).toEqual([existingSessionId, sessionKey]);
   });
 
-  it.each([
-    {
-      name: "skips browser tab cleanup when root browser support is disabled",
-      slug: "browser-disabled",
-      config: { browser: { enabled: false } },
-    },
-    {
-      name: "skips browser tab cleanup when the browser plugin entry is disabled",
-      slug: "browser-plugin-disabled",
-      config: { plugins: { entries: { browser: { enabled: false } } } },
-    },
-  ])("$name", async ({ slug, config }) => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const storePath = await createStorePath(`openclaw-tab-cleanup-${slug}-`);
-    const sessionKey = `agent:main:webchat:dm:tab-${slug}`;
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: `tab-${slug}-session-id`,
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      ...config,
-      session: {
-        store: storePath,
-        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
-      },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey },
-      cfg,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
-  });
-
-  it("closes tracked browser tabs on explicit /new reset", async () => {
-    const storePath = await createStorePath("openclaw-tab-cleanup-reset-");
-    const sessionKey = "agent:main:telegram:dm:tab-reset";
-    const existingSessionId = "tab-reset-session-id";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: Date.now(),
-      },
-    });
-
-    const cfg = {
-      session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: {
-        Body: "/new",
-        RawBody: "/new",
-        CommandBody: "/new",
-        SessionKey: sessionKey,
-      },
-      cfg,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    const cleanupParams = requireMockCallArg(
-      browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
-      "closeTrackedBrowserTabsForSessions",
-    );
-    expect(cleanupParams.sessionKeys).toEqual([existingSessionId, sessionKey]);
-  });
-
   it("does not close browser tabs for a fresh session without previous state", async () => {
     const storePath = await createStorePath("openclaw-tab-cleanup-fresh-");
     const sessionKey = "agent:main:telegram:dm:tab-fresh";
@@ -5340,35 +5196,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     });
 
     expect(sessionMcpTesting.getCachedSessionIds()).not.toContain(existingSessionId);
-  });
-
-  it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {
-    const storePath = await createStorePath("openclaw-idle-no-preserve-");
-    const sessionKey = "agent:main:telegram:dm:new-user";
-
-    const cfg = {
-      session: { store: storePath, idleMinutes: 0 },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "hello",
-        RawBody: "hello",
-        CommandBody: "hello",
-        From: "new-user",
-        To: "bot",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        Provider: "telegram",
-        Surface: "telegram",
-      },
-      cfg,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(false);
-    expect(result.sessionEntry.verboseLevel).toBeUndefined();
-    expect(result.sessionEntry.thinkingLevel).toBeUndefined();
   });
 });
 

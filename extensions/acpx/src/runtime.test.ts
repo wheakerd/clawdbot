@@ -18,19 +18,20 @@ import {
   type AcpRuntimeTurnResult,
 } from "../runtime-api.js";
 import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
-import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
+import {
+  isClaudeAcpCommand,
+  renderAgentCommand,
+  splitCommandParts,
+  type AcpxAgentCommand,
+} from "./command-line.js";
 import {
   OPENCLAW_ACPX_LEASE_ID_ARG,
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
-import { AcpxRuntime, testing, type AcpSessionStore } from "./runtime.js";
+import type { AcpxRuntime } from "./runtime.js";
+import { makeRuntime, type TestSessionStore } from "./runtime.test-support.js";
 import { ACPX_PROCESS_LEASE_MAX_ENTRIES } from "./state.js";
-
-type TestSessionStore = {
-  load(sessionId: string): Promise<Record<string, unknown> | undefined>;
-  save(record: Record<string, unknown>): Promise<void>;
-};
 
 function makeEmptySessionStore(): TestSessionStore {
   return {
@@ -100,58 +101,6 @@ function recordCommand(command: AcpxAgentCommand) {
   return {
     agentCommand: renderAgentCommand(command),
     ...(typeof command === "string" ? {} : { agentArgv: command }),
-  };
-}
-
-type TestRuntimeDelegate = {
-  cancel: AcpRuntime["cancel"];
-  close: AcpRuntime["close"];
-  ensureSession: AcpRuntime["ensureSession"];
-  startTurn: NonNullable<AcpRuntime["startTurn"]>;
-  getCapabilities: UpstreamRuntime["getCapabilities"];
-  getStatus: NonNullable<AcpRuntime["getStatus"]>;
-  setMode: NonNullable<AcpRuntime["setMode"]>;
-  setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
-  isHealthy(): boolean;
-  probeAvailability(): Promise<void>;
-  doctor(): Promise<{ ok: boolean; message: string; details?: string[] }>;
-};
-
-function makeRuntime(
-  baseStore: TestSessionStore,
-  options: Partial<ConstructorParameters<typeof AcpxRuntime>[0]> = {},
-  testOptions?: ConstructorParameters<typeof AcpxRuntime>[1],
-): {
-  runtime: AcpxRuntime;
-  wrappedStore: TestSessionStore;
-  delegate: TestRuntimeDelegate;
-} {
-  const runtime = new AcpxRuntime(
-    {
-      cwd: "/tmp",
-      sessionStore: baseStore as unknown as AcpSessionStore,
-      agentRegistry: {
-        resolve: (agentName: string) => (agentName === "openclaw" ? "openclaw acp" : agentName),
-        list: () => ["codex", "openclaw"],
-      },
-      permissionMode: "approve-reads",
-      ...options,
-    },
-    testOptions,
-  );
-
-  return {
-    runtime,
-    wrappedStore: (
-      runtime as unknown as {
-        sessionStore: TestSessionStore;
-      }
-    ).sessionStore,
-    delegate: (
-      runtime as unknown as {
-        delegate: TestRuntimeDelegate;
-      }
-    ).delegate,
   };
 }
 
@@ -1204,23 +1153,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(ensure).toHaveBeenCalledTimes(1);
   });
 
-  it("recognizes Codex ACP commands and encodes startup overrides as argv", () => {
-    expect(testing.isCodexAcpCommand(CODEX_ACP_COMMAND)).toBe(true);
-    expect(testing.isCodexAcpCommand(CODEX_ACP_WRAPPER_COMMAND)).toBe(true);
-    expect(
-      testing.appendCodexAcpConfigOverrides(CODEX_ACP_COMMAND, {
-        model: "gpt-5.4",
-        reasoningEffort: "medium",
-      }),
-    ).toEqual([
-      "npx",
-      "@agentclientprotocol/codex-acp@1.10.0",
-      OPENCLAW_CODEX_CONFIG_ARG,
-      '{"model":"gpt-5.4","model_reasoning_effort":"medium"}',
-    ]);
-    expect(testing.isCodexAcpCommand("openclaw acp")).toBe(false);
-  });
-
   it.each([
     { thinking: "off", expectedEffort: undefined },
     { thinking: "low", expectedEffort: "low" },
@@ -1539,27 +1471,23 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("recognizes claude-agent-acp commands", () => {
-    expect(testing.isClaudeAcpCommand("npx @agentclientprotocol/claude-agent-acp")).toBe(true);
-    expect(testing.isClaudeAcpCommand("npx -y @agentclientprotocol/claude-agent-acp@0.33.1")).toBe(
-      true,
-    );
-    expect(testing.isClaudeAcpCommand("claude-agent-acp")).toBe(true);
-    expect(testing.isClaudeAcpCommand("claude-agent-acp.exe")).toBe(true);
+    expect(isClaudeAcpCommand("npx @agentclientprotocol/claude-agent-acp")).toBe(true);
+    expect(isClaudeAcpCommand("npx -y @agentclientprotocol/claude-agent-acp@0.33.1")).toBe(true);
+    expect(isClaudeAcpCommand("claude-agent-acp")).toBe(true);
+    expect(isClaudeAcpCommand("claude-agent-acp.exe")).toBe(true);
+    expect(isClaudeAcpCommand(`node "/tmp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`)).toBe(true);
     expect(
-      testing.isClaudeAcpCommand(`node "/tmp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`),
-    ).toBe(true);
-    expect(
-      testing.isClaudeAcpCommand(
+      isClaudeAcpCommand(
         `node.exe "C:/Users/runner/AppData/Local/Temp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`,
       ),
     ).toBe(true);
     expect(
-      testing.isClaudeAcpCommand(
+      isClaudeAcpCommand(
         `Node.EXE "C:/Users/runner/AppData/Local/Temp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`,
       ),
     ).toBe(true);
-    expect(testing.isClaudeAcpCommand("openclaw acp")).toBe(false);
-    expect(testing.isClaudeAcpCommand("npx @agentclientprotocol/codex-acp")).toBe(false);
+    expect(isClaudeAcpCommand("openclaw acp")).toBe(false);
+    expect(isClaudeAcpCommand("npx @agentclientprotocol/codex-acp")).toBe(false);
   });
 
   it("does not create launch leases for direct plugin-local ACP adapter commands", async () => {
@@ -2053,68 +1981,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       reason: "explicit-close",
     });
     expect(leaseStore.leases.size).toBe(0);
-  });
-
-  it("loads one wrapper snapshot per handle operation before mutation", async () => {
-    const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-control-reconnect ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => ({
-        name: "agent:codex:acp:binding:test",
-        agentCommand: leasedCommand,
-      })),
-      save: vi.fn(async () => {}),
-    };
-    const leaseStore = makeLeaseStore();
-    const { runtime, delegate } = makeRuntime(baseStore, {
-      openclawGatewayInstanceId: "gateway-test",
-      openclawProcessLeaseStore: leaseStore.store,
-      openclawWrapperRoot: "/tmp/openclaw/acpx",
-    });
-    const expectPendingLease = () => expect(leaseStore.store.save).not.toHaveBeenCalled();
-    vi.spyOn(delegate, "startTurn").mockImplementation((input) => {
-      expectPendingLease();
-      return makeTurn(input);
-    });
-    vi.spyOn(delegate, "setMode").mockImplementation(async () => expectPendingLease());
-    const setConfigOption = vi
-      .spyOn(delegate, "setConfigOption")
-      .mockImplementation(async () => expectPendingLease());
-    vi.spyOn(delegate, "close").mockImplementation(async () => expectPendingLease());
-    const handle = {
-      sessionKey: "agent:codex:acp:binding:test",
-      backend: "acpx" as const,
-      runtimeSessionName: "agent:codex:acp:binding:test",
-    };
-    const operations = [
-      async () =>
-        await runtime.startTurn({ handle, text: "OK", mode: "prompt", requestId: "1" }).result,
-      async () => {
-        for await (const event of runtime.runTurn({
-          handle,
-          text: "OK",
-          mode: "prompt",
-          requestId: "legacy",
-        })) {
-          void event;
-        }
-      },
-      async () => await runtime.setConfigOption({ handle, key: "thinking", value: "minimal" }),
-      async () => await runtime.setMode({ handle, mode: "plan" }),
-      async () => await runtime.close({ handle, reason: "done" }),
-    ];
-
-    for (const operation of operations) {
-      vi.mocked(baseStore["load"]).mockClear();
-      await operation();
-      expect(baseStore["load"]).toHaveBeenCalledOnce();
-      expect(leaseStore.leases.size).toBe(0);
-    }
-
-    expect(setConfigOption).toHaveBeenCalledWith({
-      handle,
-      key: "reasoning_effort",
-      value: "low",
-    });
   });
 
   it("joins abandoned runTurn cancellation and leaves uncertain process cleanup to close", async () => {

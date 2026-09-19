@@ -11,7 +11,6 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -412,16 +411,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     this.manualError = null;
   }
 
-  private async useManualProvider(providerId: string): Promise<void> {
-    this.selectManualProvider(providerId);
-    await this.updateComplete;
-    const input = this.renderRoot.querySelector<HTMLInputElement>(
-      '.model-setup__manual input[type="password"]',
-    );
-    input?.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
-    input?.focus();
-  }
-
   private async handleWizardDone({
     startMethod,
     preparedModelRef,
@@ -698,7 +687,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         );
       },
       onManualProviderChange: (providerId) => this.selectManualProvider(providerId),
-      onUseManualProvider: (providerId) => void this.useManualProvider(providerId),
       onManualApiKeyChange: (apiKey) => {
         this.manualApiKey = apiKey;
         this.manualError = null;

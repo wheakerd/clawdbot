@@ -5,9 +5,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenKeyedStoreOptions,
@@ -38,7 +36,8 @@ import {
   reapStaleOpenClawOwnedAcpxOrphans,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
-import { createLazyAcpRuntimeProxy, type CompleteAcpRuntime } from "./runtime-proxy.js";
+import type { CompleteAcpRuntime } from "./runtime-proxy.js";
+import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "./runtime.js";
 import {
   ACPX_GATEWAY_INSTANCE_KEY,
   ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
@@ -77,114 +76,61 @@ type CreateAcpxRuntimeServiceParams = {
   processCleanupDeps?: AcpxProcessCleanupDeps;
 };
 
-const loadRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));
-
-/** Convert ACPX timeout seconds into timer-safe milliseconds. */
-export function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
+function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
   if (timeoutSeconds === undefined) {
     return undefined;
   }
   return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 1;
 }
 
-function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
-  let runtime: AcpxRuntimeLike | null = null;
-  let runtimePromise: Promise<AcpxRuntimeLike> | null = null;
-
-  async function resolveRuntime(): Promise<AcpxRuntimeLike> {
-    if (runtime) {
-      return runtime;
-    }
-    runtimePromise ??= loadRuntimeModule().then(async (module) => {
-      // Snapshot filenames once under the service owner. Runtime never migrates or reads legacy payloads.
-      const names = await fs
-        .readdir(path.join(params.pluginConfig.stateDir, "sessions"))
-        .catch((error: unknown) => {
-          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-            return [];
-          }
-          throw error;
-        });
-      const legacyBareSessionKeys = new Set<string>();
-      for (const name of names) {
-        if (!name.endsWith(".json")) {
-          continue;
-        }
-        const recordId = decodeURIComponent(name.slice(0, -5));
-        if (
-          !recordId.startsWith("agent:") &&
-          !recordId.startsWith(".openclaw-owner-") &&
-          !recordId.includes(":oneshot:")
-        ) {
-          legacyBareSessionKeys.add(recordId.toLowerCase());
-        }
+async function createDefaultRuntime(params: AcpxRuntimeFactoryParams): Promise<AcpxRuntimeLike> {
+  // Snapshot filenames once under the service owner. Runtime never migrates or reads legacy payloads.
+  const names = await fs
+    .readdir(path.join(params.pluginConfig.stateDir, "sessions"))
+    .catch((error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        return [];
       }
-      runtime = new module.AcpxRuntime({
-        cwd: params.pluginConfig.cwd,
-        openclawLegacyBareSessionKeys: legacyBareSessionKeys,
-        openclawGatewayInstanceId: params.gatewayInstanceId,
-        openclawProcessLeaseStore: params.processLeaseStore,
-        openclawWrapperRoot: params.wrapperRoot,
-        sessionStore: module.createFileSessionStore({
-          stateDir: params.pluginConfig.stateDir,
-        }),
-        agentRegistry: module.createAgentRegistry({ overrides: params.pluginConfig.agents }),
-        probeAgent: params.pluginConfig.probeAgent,
-        mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
-        pluginToolsMcpBridgeEnabled: params.pluginConfig.pluginToolsMcpBridge,
-        openclawToolsMcpBridgeEnabled: params.pluginConfig.openClawToolsMcpBridge,
-        permissionMode: params.pluginConfig.permissionMode,
-        nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
-        elicitationModes: ["form", "url"],
-        timeoutMs: resolveAcpxTimerTimeoutMs(params.pluginConfig.timeoutSeconds),
-      }) as AcpxRuntimeLike;
-      return runtime;
+      throw error;
     });
-    return await runtimePromise;
-  }
-
-  return {
-    ...createLazyAcpRuntimeProxy(resolveRuntime),
-    async shutdown() {
-      await runtimePromise;
-      await runtime?.shutdown();
-    },
-    isHealthy() {
-      return runtime?.isHealthy() ?? false;
-    },
-  };
-}
-
-function formatDoctorDetail(detail: unknown): string | null {
-  if (!detail) {
-    return null;
-  }
-  if (typeof detail === "string") {
-    return detail.trim() || null;
-  }
-  if (detail instanceof Error) {
-    return formatErrorMessage(detail);
-  }
-  if (typeof detail === "object") {
-    try {
-      return JSON.stringify(detail) ?? inspect(detail, { breakLength: Infinity, depth: 3 });
-    } catch {
-      return inspect(detail, { breakLength: Infinity, depth: 3 });
+  const legacyBareSessionKeys = new Set<string>();
+  for (const name of names) {
+    if (!name.endsWith(".json")) {
+      continue;
+    }
+    const recordId = decodeURIComponent(name.slice(0, -5));
+    if (
+      !recordId.startsWith("agent:") &&
+      !recordId.startsWith(".openclaw-owner-") &&
+      !recordId.includes(":oneshot:")
+    ) {
+      legacyBareSessionKeys.add(recordId.toLowerCase());
     }
   }
-  if (
-    typeof detail === "number" ||
-    typeof detail === "boolean" ||
-    typeof detail === "bigint" ||
-    typeof detail === "symbol"
-  ) {
-    return detail.toString();
-  }
-  return inspect(detail, { breakLength: Infinity, depth: 3 });
+  return new AcpxRuntime({
+    cwd: params.pluginConfig.cwd,
+    openclawLegacyBareSessionKeys: legacyBareSessionKeys,
+    openclawGatewayInstanceId: params.gatewayInstanceId,
+    openclawProcessLeaseStore: params.processLeaseStore,
+    openclawWrapperRoot: params.wrapperRoot,
+    sessionStore: createFileSessionStore({ stateDir: params.pluginConfig.stateDir }),
+    agentRegistry: createAgentRegistry({ overrides: params.pluginConfig.agents }),
+    probeAgent: params.pluginConfig.probeAgent,
+    mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
+    pluginToolsMcpBridgeEnabled: params.pluginConfig.pluginToolsMcpBridge,
+    openclawToolsMcpBridgeEnabled: params.pluginConfig.openClawToolsMcpBridge,
+    permissionMode: params.pluginConfig.permissionMode,
+    nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
+    elicitationModes: ["form", "url"],
+    timeoutMs: resolveAcpxTimerTimeoutMs(params.pluginConfig.timeoutSeconds),
+  });
 }
 
-function formatDoctorFailureMessage(report: { message: string; details?: unknown[] }): string {
-  const detailText = report.details?.map(formatDoctorDetail).filter(Boolean).join("; ").trim();
+function formatDoctorFailureMessage(report: { message: string; details?: string[] }): string {
+  const detailText = report.details
+    ?.map((detail) => detail.trim())
+    .filter(Boolean)
+    .join("; ");
   return detailText ? `${report.message} (${detailText})` : report.message;
 }
 
@@ -453,21 +399,13 @@ export function createAcpxRuntimeService(
         await promote(ctx);
       }
       const startedRuntime = await measureAcpxStartup(ctx, "runtime.create", () =>
-        params.runtimeFactory
-          ? params.runtimeFactory({
-              pluginConfig,
-              gatewayInstanceId,
-              processLeaseStore,
-              wrapperRoot,
-              logger: ctx.logger,
-            })
-          : createLazyDefaultRuntime({
-              pluginConfig,
-              gatewayInstanceId,
-              processLeaseStore,
-              wrapperRoot,
-              logger: ctx.logger,
-            }),
+        (params.runtimeFactory ?? createDefaultRuntime)({
+          pluginConfig,
+          gatewayInstanceId,
+          processLeaseStore,
+          wrapperRoot,
+          logger: ctx.logger,
+        }),
       );
       runtime = startedRuntime;
 

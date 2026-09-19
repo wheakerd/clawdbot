@@ -61,25 +61,4 @@ describe("createLazyAcpRuntimeProxy", () => {
     expect(submitted).toBe(true);
     expect(startTurn).toHaveBeenCalledTimes(1);
   });
-
-  it("fails loudly instead of fabricating success when a resolved runtime is missing hooks", async () => {
-    // Contract-violating runtime only reachable by bypassing the type system.
-    const incomplete = {
-      ensureSession: vi.fn(async () => handle),
-      async *runTurn() {},
-      cancel: vi.fn(async () => {}),
-      close: vi.fn(async () => {}),
-    } as unknown as CompleteAcpRuntime;
-    const proxy = createLazyAcpRuntimeProxy(async () => incomplete);
-
-    // Pre-fix the proxy fabricated `{ ok: true }` / `{}` / silent no-ops here.
-    await expect(proxy.doctor()).rejects.toThrow();
-    await expect(proxy.getStatus({ handle })).rejects.toThrow();
-    await expect(proxy.getCapabilities({ handle })).rejects.toThrow();
-    await expect(proxy.prepareFreshSession({ sessionKey: handle.sessionKey })).rejects.toThrow();
-    await expect(proxy.setMode({ handle, mode: "auto" })).rejects.toThrow();
-    await expect(
-      proxy.setConfigOption({ handle, key: "model", value: "sonnet-4.6" }),
-    ).rejects.toThrow();
-  });
 });

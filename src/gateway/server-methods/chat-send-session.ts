@@ -321,6 +321,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
     agentId,
     sessionKey,
     entry,
+    persistedEntry: entry,
     harness,
     provider: resolvedSessionModel.provider,
     modelId: resolvedSessionModel.model,

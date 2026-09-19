@@ -1,5 +1,6 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, describe, expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -16,6 +17,7 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         if (mode === "volatile") {
           await page.addInitScript(() => {
+            // oxlint-disable-next-line typescript/unbound-method -- call(this, key, value) preserves each Storage receiver.
             const setItem = Storage.prototype.setItem;
             Storage.prototype.setItem = function (key: string, value: string) {
               if (key.startsWith("openclaw.control.chatComposer.v2:")) {
@@ -312,12 +314,16 @@ suite.define(() => {
                   message: "Keep this draft; do not send automatically.",
                   attachments: [{ fileName: "notes.txt" }],
                 });
+                assert(
+                  isRecord(resumed.params) && typeof resumed.params.idempotencyKey === "string",
+                );
+                const runId = resumed.params.idempotencyKey;
                 await gateway.resolveDeferred("chat.send", {
-                  runId: String(resumed.params.idempotencyKey),
+                  runId,
                   status: "started",
                 });
                 await gateway.emitChatFinal({
-                  runId: String(resumed.params.idempotencyKey),
+                  runId,
                   text: "Native retry completed.",
                 });
                 await pane

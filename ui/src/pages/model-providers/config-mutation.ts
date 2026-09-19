@@ -162,13 +162,8 @@ export type ModelProviderConfigMutation = {
   replacePaths?: string[];
 };
 
-export type ModelProviderConfigMutationResult =
-  | { ok: false }
-  | { ok: true; agentEpoch: number; warning: string | null };
-
 type ModelProviderConfigMutationOwner = {
   runtimeConfig: RuntimeConfigCapability;
-  agentEpoch: number;
   isCurrentClient: () => boolean;
   isCurrentAgent: () => boolean;
   setBusy: (busy: boolean) => void;
@@ -203,14 +198,14 @@ export function modelProviderErrorMessage(error: unknown): string {
 export async function runModelProviderConfigMutation(
   owner: ModelProviderConfigMutationOwner,
   params: ModelProviderConfigMutation,
-): Promise<ModelProviderConfigMutationResult> {
-  const { agentEpoch, runtimeConfig } = owner;
+): Promise<void> {
+  const { runtimeConfig } = owner;
   owner.setBusy(true);
   owner.setMessage(null);
   try {
     await runtimeConfig.ensureLoaded();
     if (!owner.isCurrentClient()) {
-      return { ok: false };
+      return;
     }
     const patched = await runtimeConfig.patch({
       raw: params.raw,
@@ -218,7 +213,7 @@ export async function runModelProviderConfigMutation(
       ...(params.replacePaths ? { replacePaths: params.replacePaths } : {}),
     });
     if (!owner.isCurrentClient()) {
-      return { ok: false };
+      return;
     }
     if (!patched) {
       if (owner.isCurrentAgent()) {
@@ -227,14 +222,11 @@ export async function runModelProviderConfigMutation(
           text: runtimeConfig.state.lastError ?? t("modelProviders.configUnavailable"),
         });
       }
-      return { ok: false };
     }
-    return { ok: true, agentEpoch, warning: null };
   } catch (error) {
     if (owner.isCurrentClient() && owner.isCurrentAgent()) {
       owner.setMessage({ kind: "error", text: modelProviderErrorMessage(error) });
     }
-    return { ok: false };
   } finally {
     if (owner.isCurrentClient() && owner.isCurrentAgent()) {
       owner.setBusy(false);
@@ -255,7 +247,7 @@ export async function runModelProviderApiKeyMutation(
     apiKey: string | null;
     success: string;
   },
-): Promise<ModelProviderConfigMutationResult> {
+): Promise<{ ok: false } | { ok: true; warning: string | null }> {
   const isCurrent = () => owner.isCurrentClient() && owner.isCurrentAgent();
   owner.setBusy(true);
   owner.setMessage(null);
@@ -305,7 +297,7 @@ export async function runModelProviderApiKeyMutation(
     }
     const warning = warnings.length > 0 ? warnings.join(" ") : null;
     owner.setMessage({ kind: "success", text: params.success, ...(warning ? { warning } : {}) });
-    return { ok: true, agentEpoch: owner.agentEpoch, warning };
+    return { ok: true, warning };
   } finally {
     if (isCurrent()) {
       owner.setBusy(false);

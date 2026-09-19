@@ -34,7 +34,6 @@ import {
   runModelProviderConfigMutation,
   type ModelBehaviorConfig,
   type ModelProviderConfigMutation,
-  type ModelProviderConfigMutationResult,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
@@ -168,7 +167,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private readonly installedAgents = new InstalledAgentsController(this, {
     gateway: this.gateway,
     getContext: () => this.context,
-    isConfigBusy: () => modelProviderConfigBusy(this.context),
   });
   private readonly profileActions = new ModelProviderProfileActionsController({
     getAgentEpoch: () => this.agentEpoch,
@@ -396,9 +394,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.probeResults = updateRecordEntry<ModelsProbeResult>(this.probeResults, provider, null);
   }
 
-  private async patchConfig(
-    params: ModelProviderConfigMutation,
-  ): Promise<ModelProviderConfigMutationResult> {
+  private async patchConfig(params: ModelProviderConfigMutation): Promise<void> {
     const client = this.context.gateway.snapshot.client;
     // Global defaults remain editable when the configured roster is empty.
     if (
@@ -407,14 +403,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       modelProviderConfigBusy(this.context) ||
       this.busy[params.key]
     ) {
-      return { ok: false };
+      return;
     }
     const clientEpoch = this.gateway.epoch;
     const agentEpoch = this.agentEpoch;
     return runModelProviderConfigMutation(
       {
         runtimeConfig: this.context.runtimeConfig,
-        agentEpoch,
         isCurrentClient: () => this.gateway.isCurrent({ client, epoch: clientEpoch }),
         isCurrentAgent: () => this.agentEpoch === agentEpoch,
         setBusy: (busy) => this.setBusy(params.key, busy),
@@ -454,7 +449,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const result = await runModelProviderApiKeyMutation(
       {
         runtimeConfig: this.context.runtimeConfig,
-        agentEpoch,
         isCurrentClient: isCurrent,
         isCurrentAgent: isCurrent,
         canMutate: () => this.canMutate(),

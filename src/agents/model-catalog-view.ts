@@ -410,12 +410,6 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
   };
 }
 
-type PreparedModelCatalogViewRequest = ModelCatalogViewFacts & {
-  kind: "prepared";
-  refreshNative?: boolean;
-  onError?: (error: unknown) => void;
-};
-
 type PickerModelCatalogViewRequest = {
   kind: "picker";
   config: OpenClawConfig;
@@ -444,9 +438,6 @@ type StatusModelCatalogView = ReturnType<typeof prepareModelCatalogView> & {
 };
 
 export function loadPreparedModelCatalogView(
-  params: PreparedModelCatalogViewRequest,
-): Promise<ReturnType<typeof prepareModelCatalogView>>;
-export function loadPreparedModelCatalogView(
   params: PickerModelCatalogViewRequest,
 ): Promise<{ snapshot: ModelCatalogSnapshot }>;
 export function loadPreparedModelCatalogView(
@@ -454,15 +445,8 @@ export function loadPreparedModelCatalogView(
 ): Promise<StatusModelCatalogView>;
 /** Acquires requested catalog facts before constructing a local view. */
 export async function loadPreparedModelCatalogView(
-  params:
-    | PreparedModelCatalogViewRequest
-    | PickerModelCatalogViewRequest
-    | StatusModelCatalogViewRequest,
-): Promise<
-  | ReturnType<typeof prepareModelCatalogView>
-  | StatusModelCatalogView
-  | { snapshot: ModelCatalogSnapshot }
-> {
+  params: PickerModelCatalogViewRequest | StatusModelCatalogViewRequest,
+): Promise<StatusModelCatalogView | { snapshot: ModelCatalogSnapshot }> {
   if (params.kind === "status") {
     const {
       getPublishedPreparedModelCatalogOwnerSnapshot,
@@ -543,33 +527,6 @@ export async function loadPreparedModelCatalogView(
       }),
       providerAuthLabels,
     };
-  }
-  if (params.kind === "prepared") {
-    let snapshot = params.snapshot;
-    if (params.refreshNative) {
-      const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
-      snapshot = await augmentModelCatalogWithAgentHarness({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        agentDir: params.agentDir ?? resolveAgentDir(params.cfg, params.agentId),
-        workspaceDir: params.workspaceDir,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: resolveAgentEffectiveModelPrimary(params.cfg, params.agentId),
-        snapshot,
-        includePickerRuntimes: true,
-        pluginRegistry: params.pluginRegistry,
-        isCurrent: params.isCurrent,
-        observationConfig: params.observationConfig,
-        onError: params.onError,
-      });
-      if (snapshot !== params.snapshot) {
-        Object.defineProperty(snapshot, "refreshFailed", {
-          enumerable: true,
-          get: () => params.snapshot.refreshFailed,
-        });
-      }
-    }
-    return prepareModelCatalogView({ ...params, snapshot });
   }
   const view = await acquirePickerModelCatalogView(params);
   const includeConfiguredProvider = params.includeConfiguredProvider;

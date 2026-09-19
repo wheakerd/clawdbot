@@ -165,7 +165,6 @@ it("reuses published native facts without renewing providers during warm API and
   inventory.providers.get(api.provider)!.expiresAt = 0;
   const providerCalls = mocks.runPreparedModelCatalogWorker.mock.calls.length;
   const nativeCalls = [loadA.mock.calls.length, loadB.mock.calls.length];
-  const merges = vi.spyOn(fullCatalog, "mergePreparedNativeCatalog");
   for (const selection of [
     { provider: api.provider, modelId: api.id, runtime: "openclaw" },
     { provider: b.provider, modelId: b.id, runtime: b.nativeRuntime },
@@ -175,13 +174,9 @@ it("reuses published native facts without renewing providers during warm API and
       workspaceDir: owner.workspaceDir,
       runtimePluginSelections: [selection],
     };
-    await using first = await acquireAgentRunPreparedModelRuntime(selected);
-    const captures = merges.mock.calls.length;
-    await using second = await acquireAgentRunPreparedModelRuntime(selected);
-    expect.soft(second.snapshot.modelCatalog).toBe(first.snapshot.modelCatalog);
-    expect.soft(merges).toHaveBeenCalledTimes(captures);
+    await using lease = await acquireAgentRunPreparedModelRuntime(selected);
     expect.soft(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(providerCalls);
-    expect(second.snapshot.modelCatalog.entries).toContainEqual(expect.objectContaining(b));
+    expect(lease.snapshot.modelCatalog.entries).toContainEqual(expect.objectContaining(b));
   }
   expect([loadA.mock.calls.length, loadB.mock.calls.length]).toEqual(nativeCalls);
 

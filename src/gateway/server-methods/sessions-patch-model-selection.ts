@@ -1,7 +1,4 @@
-import {
-  readAgentRuntimeRestrictionErrorDetails,
-  type AgentRuntimeRestrictionErrorDetails,
-} from "../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
+import type { AgentRuntimeRestrictionErrorDetails } from "../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import {
   ErrorCodes,
   errorShape,
@@ -175,6 +172,7 @@ export function resolveSessionNativeRuntimeRestriction(params: {
   agentId: string;
   sessionKey: string;
   entry: SessionEntry;
+  persistedEntry: SessionEntry | undefined;
   harness: AgentHarness;
   provider: string;
   modelId: string;
@@ -221,10 +219,14 @@ export function resolveSessionNativeRuntimeRestriction(params: {
   if (!restriction) {
     return undefined;
   }
-  const canRecover =
-    params.callerCanConsent &&
-    restriction.reason !== "sandbox-required" &&
-    restriction.reason !== "remote-execution";
+  const optional =
+    restriction.reason !== "sandbox-required" && restriction.reason !== "remote-execution";
+  // Creation has no persisted chat to authorize; its first send owns optional recovery.
+  const persisted = params.persistedEntry;
+  if (!persisted && optional) {
+    return undefined;
+  }
+  const canRecover = params.callerCanConsent && optional && persisted;
   const details: AgentRuntimeRestrictionErrorDetails = {
     code: "AGENT_RUNTIME_RESTRICTED",
     runtimeId: harness.id,
@@ -234,11 +236,13 @@ export function resolveSessionNativeRuntimeRestriction(params: {
       ? {
           recovery: {
             action: "use-native-permissions" as const,
-            sessionId: entry.sessionId,
-            ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
-            expectedPermissionMode: entry.permissionMode ?? null,
-            expectedSandboxMode: entry.sandboxMode ?? null,
-            expectedNativeRuntimeConsent: entry.nativeRuntimeConsent ?? null,
+            sessionId: persisted.sessionId,
+            ...(persisted.lifecycleRevision
+              ? { lifecycleRevision: persisted.lifecycleRevision }
+              : {}),
+            expectedPermissionMode: persisted.permissionMode ?? null,
+            expectedSandboxMode: persisted.sandboxMode ?? null,
+            expectedNativeRuntimeConsent: persisted.nativeRuntimeConsent ?? null,
           },
         }
       : {}),
@@ -302,47 +306,18 @@ export async function prepareSessionPatchRuntimeSelection(params: {
       params.entry.nativeRuntimeConsent = harness.id;
     }
     if (harness) {
-      validateEnvironment = () => {
-        const error = resolveSessionNativeRuntimeRestriction({
+      validateEnvironment = () =>
+        resolveSessionNativeRuntimeRestriction({
           cfg: params.cfg,
           agentId: params.agentId,
           sessionKey: params.placement?.sessionKey ?? params.patch.key,
           entry: params.entry,
+          persistedEntry: params.expectedEntry,
           harness,
           provider: model.provider,
           modelId: model.model,
-          callerCanConsent: params.callerCanConsent === true && params.expectedEntry !== undefined,
+          callerCanConsent: params.callerCanConsent === true,
         });
-        const details = readAgentRuntimeRestrictionErrorDetails(error?.details);
-        const expected = params.expectedEntry;
-        // Creation has no persisted chat to authorize yet. The first send checks
-        // optional restrictions against the committed incarnation before execution.
-        if (
-          !expected &&
-          details &&
-          details.reason !== "sandbox-required" &&
-          details.reason !== "remote-execution"
-        ) {
-          return undefined;
-        }
-        if (error && details?.recovery && expected) {
-          return {
-            ...error,
-            details: {
-              ...details,
-              recovery: {
-                ...details.recovery,
-                sessionId: expected.sessionId,
-                lifecycleRevision: expected.lifecycleRevision,
-                expectedPermissionMode: expected.permissionMode ?? null,
-                expectedSandboxMode: expected.sandboxMode ?? null,
-                expectedNativeRuntimeConsent: expected.nativeRuntimeConsent ?? null,
-              },
-            },
-          };
-        }
-        return error;
-      };
     }
   }
   const validate = () => {

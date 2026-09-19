@@ -2438,11 +2438,6 @@ export const en: TranslationMap & {
       title: "Recommended installs",
       intro: "Install an assistant or local model service, then check again.",
     },
-    unavailable: {
-      title: "Found, but needs attention",
-      signIn: "Set up & verify {provider}",
-      useApiKey: "Use API key",
-    },
     signIn: {
       title: "Set up and verify a model",
       description:

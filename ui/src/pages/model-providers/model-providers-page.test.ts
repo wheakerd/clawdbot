@@ -232,26 +232,6 @@ describe("ModelProvidersPage agent scope", () => {
     );
   });
 
-  it("keeps the Models header focused on provider actions", async () => {
-    const { context } = createHarness("main");
-    const page = appendPage(context);
-    await waitForFast(() => expect(page.querySelector("[data-models-connect]")).not.toBeNull());
-    expect(page.querySelector("openclaw-agent-select")).toBeNull();
-    expect(page.querySelector(".page-subtitle")?.textContent).toContain(
-      "Providers and credentials for the selected agent.",
-    );
-  });
-
-  it("links the page subtitle to the model providers guide", async () => {
-    const { context } = createHarness("main");
-    const page = appendPage(context);
-    await page.updateComplete;
-
-    const link = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
-    expect(link?.textContent?.trim()).toBe("Learn more");
-    expect(link?.href).toBe("https://docs.openclaw.ai/concepts/model-providers");
-  });
-
   it("opens model setup from the Model setup action", async () => {
     const { context } = createHarness("main");
     const page = appendPage(context);

@@ -2844,7 +2844,6 @@ describe("createTelegramBot", () => {
     getTelegramTestState: () => telegramTestState,
     readOnlySessionEntry,
     firstEditMessageTextArg,
-    firstEditMessageTextCall: () => mockCall(editMessageTextSpy, 0, "edit message text"),
     harness: { telegramBotDepsForTest, replySpy, editMessageTextSpy, answerCallbackQuerySpy },
   });
 

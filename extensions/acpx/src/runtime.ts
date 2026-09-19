@@ -431,7 +431,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   }>();
   private readonly delegate: BaseAcpxRuntime;
   private readonly generationRegistry: AcpxGenerationRegistry;
-  private readonly createDelegate: (nativeTools: boolean) => BaseAcpxRuntime;
   private readonly sessionScope = new AsyncLocalStorage<BridgeSession | null>();
   private readonly probeQueue = new KeyedAsyncQueue();
   private readonly probeAgent: string;
@@ -474,7 +473,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       },
       list: () => this.agentRegistry.list(),
     };
-    this.createDelegate = (nativeTools) =>
+    const createDelegate = (nativeTools: boolean) =>
       new BaseAcpxRuntime(
         {
           ...options,
@@ -533,18 +532,17 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         },
         delegateTestOptions as BaseAcpxRuntimeTestOptions,
       );
-    this.delegate = this.createDelegate(false);
+    this.delegate = createDelegate(false);
     this.generationRegistry = new AcpxGenerationRegistry(
       this.sessionStore,
       this.delegate,
-      this.createDelegate,
+      createDelegate,
     );
     this.probeAgent = normalizeAgentName(options.probeAgent) ?? "codex";
-    const probeCommand = resolveAgentCommand({
+    this.probeCommand = resolveAgentCommand({
       agentName: this.probeAgent,
       agentRegistry: this.agentRegistry,
     });
-    this.probeCommand = probeCommand;
   }
 
   private async runInGeneration<T>(
@@ -563,18 +561,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     } finally {
       release();
     }
-  }
-
-  private resolveDelegateForSession(params: {
-    command: AcpxAgentCommand | undefined;
-    sessionKey: string;
-    agentId?: string;
-    nativeTools: boolean;
-  }): BaseAcpxRuntime {
-    const generation =
-      acpxOperationScope.getStore()?.generation ??
-      this.generationRegistry.currentGeneration(resolveAcpxSessionResource(params));
-    return this.generationRegistry.resolveDelegate(generation, params.nativeTools);
   }
 
   private generationForHandle(handle: OpenClawRuntimeHandle): AcpxGeneration {
@@ -675,16 +661,9 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     handle: OpenClawRuntimeHandle,
     snapshot: AcpxHandleOperationSnapshot,
   ): BaseAcpxRuntime {
-    return acpxOperationScope.run(
-      { generation: snapshot.generation, recordId: snapshot.record?.acpxRecordId },
-      () =>
-        this.resolveDelegateForSession({
-          command: snapshot.command,
-          sessionKey: handle.sessionKey,
-          agentId: handle.agentId,
-          nativeTools:
-            snapshot.generation.nativeTools ?? resolveBridgeSession(handle)?.native === true,
-        }),
+    return this.generationRegistry.resolveDelegate(
+      snapshot.generation,
+      snapshot.generation.nativeTools ?? resolveBridgeSession(handle)?.native === true,
     );
   }
 
@@ -945,7 +924,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       this.runInGeneration(input, { generation }, async () => {
         this.generationRegistry.assertCurrentGeneration(generation);
         const handle = {
-          ...(await this.ensureSessionUnlocked(input)),
+          ...(await this.ensureSessionUnlocked(input, generation)),
           [acpxGenerationKey]: generation,
         };
         if (generation.retired && !this.generationRegistry.isStopping) {
@@ -965,6 +944,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
 
   private async ensureSessionUnlocked(
     logicalInput: OpenClawRuntimeEnsureInput,
+    generation: AcpxGeneration,
   ): Promise<OpenClawRuntimeHandle> {
     assertSupportedRuntimeSessionMode(logicalInput.mode);
     const command =
@@ -973,12 +953,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         agentName: logicalInput.agent,
         agentRegistry: this.agentRegistry,
       });
-    const delegate = this.resolveDelegateForSession({
-      command,
-      sessionKey: logicalInput.sessionKey,
-      agentId: logicalInput.agentId,
-      nativeTools: resolveBridgeSession(logicalInput)?.native === true,
-    });
+    const delegate = this.generationRegistry.resolveDelegate(
+      generation,
+      resolveBridgeSession(logicalInput)?.native === true,
+    );
     const logicalTarget = {
       sessionKey: logicalInput.sessionKey,
       agentId: logicalInput.agentId,
@@ -1392,13 +1370,6 @@ export {
   createFileSessionStore,
   decodeAcpxRuntimeHandleState,
   encodeAcpxRuntimeHandleState,
-};
-
-/** Test-only hooks for ACPX runtime behavior that is otherwise private. */
-export const testing = {
-  appendCodexAcpConfigOverrides,
-  isClaudeAcpCommand,
-  isCodexAcpCommand,
 };
 
 export type { AcpAgentRegistry, AcpRuntimeOptions, AcpSessionRecord, AcpSessionStore };
