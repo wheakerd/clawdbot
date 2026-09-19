@@ -9,7 +9,13 @@ vi.mock("../../auto-reply/reply/model-runtime-normalization.js", () => ({
     status: "ready",
     runtime: { kind: "set", runtime: "native-fixture" },
     catalog: [],
-    executionEnvironment: { kind: "host-only", label: "Native fixture" },
+    harness: {
+      id: "native-fixture",
+      label: "Native fixture",
+      executionEnvironment: "host-only",
+      supports: () => ({ supported: true }),
+      runAttempt: vi.fn(),
+    },
     validateRuntimeSelection: preparation.validate,
   }),
 }));
@@ -29,14 +35,14 @@ const original: SessionEntry = {
   modelOverride: "model",
 };
 const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
-function prepare(entry: SessionEntry, callerCanRunUnsandboxed = true, config = cfg) {
+function prepare(entry: SessionEntry, callerCanConsent = true, config = cfg) {
   return prepareSessionPatchRuntimeSelection({
     cfg: config,
     agentId: "main",
     patch: { key, model },
     entry,
     expectedEntry: original,
-    callerCanRunUnsandboxed,
+    callerCanConsent,
   });
 }
 
@@ -50,15 +56,43 @@ it("offers an authorized recovery bound to the original chat and settings", asyn
         reason: "sandbox",
         runtimeId: "native-fixture",
         recovery: {
-          action: "run-without-sandbox",
+          action: "use-native-permissions",
           sessionId: original.sessionId,
           lifecycleRevision: original.lifecycleRevision,
           expectedPermissionMode: "workspace",
           expectedSandboxMode: null,
+          expectedNativeRuntimeConsent: null,
         },
       },
     },
   });
+});
+
+it.each([
+  { tools: { fs: { workspaceOnly: true } }, reason: "workspace-only" },
+  { tools: { deny: ["exec"] }, reason: "tool-policy" },
+])("offers per-chat consent for optional $reason", async ({ tools, reason }) => {
+  const entry = {
+    ...original,
+    agentRuntimeOverride: "native-fixture",
+    permissionMode: "full" as const,
+    sandboxMode: "off" as const,
+  };
+  expect(await prepare(entry, true, { tools })).toMatchObject({
+    ok: false,
+    error: {
+      details: {
+        reason,
+        recovery: { action: "use-native-permissions", expectedNativeRuntimeConsent: null },
+      },
+    },
+  });
+  expect(
+    (await prepare({ ...entry, nativeRuntimeConsent: "native-fixture" }, true, { tools })).ok,
+  ).toBe(true);
+  expect(
+    (await prepare({ ...entry, nativeRuntimeConsent: "different-runtime" }, true, { tools })).ok,
+  ).toBe(false);
 });
 
 it.each([
@@ -86,13 +120,6 @@ it.each([
       agents: { ...cfg.agents, entries: { main: { tools: { exec: { host: "node" as const } } } } },
     },
     reason: "remote-execution",
-  },
-  {
-    label: "workspace-only files",
-    entry: original,
-    admin: true,
-    config: { ...cfg, tools: { fs: { workspaceOnly: true } } },
-    reason: "workspace-only",
   },
 ])("does not offer an escape from $label", async ({ entry, admin, config, reason }) => {
   const result = await prepare({ ...entry }, admin, config);

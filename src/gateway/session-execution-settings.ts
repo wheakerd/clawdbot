@@ -53,5 +53,14 @@ export function applySessionExecutionSettings(
   } else if (patch.permissionMode !== undefined) {
     next.permissionMode = patch.permissionMode;
   }
+  if (
+    patch.nativeRuntimeConsent === null ||
+    next.permissionMode !== "full" ||
+    next.sandboxMode !== "off"
+  ) {
+    delete next.nativeRuntimeConsent;
+  } else if (patch.nativeRuntimeConsent !== undefined) {
+    next.nativeRuntimeConsent = patch.nativeRuntimeConsent;
+  }
   return undefined;
 }

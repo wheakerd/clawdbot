@@ -2489,6 +2489,7 @@ describe("sqlite session normalization", () => {
     const sourceEntry: InternalSessionEntry = {
       label: "Source",
       sandboxMode: "off",
+      nativeRuntimeConsent: "native-fixture",
       lifecycleRunId: "source-run",
       lastRunId: "settled-source-run",
       sessionId: "source-session",
@@ -2527,6 +2528,8 @@ describe("sqlite session normalization", () => {
     expect(loadSessionEntry({ ...sourceEntryScope, sessionKey: branchKey })).toEqual(result.entry);
     expect(result.entry.sandboxMode).toBeUndefined();
     expect(loadSessionEntry(sourceEntryScope)?.sandboxMode).toBe("off");
+    expect(result.entry.nativeRuntimeConsent).toBeUndefined();
+    expect(loadSessionEntry(sourceEntryScope)?.nativeRuntimeConsent).toBe("native-fixture");
     expect(notify).toHaveBeenCalledWith({
       agentId: "main",
       kind: "create",
@@ -2674,6 +2677,7 @@ describe("sqlite session normalization", () => {
     await upsertSessionEntryCore(sourceEntryScope, {
       label: "Current",
       sandboxMode: "off",
+      nativeRuntimeConsent: "native-fixture",
       sessionId: "current-session",
       updatedAt: 10,
       compactionCheckpoints: [checkpoint],
@@ -2701,6 +2705,7 @@ describe("sqlite session normalization", () => {
       sessionId: result.entry.sessionId,
     };
     expect(loadSessionEntry(sourceEntryScope)).toEqual(result.entry);
+    expect(result.entry.nativeRuntimeConsent).toBeUndefined();
     expect(result.entry).toEqual(
       expect.objectContaining({
         label: "Current",

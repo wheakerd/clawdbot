@@ -294,7 +294,7 @@ export type RestartRecoveryRun = {
 
 type SessionEntryCore = SessionRestartRecoveryState &
   SessionEntryProvenance &
-  Pick<SessionRow, "permissionMode" | "sandboxMode" | "sessionRoot"> & {
+  Pick<SessionRow, "permissionMode" | "sandboxMode" | "nativeRuntimeConsent" | "sessionRoot"> & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: SessionVisibility;
     /**

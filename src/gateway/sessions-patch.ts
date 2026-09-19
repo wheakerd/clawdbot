@@ -515,6 +515,9 @@ function* projectSessionPatchSteps(
   if (patch.agentRuntime === null) {
     applyModelRuntimeDirective(next, { kind: "clear" });
   }
+  if (typeof patch.nativeRuntimeConsent === "string" && typeof patch.model !== "string") {
+    yield* loadPreparedModelCatalogForPatch();
+  }
   if ("model" in patch) {
     const agentModelFallback = isAgentSessionModelPatchOrigin()
       ? next.modelFallback?.source === "agent-patch"

@@ -10,6 +10,7 @@ import {
 } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import {
   appendSessionTranscriptMessageByIdentityStrict,
   readVisibleSessionTranscriptMessageEntries,
@@ -353,6 +354,64 @@ it.each([
         await expect(runAgentHarnessAttempt(attempt.input)).rejects.toThrow(reason);
         expect(await peerStates(native.peerDirectory)).toEqual([]);
         expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual([]);
+      } finally {
+        attempt.close();
+        await native.service.stop?.(native.context);
+      }
+    });
+  },
+  60000,
+);
+
+it.each([
+  { consent: "acp-opencode", mandatorySandbox: undefined, permitted: true },
+  { consent: "acp-kilocode", mandatorySandbox: undefined, permitted: false },
+  { consent: "acp-opencode", mandatorySandbox: "session", permitted: false },
+  { consent: "acp-opencode", mandatorySandbox: "exec", permitted: false },
+])(
+  "uses exact native consent=$consent with mandatorySandbox=$mandatorySandbox",
+  async ({ consent, mandatorySandbox, permitted }) => {
+    await withOpenClawTestState({ label: "acp-native-consent" }, async (state) => {
+      const config: OpenClawConfig = {
+        session: { store: path.join(state.sessionsDir(), "sessions.json") },
+        tools: {
+          profile: "full",
+          deny: ["browser"],
+          ...(mandatorySandbox === "exec" ? { exec: { host: "sandbox" as const } } : {}),
+        },
+      };
+      const native = await registerNative(state, config, "owner-agent.mjs");
+      const attempt = await attemptFor(state, config, "opencode", "full");
+      try {
+        await upsertSessionEntry({
+          ...attempt.target,
+          entry: {
+            sessionId: attempt.target.sessionId,
+            updatedAt: Date.now(),
+            agentRuntimeOverride: "acp-opencode",
+            nativeRuntimeConsent: consent,
+            permissionMode: "full",
+            sandboxMode: "off",
+            ...(mandatorySandbox === "session" ? { sandbox: "required" as const } : {}),
+          },
+        });
+        if (permitted) {
+          const result = await runAgentHarnessAttempt(attempt.input);
+          expect(result.terminal.kind).toBe("ok");
+          const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
+          expect(effects).toHaveLength(1);
+          expect(
+            await fs.readFile(path.join(native.peerDirectory, "effects", effects[0]!), "utf8"),
+          ).toContain("Record the requested native effect.");
+          expect(config.tools?.deny).toEqual(["browser"]);
+        } else {
+          await expect(runAgentHarnessAttempt(attempt.input)).rejects.toThrow(
+            mandatorySandbox
+              ? "requires a sandbox"
+              : "cannot enforce this conversation's tool policy",
+          );
+          expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual([]);
+        }
       } finally {
         attempt.close();
         await native.service.stop?.(native.context);

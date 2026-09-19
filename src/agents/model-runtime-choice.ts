@@ -2,6 +2,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { FailoverError } from "./failover/error.js";
+import type { AgentHarness } from "./harness/types.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import { modelKey, type ModelRef } from "./model-ref-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
@@ -247,7 +248,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
   | {
       kind: "ready";
       runtimeId: string;
-      executionEnvironment?: { kind: "host-only"; label: string };
+      harness?: AgentHarness;
       validate: () => string | undefined;
     }
 > {
@@ -372,8 +373,6 @@ export async function preparePublishedModelRuntimeChoice(params: {
     kind: "ready",
     runtimeId,
     validate,
-    ...(harness?.executionEnvironment === "host-only"
-      ? { executionEnvironment: { kind: "host-only" as const, label: harness.label } }
-      : {}),
+    harness,
   };
 }

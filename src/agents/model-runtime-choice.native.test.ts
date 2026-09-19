@@ -116,7 +116,7 @@ it.each(["catalog", "configured", "literal"] as const)(
       expect(result).toMatchObject({
         status: "ready",
         runtime: { kind: "set", runtime: `native-${i}` },
-        executionEnvironment: { kind: "host-only", label: entry.name },
+        harness: { id: `native-${i}`, executionEnvironment: "host-only", label: entry.name },
       });
       if (result.status !== "ready") {
         throw new Error("Native selection failed");

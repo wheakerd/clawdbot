@@ -1,10 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { readAgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  readAgentRuntimeRestrictionErrorDetails,
+  type AgentRuntimeRestrictionErrorDetails,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { FastMode, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -383,6 +385,177 @@ export function switchChatFastMode(
   return patchPromise;
 }
 
+type ChatModelSelection = {
+  owner: AbortController;
+  ownsSelection: () => boolean;
+  agentScope: { agentId?: string };
+  expectedSessionId?: string;
+  activeRow?: GatewaySessionRow;
+};
+
+function claimChatModelSelection(host: ChatModelSettingsHost, targetSessionKey: string) {
+  modelSelectionOwners.get(host)?.abort();
+  const owner = new AbortController();
+  modelSelectionOwners.set(host, owner);
+  const client = host.client;
+  const connectionEpoch = host.connectionEpoch;
+  const sessions = host.sessions;
+  const selectedSessionKey = host.sessionKey;
+  const agentScope = scopedAgentParamsForSession(host, targetSessionKey);
+  const activeRow = host.sessionsResult?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, targetSessionKey),
+  );
+  const expectedSessionId = activeRow?.sessionId;
+  const ownsSelection = () =>
+    !owner.signal.aborted &&
+    modelSelectionOwners.get(host) === owner &&
+    host.connected &&
+    host.client === client &&
+    host.connectionEpoch === connectionEpoch &&
+    host.sessions === sessions &&
+    host.sessionKey === selectedSessionKey &&
+    scopedAgentParamsForSession(host, targetSessionKey).agentId === agentScope.agentId &&
+    host.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, targetSessionKey),
+    )?.sessionId === expectedSessionId;
+  return { owner, ownsSelection, agentScope, expectedSessionId, activeRow };
+}
+
+async function confirmChatNativeRuntimeRecovery(
+  host: ChatModelSettingsHost,
+  restriction: AgentRuntimeRestrictionErrorDetails,
+  targetSessionKey: string,
+  model: string,
+  selection: ChatModelSelection,
+  selectionUnchanged: () => boolean = () => true,
+): Promise<boolean> {
+  const { owner, ownsSelection, agentScope, expectedSessionId } = selection;
+  if (!ownsSelection()) {
+    return false;
+  }
+  const explanation = t(`chat.nativeRuntimeRecovery.reasons.${restriction.reason}`, {
+    runtime: restriction.runtimeLabel,
+  });
+  const blocked = () =>
+    setChatError(host, `${explanation} ${t("chat.nativeRuntimeRecovery.chooseAnother")}`, true);
+  const recovery = restriction.recovery;
+  const canRecover = () =>
+    ownsSelection() &&
+    selectionUnchanged() &&
+    Array.isArray(host.hello?.auth?.scopes) &&
+    hasOperatorAdminAccess(host.hello?.auth ?? null);
+  if (
+    restriction.reason === "sandbox-required" ||
+    !recovery ||
+    recovery.action !== "use-native-permissions" ||
+    recovery.sessionId !== expectedSessionId ||
+    !canRecover()
+  ) {
+    blocked();
+    return false;
+  }
+  // The dialog requires a browser document; ordinary send consumers also run without a DOM.
+  const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
+  if (!canRecover()) {
+    return false;
+  }
+  const confirmed = await showConfirmDialog({
+    title: t("chat.nativeRuntimeRecovery.title", { runtime: restriction.runtimeLabel }),
+    message: `${explanation}\n\n${t("chat.nativeRuntimeRecovery.confirmMessage", { runtime: restriction.runtimeLabel })}`,
+    confirmLabel: t("chat.nativeRuntimeRecovery.confirm"),
+    danger: true,
+    signal: owner.signal,
+  });
+  if (!canRecover()) {
+    return false;
+  }
+  if (!confirmed) {
+    blocked();
+    return false;
+  }
+  try {
+    // One exact-target mutation; confirmation never submits or replays a prompt.
+    const recovered = await patchChatSessionSettings(
+      host,
+      targetSessionKey,
+      {
+        model: model || null,
+        agentRuntime: restriction.runtimeId,
+        nativeRuntimeConsent: restriction.runtimeId,
+        sandboxMode: "off",
+        permissionMode: "full",
+        expectedLifecycleRevision: recovery.lifecycleRevision,
+        expectedPermissionMode: recovery.expectedPermissionMode,
+        expectedSandboxMode: recovery.expectedSandboxMode,
+        expectedNativeRuntimeConsent: recovery.expectedNativeRuntimeConsent,
+      },
+      {
+        ...agentScope,
+        expectedSessionId: recovery.sessionId,
+        ownsModelOverride: ownsSelection,
+        canDispatch: canRecover,
+      },
+    );
+    if (!ownsSelection() || !recovered) {
+      return false;
+    }
+    setChatError(
+      host,
+      recovered.listRefreshError
+        ? t("chat.nativeRuntimeRecovery.refreshFailed", { error: recovered.listRefreshError })
+        : null,
+      true,
+    );
+    return true;
+  } catch (error) {
+    if (ownsSelection()) {
+      setChatError(
+        host,
+        t("chat.nativeRuntimeRecovery.failed", { error: formatUiError(error) }),
+        true,
+      );
+    }
+    return false;
+  }
+}
+
+export function captureChatNativeRuntimeRecovery(
+  host: ChatModelSettingsHost,
+  targetSessionKey: string,
+): (restriction: AgentRuntimeRestrictionErrorDetails) => Promise<boolean> {
+  const selection = claimChatModelSelection(host, targetSessionKey);
+  const model = selection.activeRow?.model;
+  const provider = selection.activeRow?.modelProvider;
+  const runtimeId = selection.activeRow?.agentRuntime?.id;
+  const modelValue = resolveChatModelOverrideValue({
+    activeSession: selection.activeRow,
+    chatModelCatalog: host.chatModelCatalog,
+    modelOverrides: host.sessions.state.modelOverrides,
+    sessionKey: targetSessionKey,
+    sessionsResult: host.sessionsResult ?? null,
+  });
+  return (restriction) =>
+    confirmChatNativeRuntimeRecovery(
+      host,
+      restriction,
+      targetSessionKey,
+      modelValue,
+      selection,
+      () => {
+        const row = host.sessionsResult?.sessions.find((candidate) =>
+          areUiSessionKeysEquivalent(candidate.key, targetSessionKey),
+        );
+        return Boolean(
+          modelValue &&
+          row?.model === model &&
+          row?.modelProvider === provider &&
+          row?.agentRuntime?.id === runtimeId &&
+          runtimeId === restriction.runtimeId,
+        );
+      },
+    );
+}
+
 export async function switchChatModel(
   host: ChatModelSettingsHost,
   nextModel: string,
@@ -399,27 +572,8 @@ export async function switchChatModel(
     return false;
   }
   // A newer intent retires even a confirmation for a previous selection.
-  modelSelectionOwners.get(host)?.abort();
-  const owner = new AbortController();
-  modelSelectionOwners.set(host, owner);
-  const client = host.client;
-  const connectionEpoch = host.connectionEpoch;
-  const sessions = host.sessions;
-  const selectedSessionKey = host.sessionKey;
-  const agentScope = scopedAgentParamsForSession(host, targetSessionKey);
-  const expectedSessionId = activeRow?.sessionId;
-  const ownsSelection = () =>
-    !owner.signal.aborted &&
-    modelSelectionOwners.get(host) === owner &&
-    host.connected &&
-    host.client === client &&
-    host.connectionEpoch === connectionEpoch &&
-    host.sessions === sessions &&
-    host.sessionKey === selectedSessionKey &&
-    scopedAgentParamsForSession(host, targetSessionKey).agentId === agentScope.agentId &&
-    host.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, targetSessionKey),
-    )?.sessionId === expectedSessionId;
+  const selection = claimChatModelSelection(host, targetSessionKey);
+  const { ownsSelection, agentScope } = selection;
   const currentOverride = resolveChatModelOverrideValue({
     activeSession: activeRow,
     chatModelCatalog: host.chatModelCatalog,
@@ -485,81 +639,14 @@ export async function switchChatModel(
         setChatError(host, `Failed to set model: ${formatUiError(err)}`, true);
         return false;
       }
-      const explanation = t(`chat.nativeRuntimeRecovery.reasons.${restriction.reason}`, {
-        runtime: restriction.runtimeLabel,
-      });
-      const blocked = () =>
-        setChatError(host, `${explanation} ${t("chat.nativeRuntimeRecovery.chooseAnother")}`, true);
-      const recovery = restriction.recovery;
-      const canRecover = () =>
-        ownsSelection() &&
-        Array.isArray(host.hello?.auth?.scopes) &&
-        hasOperatorAdminAccess(host.hello?.auth ?? null);
-      if (
-        restriction.reason === "sandbox-required" ||
-        !recovery ||
-        recovery.sessionId !== expectedSessionId ||
-        !canRecover()
-      ) {
-        blocked();
-        return false;
-      }
-      const confirmed = await showConfirmDialog({
-        title: t("chat.nativeRuntimeRecovery.title", { runtime: restriction.runtimeLabel }),
-        message: `${explanation}\n\n${t("chat.nativeRuntimeRecovery.confirmMessage", { runtime: restriction.runtimeLabel })}`,
-        confirmLabel: t("chat.nativeRuntimeRecovery.confirm"),
-        danger: true,
-        signal: owner.signal,
-      });
-      if (!canRecover()) {
-        return false;
-      }
-      if (!confirmed) {
-        blocked();
-        return false;
-      }
-      try {
-        // One exact-target mutation; confirmation never submits or replays a prompt.
-        const recovered = await patchChatSessionSettings(
-          host,
-          targetSessionKey,
-          {
-            model: nextModel || null,
-            ...(runtimeSelection !== undefined ? { agentRuntime: runtimeSelection } : {}),
-            sandboxMode: "off",
-            permissionMode: "full",
-            expectedLifecycleRevision: recovery.lifecycleRevision,
-            expectedPermissionMode: recovery.expectedPermissionMode,
-            expectedSandboxMode: recovery.expectedSandboxMode,
-          },
-          {
-            ...agentScope,
-            expectedSessionId: recovery.sessionId,
-            ownsModelOverride: ownsSelection,
-            canDispatch: canRecover,
-          },
-        );
-        if (!ownsSelection() || !recovered) {
-          return false;
-        }
-        setChatError(
-          host,
-          recovered.listRefreshError
-            ? t("chat.nativeRuntimeRecovery.refreshFailed", { error: recovered.listRefreshError })
-            : null,
-          true,
-        );
-        return true;
-      } catch (recoveryError) {
-        if (ownsSelection()) {
-          setChatError(
-            host,
-            t("chat.nativeRuntimeRecovery.failed", { error: formatUiError(recoveryError) }),
-            true,
-          );
-        }
-        return false;
-      }
+      return await confirmChatNativeRuntimeRecovery(
+        host,
+        restriction,
+        targetSessionKey,
+        nextModel,
+        selection,
+        () => !runtimeSelection || runtimeSelection === restriction.runtimeId,
+      );
     } finally {
       clearPendingSwitch();
       host.requestUpdate?.();

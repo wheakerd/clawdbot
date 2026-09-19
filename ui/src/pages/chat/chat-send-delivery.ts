@@ -1,3 +1,4 @@
+import { readAgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -58,7 +59,11 @@ import {
   registerChatSendTiming,
   updateChatSendAckTiming,
 } from "./chat-send-timing.ts";
-import { getPendingChatPickerPatch, refreshChatSessionListForTarget } from "./chat-session.ts";
+import {
+  captureChatNativeRuntimeRecovery,
+  getPendingChatPickerPatch,
+  refreshChatSessionListForTarget,
+} from "./chat-session.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
@@ -291,6 +296,9 @@ async function sendQueuedChatMessage(
     ...(prepared.agentId ? { agentId: prepared.agentId } : {}),
   };
   const isVisible = () => visibleSessionMatches(host, sessionKey, prepared.agentId);
+  const recoverNativeRuntime = isVisible()
+    ? captureChatNativeRuntimeRecovery(host, route)
+    : undefined;
   if (isVisible()) {
     host.chatSendingScopeKey = storedChatOutboxScopeKey(scope);
     host.chatSending = true;
@@ -478,6 +486,25 @@ async function sendQueuedChatMessage(
     const error = activeLeafChanged
       ? t("chat.sendErrors.activeLeafChanged")
       : formatConnectError(err);
+    const restriction =
+      err instanceof GatewayRequestError
+        ? readAgentRuntimeRestrictionErrorDetails(err.details)
+        : undefined;
+    if (restriction) {
+      // Admission refused before inference. Restore the input, or leave it failed
+      // in the outbox if a newer draft owns the composer; never schedule a retry.
+      finishScopedChatSending(host, scope);
+      const restored = restoreRejectedChatDelivery(host, prepared, options);
+      if (!restored) {
+        setState("failed", error);
+      }
+      surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {
+        inline: storageMode === "durable" && !restored,
+      });
+      recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
+      await recoverNativeRuntime?.(restriction);
+      return "failed";
+    }
     if (err instanceof GatewayPayloadLimitError) {
       if (!restoreRejectedChatDelivery(host, prepared, options)) {
         setState("failed", error);

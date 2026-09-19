@@ -13,7 +13,12 @@ export type SessionToolOverrides = {
 
 export type SessionPatch = Pick<
   SessionsPatchParams,
-  "sandboxMode" | "expectedSandboxMode" | "expectedPermissionMode" | "expectedLifecycleRevision"
+  | "sandboxMode"
+  | "nativeRuntimeConsent"
+  | "expectedNativeRuntimeConsent"
+  | "expectedSandboxMode"
+  | "expectedPermissionMode"
+  | "expectedLifecycleRevision"
 > & {
   label?: string | null;
   icon?: string | null;

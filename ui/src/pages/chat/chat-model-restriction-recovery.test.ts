@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { expect, it, onTestFinished } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -8,21 +8,35 @@ import type { SessionsPatchResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import {
+  getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { handleSendChat } from "./chat-send-submit.ts";
 import {
   getPendingChatPickerPatch,
   retireChatModelSelectionOwnership,
   switchChatModel,
 } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
+import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 const recovery = {
-  action: "run-without-sandbox",
+  action: "use-native-permissions",
   sessionId: "original-incarnation",
   lifecycleRevision: "original-revision",
   expectedPermissionMode: "guarded",
   expectedSandboxMode: null,
+  expectedNativeRuntimeConsent: null,
 } satisfies NonNullable<AgentRuntimeRestrictionErrorDetails["recovery"]>;
 
 function fixture(
@@ -31,6 +45,7 @@ function fixture(
     scopes?: string[];
     rejectRecovery?: boolean;
     unrestricted?: boolean;
+    send?: boolean;
   } = {},
 ) {
   const result = createSessionsListResult({ model: "original", modelProvider: "fixture" });
@@ -41,6 +56,7 @@ function fixture(
     updatedAt: 1,
     sessionId: recovery.sessionId,
     permissionMode: "guarded",
+    ...(options.send ? { agentRuntime: { id: "opencode", source: "session-key" as const } } : {}),
   };
   const details: AgentRuntimeRestrictionErrorDetails = {
     code: "AGENT_RUNTIME_RESTRICTED",
@@ -65,11 +81,12 @@ function fixture(
     hello: sessionMutationGatewayHello(options.scopes),
     sessionsResult: result,
     chatMessage: "Keep this draft; never replay it",
+    currentSessionId: recovery.sessionId,
     requestHandlers: {
       "sessions.list": result,
       "sessions.patch": () => {
         patches += 1;
-        if (patches === 1 && !options.unrestricted) {
+        if (patches === 1 && !options.unrestricted && !options.send) {
           throw new GatewayRequestError({
             code: "INVALID_REQUEST",
             message: "Native runtime restricted",
@@ -85,6 +102,13 @@ function fixture(
         return options.unrestricted
           ? { ...receipt, entry: { ...receipt.entry, permissionMode: "guarded" } }
           : receipt;
+      },
+      "chat.send": () => {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Admission refused",
+          details,
+        });
       },
     },
   });
@@ -120,13 +144,13 @@ it.each([false, true])(
     const { host } = fixture({ rejectRecovery });
     const selection = switchChatModel(host, "fixture/selected", "global", "opencode");
     const modal = await dialog();
-    expect(modal.textContent).toContain("full access");
+    expect(modal.textContent).toContain("own permissions");
     expect(modal.textContent).toContain("Gateway host");
-    expect(modal.textContent).toContain("only this chat");
+    expect(modal.textContent).toContain("Only this chat");
     expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(
       1,
     );
-    click(modal, "Run without sandbox");
+    click(modal, "Continue for this chat");
     await expect(selection).resolves.toBe(!rejectRecovery);
     const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
     expect(patches).toHaveLength(2);
@@ -136,11 +160,13 @@ it.each([false, true])(
       expectedSessionId: recovery.sessionId,
       model: "fixture/selected",
       agentRuntime: "opencode",
+      nativeRuntimeConsent: "opencode",
       sandboxMode: "off",
       permissionMode: "full",
       expectedLifecycleRevision: recovery.lifecycleRevision,
       expectedPermissionMode: "guarded",
       expectedSandboxMode: null,
+      expectedNativeRuntimeConsent: null,
     });
     expect(
       host.request.mock.calls.some(
@@ -220,7 +246,7 @@ it.each([
   if (change === "newer-selection" || change === "retired") {
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   } else {
-    click(modal, change === "cancel" ? "Cancel" : "Run without sandbox");
+    click(modal, change === "cancel" ? "Cancel" : "Continue for this chat");
   }
   await expect(selection).resolves.toBe(false);
   const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
@@ -249,7 +275,7 @@ it("rechecks a confirmed recovery after the shared settings tail, before dispatc
     ),
   );
   const previousTail = getPendingChatPickerPatch(host, "global", "selected-agent");
-  click(modal, "Run without sandbox");
+  click(modal, "Continue for this chat");
   // Observe admission behind the held mutation before revoking UI authority.
   await waitForFast(() =>
     expect(getPendingChatPickerPatch(host, "global", "selected-agent")).not.toBe(previousTail),
@@ -300,3 +326,101 @@ it("leaves an unrestricted model selection on the ordinary patch path", async ()
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   expect(host.chatError ?? null).toBeNull();
 });
+
+it.each(["confirm", "cancel"] as const)(
+  "preserves a refused native send and its attachment after %s without replay",
+  async (action) => {
+    installOutboxBrowserStorage();
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => undefined);
+    const { host } = fixture({ send: true, details: { reason: "tool-policy" } });
+    const dataUrl = "data:text/plain;base64,cHJlc2VydmU=";
+    const attachment = registerChatAttachmentPayload({
+      attachment: { id: "native-send-attachment", mimeType: "text/plain", fileName: "notes.txt" },
+      file: new File(["preserve"], "notes.txt", { type: "text/plain" }),
+      dataUrl,
+    });
+    host.chatAttachments = [attachment];
+    onTestFinished(() => releaseChatAttachmentPayloads([attachment]));
+    const sending = handleSendChat(host);
+    const modal = await dialog();
+    expect(host.chatMessage).toBe("Keep this draft; never replay it");
+    expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(dataUrl);
+    expect(host.chatQueue).toEqual([]);
+    expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(
+      0,
+    );
+    click(modal, action === "confirm" ? "Continue for this chat" : "Cancel");
+    await sending;
+    const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
+    expect(patches).toHaveLength(action === "confirm" ? 1 : 0);
+    if (action === "confirm") {
+      expect(patches[0]?.[1]).toEqual({
+        key: "global",
+        agentId: "selected-agent",
+        expectedSessionId: recovery.sessionId,
+        model: "fixture/original",
+        agentRuntime: "opencode",
+        nativeRuntimeConsent: "opencode",
+        permissionMode: "full",
+        sandboxMode: "off",
+        expectedLifecycleRevision: recovery.lifecycleRevision,
+        expectedPermissionMode: "guarded",
+        expectedSandboxMode: null,
+        expectedNativeRuntimeConsent: null,
+      });
+    }
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.request.mock.calls.some(([method]) => method.startsWith("config."))).toBe(false);
+    expect(host.chatMessage).toBe("Keep this draft; never replay it");
+    expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(dataUrl);
+    expect(host.chatQueue).toEqual([]);
+  },
+);
+
+it.each(["newer-selection", "server-selection", "authority", "connection", "session"] as const)(
+  "does not grant native send consent after %s",
+  async (change) => {
+    installOutboxBrowserStorage();
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => undefined);
+    const { host } = fixture({ send: true, details: { reason: "workspace-only" } });
+    const sending = handleSendChat(host);
+    const modal = await dialog();
+    switch (change) {
+      case "newer-selection":
+        await switchChatModel(host, "fixture/newer", "global", "openclaw");
+        break;
+      case "server-selection":
+        host.sessionsResult!.sessions[0]!.model = "newer";
+        break;
+      case "authority":
+        host.hello = sessionMutationGatewayHello(["operator.write"]);
+        break;
+      case "connection":
+        host.client = createTestGatewayClient(host.request);
+        break;
+      case "session":
+        host.sessionKey = "agent:main:other";
+        break;
+    }
+    if (change !== "newer-selection") {
+      click(modal, "Continue for this chat");
+    }
+    await sending;
+    expect(
+      host.request.mock.calls.some(
+        ([method, params]) =>
+          method === "sessions.patch" &&
+          params != null &&
+          typeof params === "object" &&
+          "nativeRuntimeConsent" in params,
+      ),
+    ).toBe(false);
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+  },
+);

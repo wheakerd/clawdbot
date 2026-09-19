@@ -14595,6 +14595,7 @@ public struct SessionRow: Codable, Sendable {
     public let workspacedir: String?
     public let permissionmode: SessionPermissionMode?
     public let sandboxmode: String?
+    public let nativeruntimeconsent: String?
     public let permissionmodepending: Bool?
     public let sessionroot: String?
     public let createdvia: AnyCodable?
@@ -14685,6 +14686,7 @@ public struct SessionRow: Codable, Sendable {
         workspacedir: String? = nil,
         permissionmode: SessionPermissionMode? = nil,
         sandboxmode: String? = nil,
+        nativeruntimeconsent: String? = nil,
         permissionmodepending: Bool? = nil,
         sessionroot: String? = nil,
         createdvia: AnyCodable? = nil,
@@ -14774,6 +14776,7 @@ public struct SessionRow: Codable, Sendable {
         self.workspacedir = workspacedir
         self.permissionmode = permissionmode
         self.sandboxmode = sandboxmode
+        self.nativeruntimeconsent = nativeruntimeconsent
         self.permissionmodepending = permissionmodepending
         self.sessionroot = sessionroot
         self.createdvia = createdvia
@@ -14865,6 +14868,7 @@ public struct SessionRow: Codable, Sendable {
         case workspacedir = "workspaceDir"
         case permissionmode = "permissionMode"
         case sandboxmode = "sandboxMode"
+        case nativeruntimeconsent = "nativeRuntimeConsent"
         case permissionmodepending = "permissionModePending"
         case sessionroot = "sessionRoot"
         case createdvia = "createdVia"
@@ -17056,19 +17060,25 @@ public struct SessionsPatchManyTarget: Codable, Sendable {
     public let expectedsessionid: String?
     public let expectedlifecyclerevision: String?
     public let expectedsandboxmode: AnyCodable?
+    public let expectedpermissionmode: AnyCodable?
+    public let expectednativeruntimeconsent: AnyCodable?
 
     public init(
         key: String,
         agentid: String? = nil,
         expectedsessionid: String? = nil,
         expectedlifecyclerevision: String? = nil,
-        expectedsandboxmode: AnyCodable? = nil)
+        expectedsandboxmode: AnyCodable? = nil,
+        expectedpermissionmode: AnyCodable? = nil,
+        expectednativeruntimeconsent: AnyCodable? = nil)
     {
         self.key = key
         self.agentid = agentid
         self.expectedsessionid = expectedsessionid
         self.expectedlifecyclerevision = expectedlifecyclerevision
         self.expectedsandboxmode = expectedsandboxmode
+        self.expectedpermissionmode = expectedpermissionmode
+        self.expectednativeruntimeconsent = expectednativeruntimeconsent
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -17077,6 +17087,8 @@ public struct SessionsPatchManyTarget: Codable, Sendable {
         case expectedsessionid = "expectedSessionId"
         case expectedlifecyclerevision = "expectedLifecycleRevision"
         case expectedsandboxmode = "expectedSandboxMode"
+        case expectedpermissionmode = "expectedPermissionMode"
+        case expectednativeruntimeconsent = "expectedNativeRuntimeConsent"
     }
 }
 
@@ -17109,6 +17121,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public let execnode: AnyCodable?
     public let permissionmode: AnyCodable?
     public let sandboxmode: AnyCodable?
+    public let nativeruntimeconsent: AnyCodable?
     public let model: AnyCodable?
     public let agentruntime: AnyCodable?
     public let completionownersessionkey: AnyCodable?
@@ -17147,6 +17160,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         execnode: AnyCodable? = nil,
         permissionmode: AnyCodable? = nil,
         sandboxmode: AnyCodable? = nil,
+        nativeruntimeconsent: AnyCodable? = nil,
         model: AnyCodable? = nil,
         agentruntime: AnyCodable? = nil,
         completionownersessionkey: AnyCodable? = nil,
@@ -17184,6 +17198,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         self.execnode = execnode
         self.permissionmode = permissionmode
         self.sandboxmode = sandboxmode
+        self.nativeruntimeconsent = nativeruntimeconsent
         self.model = model
         self.agentruntime = agentruntime
         self.completionownersessionkey = completionownersessionkey
@@ -17223,6 +17238,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         case execnode = "execNode"
         case permissionmode = "permissionMode"
         case sandboxmode = "sandboxMode"
+        case nativeruntimeconsent = "nativeRuntimeConsent"
         case model
         case agentruntime = "agentRuntime"
         case completionownersessionkey = "completionOwnerSessionKey"
@@ -17241,6 +17257,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let expectedlifecyclerevision: String?
     public let expectedpermissionmode: AnyCodable?
     public let expectedsandboxmode: AnyCodable?
+    public let expectednativeruntimeconsent: AnyCodable?
     public let expectedtooloverrides: AnyCodable?
     public let expectedmarkedunreadat: AnyCodable?
     public let label: AnyCodable?
@@ -17271,6 +17288,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execnode: AnyCodable?
     public let permissionmode: AnyCodable?
     public let sandboxmode: AnyCodable?
+    public let nativeruntimeconsent: AnyCodable?
     public let model: AnyCodable?
     public let agentruntime: AnyCodable?
     public let completionownersessionkey: AnyCodable?
@@ -17287,6 +17305,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         expectedlifecyclerevision: String? = nil,
         expectedpermissionmode: AnyCodable? = nil,
         expectedsandboxmode: AnyCodable? = nil,
+        expectednativeruntimeconsent: AnyCodable? = nil,
         expectedtooloverrides: AnyCodable? = nil,
         expectedmarkedunreadat: AnyCodable? = nil,
         label: AnyCodable? = nil,
@@ -17317,6 +17336,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         execnode: AnyCodable? = nil,
         permissionmode: AnyCodable? = nil,
         sandboxmode: AnyCodable? = nil,
+        nativeruntimeconsent: AnyCodable? = nil,
         model: AnyCodable? = nil,
         agentruntime: AnyCodable? = nil,
         completionownersessionkey: AnyCodable? = nil,
@@ -17332,6 +17352,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.expectedlifecyclerevision = expectedlifecyclerevision
         self.expectedpermissionmode = expectedpermissionmode
         self.expectedsandboxmode = expectedsandboxmode
+        self.expectednativeruntimeconsent = expectednativeruntimeconsent
         self.expectedtooloverrides = expectedtooloverrides
         self.expectedmarkedunreadat = expectedmarkedunreadat
         self.label = label
@@ -17362,6 +17383,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execnode = execnode
         self.permissionmode = permissionmode
         self.sandboxmode = sandboxmode
+        self.nativeruntimeconsent = nativeruntimeconsent
         self.model = model
         self.agentruntime = agentruntime
         self.completionownersessionkey = completionownersessionkey
@@ -17379,6 +17401,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case expectedlifecyclerevision = "expectedLifecycleRevision"
         case expectedpermissionmode = "expectedPermissionMode"
         case expectedsandboxmode = "expectedSandboxMode"
+        case expectednativeruntimeconsent = "expectedNativeRuntimeConsent"
         case expectedtooloverrides = "expectedToolOverrides"
         case expectedmarkedunreadat = "expectedMarkedUnreadAt"
         case label
@@ -17409,6 +17432,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execnode = "execNode"
         case permissionmode = "permissionMode"
         case sandboxmode = "sandboxMode"
+        case nativeruntimeconsent = "nativeRuntimeConsent"
         case model
         case agentruntime = "agentRuntime"
         case completionownersessionkey = "completionOwnerSessionKey"

@@ -534,7 +534,10 @@ describe("session message-cut methods", () => {
   );
 
   it("returns editor text for rewind and a new key for fork", async () => {
-    await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({ sandboxMode: "off" }));
+    await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+      sandboxMode: "off",
+      nativeRuntimeConsent: "native-fixture",
+    }));
     const profileId = "profile-fork-creator";
     const fork = await invoke("sessions.fork", "user-entry", {
       connect: { scopes: ["operator.write"] },
@@ -562,6 +565,7 @@ describe("session message-cut methods", () => {
     expect(forkKey).toBeTruthy();
     const forkEntry = loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" });
     expect(forkEntry).not.toHaveProperty("sandboxMode");
+    expect(forkEntry).not.toHaveProperty("nativeRuntimeConsent");
     expect(forkEntry).toMatchObject({
       createdVia: "operator",
       createdActor: { type: "human", id: profileId },

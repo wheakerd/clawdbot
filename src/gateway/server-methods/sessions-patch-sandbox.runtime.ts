@@ -3,6 +3,7 @@ import {
   errorShape,
   missingScopeErrorShape,
   type ErrorShape,
+  type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -18,6 +19,7 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 export function validateSessionPatchSandboxChange(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
+  patch: SessionsPatchParams;
   existingEntry: SessionEntry | undefined;
   entry: SessionEntry;
   sessionKey: string;
@@ -27,13 +29,32 @@ export function validateSessionPatchSandboxChange(params: {
   if (params.client !== null && !params.client.connect.scopes?.includes(ADMIN_SCOPE)) {
     return missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] });
   }
-  if (params.entry.sandbox === "required" && params.entry.sandboxMode === "off") {
+  const grantingConsent = typeof params.patch.nativeRuntimeConsent === "string";
+  if (
+    params.entry.sandbox === "required" &&
+    (params.entry.sandboxMode === "off" || grantingConsent)
+  ) {
     return errorShape(
       ErrorCodes.INVALID_REQUEST,
       "This session requires a sandbox and cannot run without one.",
     );
   }
-  if (params.existingEntry?.sandboxMode === params.entry.sandboxMode) {
+  if (
+    grantingConsent &&
+    (!params.existingEntry ||
+      params.patch.expectedSessionId !== params.existingEntry.sessionId ||
+      params.patch.expectedLifecycleRevision !== params.existingEntry.lifecycleRevision)
+  ) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Native runtime consent must target the current session incarnation.",
+    );
+  }
+  if (
+    !grantingConsent &&
+    params.existingEntry?.sandboxMode === params.entry.sandboxMode &&
+    params.existingEntry?.nativeRuntimeConsent === params.entry.nativeRuntimeConsent
+  ) {
     return undefined;
   }
   const sessionId = params.existingEntry?.sessionId;
@@ -50,7 +71,7 @@ export function validateSessionPatchSandboxChange(params: {
   ) {
     return errorShape(
       ErrorCodes.INVALID_REQUEST,
-      "Stop the active run before changing this session's sandbox mode.",
+      "Stop the active run before changing this session's execution permissions.",
     );
   }
   return undefined;

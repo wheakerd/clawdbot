@@ -7,8 +7,12 @@ import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import { assertAgentHarnessExecutionEnvironment } from "../../harness/execution-environment.js";
 import { getRegisteredAgentHarness } from "../../harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
-import { selectAgentHarness } from "../../harness/selection.js";
+import {
+  resolveAgentHarnessNativeToolPolicyRestricted,
+  selectAgentHarness,
+} from "../../harness/selection.js";
 import { readSessionRuntimeOwnership } from "../../harness/session-runtime-ownership.js";
+import { assertPluginHarnessConversationToolPolicySupport } from "../../harness/support.js";
 import type { AgentHarness } from "../../harness/types.js";
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import type { ModelRef } from "../../model-selection.js";
@@ -182,7 +186,19 @@ export async function resolveEmbeddedRunModelSetup(params: {
           agentHarnessId: runParams.agentHarnessId,
           agentHarnessRuntimeOverride: runParams.agentHarnessRuntimeOverride,
         });
-  assertAgentHarnessExecutionEnvironment(agentHarness, runParams);
+  const nativePermissionsConsented = assertAgentHarnessExecutionEnvironment(
+    agentHarness,
+    runParams,
+  );
+  if (agentHarness.executionEnvironment === "host-only" && !nativePermissionsConsented) {
+    assertPluginHarnessConversationToolPolicySupport(
+      agentHarness,
+      resolveAgentHarnessNativeToolPolicyRestricted(
+        { ...runParams, provider, modelId },
+        agentHarness,
+      ),
+    );
+  }
   const pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
   const expectedHarnessArtifact = runParams.expectedAgentHarnessRuntimeArtifact;
   if (expectedHarnessArtifact && expectedHarnessArtifact.harnessId !== agentHarness.id) {

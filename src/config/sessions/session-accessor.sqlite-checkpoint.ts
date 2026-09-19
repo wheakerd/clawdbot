@@ -417,6 +417,7 @@ function cloneSqliteCheckpointSessionEntry(params: {
       : {}),
     // A new chat does not inherit authority to opt out of containment.
     sandboxMode: params.parentSessionKey ? undefined : params.currentEntry.sandboxMode,
+    nativeRuntimeConsent: undefined,
     sessionId: params.nextSessionId,
     updatedAt: Date.now(),
     systemSent: false,

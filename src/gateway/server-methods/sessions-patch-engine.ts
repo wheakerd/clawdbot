@@ -95,7 +95,9 @@ export async function executeSessionPatchMutations(params: {
       ? await import("./sessions-patch-permissions.runtime.js")
       : undefined;
   const sandboxRuntime =
-    "sandboxMode" in params.patch ? await import("./sessions-patch-sandbox.runtime.js") : undefined;
+    "sandboxMode" in params.patch || "nativeRuntimeConsent" in params.patch
+      ? await import("./sessions-patch-sandbox.runtime.js")
+      : undefined;
   const targetDiscoveryCache = new Map();
   const preflightTargets = params.targets.map((input) => {
     const key = input.key.trim();
@@ -465,6 +467,7 @@ export async function executeSessionPatchMutations(params: {
                               sandboxRuntime.validateSessionPatchSandboxChange({
                                 client,
                                 context: params.context,
+                                patch: target.fullPatch,
                                 existingEntry,
                                 entry: projected.entry,
                                 sessionKey: primaryKey,
@@ -484,7 +487,7 @@ export async function executeSessionPatchMutations(params: {
                             patch: target.fullPatch,
                             entry: projected.entry,
                             expectedEntry: existingEntry,
-                            callerCanRunUnsandboxed: callerIsAdmin,
+                            callerCanConsent: callerIsAdmin,
                             catalog: (await catalogs.available(target.targetAgentId))?.entries,
                             placement: { context: params.context, sessionKey: primaryKey },
                           });

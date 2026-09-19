@@ -16,14 +16,16 @@ export const AgentRuntimeRestrictionErrorDetailsSchema = closedObject({
     Type.Literal("workspace-only"),
     Type.Literal("permission-mode"),
     Type.Literal("remote-execution"),
+    Type.Literal("tool-policy"),
   ]),
   recovery: Type.Optional(
     closedObject({
-      action: Type.Literal("run-without-sandbox"),
+      action: Type.Literal("use-native-permissions"),
       sessionId: NonEmptyString,
       lifecycleRevision: Type.Optional(NonEmptyString),
       expectedPermissionMode: Type.Union([SessionPermissionModeSchema, Type.Null()]),
       expectedSandboxMode: Type.Union([Type.Literal("off"), Type.Null()]),
+      expectedNativeRuntimeConsent: Type.Union([NonEmptyString, Type.Null()]),
     }),
   ),
 });

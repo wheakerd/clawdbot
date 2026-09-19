@@ -1,4 +1,7 @@
-import type { AgentRuntimeRestrictionErrorDetails } from "../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
+import {
+  readAgentRuntimeRestrictionErrorDetails,
+  type AgentRuntimeRestrictionErrorDetails,
+} from "../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import {
   ErrorCodes,
   errorShape,
@@ -8,6 +11,8 @@ import {
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveExecConfigState } from "../../agents/exec-defaults.js";
 import { resolveAgentHarnessExecutionRestriction } from "../../agents/harness/execution-environment.js";
+import { resolveAgentHarnessNativeToolPolicyRestricted } from "../../agents/harness/selection.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
@@ -40,7 +45,12 @@ export function persistSessionPatchModelSelection(params: {
 }): void {
   // Combined execution-policy recovery is explicitly scoped to this chat, even
   // when ordinary model selections normally update agent/global defaults.
-  if (typeof params.patch.model !== "string" || params.patch.sandboxMode !== undefined) {
+  if (
+    typeof params.patch.model !== "string" ||
+    params.patch.sandboxMode !== undefined ||
+    params.patch.nativeRuntimeConsent !== undefined ||
+    params.entry.nativeRuntimeConsent !== undefined
+  ) {
     return;
   }
   const policy = resolveGatewayModelSelectionPolicy({
@@ -159,6 +169,83 @@ export function resolveSessionPatchModelSelection(params: {
   };
 }
 
+/** Model selection and send admission expose the same per-chat recovery contract. */
+export function resolveSessionNativeRuntimeRestriction(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  entry: SessionEntry;
+  harness: AgentHarness;
+  provider: string;
+  modelId: string;
+  callerCanConsent: boolean;
+}): ErrorShape | undefined {
+  const { cfg, agentId, sessionKey, entry, harness } = params;
+  if (harness.executionEnvironment !== "host-only") {
+    return undefined;
+  }
+  const sandbox = resolveSandboxRuntimeStatus({
+    cfg,
+    agentId,
+    sessionKey,
+    preparedSessionEntry: entry,
+  });
+  const exec = resolveExecConfigState({ cfg, agentId, sessionKey, sessionEntry: entry });
+  const nativeRuntimeConsent =
+    entry.permissionMode === "full" && entry.sandboxMode === "off"
+      ? entry.nativeRuntimeConsent
+      : undefined;
+  const restriction = resolveAgentHarnessExecutionRestriction(harness, {
+    sandboxed: sandbox.sandboxed || exec.host === "sandbox",
+    sandboxRequired: sandbox.sandboxRequired || exec.host === "sandbox",
+    workspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId }),
+    permissionMode: entry.permissionMode,
+    nativeRuntimeConsent,
+    remoteExecution: exec.host === "node",
+    toolPolicyRestricted:
+      nativeRuntimeConsent !== harness.id &&
+      harness.conversationToolPolicySupport !== "exact" &&
+      resolveAgentHarnessNativeToolPolicyRestricted(
+        {
+          config: cfg,
+          agentId,
+          sessionKey,
+          sessionId: entry.sessionId,
+          preparedSessionEntry: entry,
+          provider: params.provider,
+          modelId: params.modelId,
+        },
+        harness,
+      ),
+  });
+  if (!restriction) {
+    return undefined;
+  }
+  const canRecover =
+    params.callerCanConsent &&
+    restriction.reason !== "sandbox-required" &&
+    restriction.reason !== "remote-execution";
+  const details: AgentRuntimeRestrictionErrorDetails = {
+    code: "AGENT_RUNTIME_RESTRICTED",
+    runtimeId: harness.id,
+    runtimeLabel: harness.label,
+    reason: restriction.reason,
+    ...(canRecover
+      ? {
+          recovery: {
+            action: "use-native-permissions" as const,
+            sessionId: entry.sessionId,
+            ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
+            expectedPermissionMode: entry.permissionMode ?? null,
+            expectedSandboxMode: entry.sandboxMode ?? null,
+            expectedNativeRuntimeConsent: entry.nativeRuntimeConsent ?? null,
+          },
+        }
+      : {}),
+  };
+  return errorShape(ErrorCodes.INVALID_REQUEST, restriction.message, { details });
+}
+
 /** Bind runtime availability and placement checks to the selection's commit guard. */
 export async function prepareSessionPatchRuntimeSelection(params: {
   cfg: OpenClawConfig;
@@ -167,7 +254,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   entry: SessionEntry;
   placement?: { context: SessionWorkerPlacementContext; sessionKey: string };
   catalog?: readonly ModelCatalogEntry[];
-  callerCanRunUnsandboxed?: boolean;
+  callerCanConsent?: boolean;
   expectedEntry?: SessionEntry;
 }): Promise<
   { ok: true; validate?: () => ErrorShape | undefined } | { ok: false; error: ErrorShape }
@@ -178,7 +265,12 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   });
   let validateRuntime: (() => string | undefined) | undefined;
   let validateEnvironment: (() => ErrorShape | undefined) | undefined;
-  if (typeof params.patch.agentRuntime === "string" || typeof params.patch.model === "string") {
+  const grantingConsent = typeof params.patch.nativeRuntimeConsent === "string";
+  if (
+    typeof params.patch.agentRuntime === "string" ||
+    typeof params.patch.model === "string" ||
+    grantingConsent
+  ) {
     const model = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
     const choice = await prepareModelSelectionRuntime({
       cfg: params.cfg,
@@ -198,64 +290,48 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     }
     applyModelRuntimeDirective(params.entry, choice.runtime);
     validateRuntime = choice.validateRuntimeSelection;
-    if (choice.executionEnvironment && choice.runtime.kind === "set") {
-      const runtimeId = choice.runtime.runtime;
-      const runtimeLabel = choice.executionEnvironment.label;
+    const harness = choice.harness;
+    if (grantingConsent) {
+      if (
+        !harness ||
+        harness.executionEnvironment !== "host-only" ||
+        harness.id !== params.patch.nativeRuntimeConsent
+      ) {
+        return invalid("Native runtime consent does not match the selected external runtime.");
+      }
+      params.entry.nativeRuntimeConsent = harness.id;
+    }
+    if (harness) {
       validateEnvironment = () => {
-        const sandbox = resolveSandboxRuntimeStatus({
+        const error = resolveSessionNativeRuntimeRestriction({
           cfg: params.cfg,
           agentId: params.agentId,
           sessionKey: params.placement?.sessionKey ?? params.patch.key,
-          preparedSessionEntry: params.entry,
+          entry: params.entry,
+          harness,
+          provider: model.provider,
+          modelId: model.model,
+          callerCanConsent: params.callerCanConsent === true && params.expectedEntry !== undefined,
         });
-        const exec = resolveExecConfigState({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          sessionKey: params.patch.key,
-          sessionEntry: params.entry,
-        });
-        const restriction = resolveAgentHarnessExecutionRestriction(
-          { label: runtimeLabel, executionEnvironment: "host-only" },
-          {
-            sandboxed: sandbox.sandboxed || exec.host === "sandbox",
-            sandboxRequired: sandbox.sandboxRequired,
-            workspaceOnly: resolveEffectiveToolFsWorkspaceOnly({
-              cfg: params.cfg,
-              agentId: params.agentId,
-            }),
-            permissionMode: params.entry.permissionMode,
-            remoteExecution: exec.host === "node",
-          },
-        );
-        if (!restriction) {
-          return undefined;
-        }
+        const details = readAgentRuntimeRestrictionErrorDetails(error?.details);
         const expected = params.expectedEntry;
-        const canRecover =
-          params.callerCanRunUnsandboxed === true &&
-          expected !== undefined &&
-          exec.host !== "sandbox" &&
-          (restriction.reason === "sandbox" || restriction.reason === "permission-mode");
-        const details: AgentRuntimeRestrictionErrorDetails = {
-          code: "AGENT_RUNTIME_RESTRICTED",
-          runtimeId,
-          runtimeLabel,
-          reason: restriction.reason,
-          ...(canRecover
-            ? {
-                recovery: {
-                  action: "run-without-sandbox" as const,
-                  sessionId: expected.sessionId,
-                  ...(expected.lifecycleRevision
-                    ? { lifecycleRevision: expected.lifecycleRevision }
-                    : {}),
-                  expectedPermissionMode: expected.permissionMode ?? null,
-                  expectedSandboxMode: expected.sandboxMode ?? null,
-                },
-              }
-            : {}),
-        };
-        return errorShape(ErrorCodes.INVALID_REQUEST, restriction.message, { details });
+        if (error && details?.recovery && expected) {
+          return {
+            ...error,
+            details: {
+              ...details,
+              recovery: {
+                ...details.recovery,
+                sessionId: expected.sessionId,
+                lifecycleRevision: expected.lifecycleRevision,
+                expectedPermissionMode: expected.permissionMode ?? null,
+                expectedSandboxMode: expected.sandboxMode ?? null,
+                expectedNativeRuntimeConsent: expected.nativeRuntimeConsent ?? null,
+              },
+            },
+          };
+        }
+        return error;
       };
     }
   }
@@ -285,7 +361,9 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     ? { ok: false, error }
     : {
         ok: true,
-        ...(params.patch.agentRuntime !== undefined || typeof params.patch.model === "string"
+        ...(params.patch.agentRuntime !== undefined ||
+        params.patch.model !== undefined ||
+        grantingConsent
           ? { validate }
           : {}),
       };

@@ -52,9 +52,15 @@ Clearing the override does not remove sandbox containers or change other chats.
 Older versions that do not support this preference follow their configured
 sandbox policy instead.
 
-Where native runtime selection offers **Run without sandbox**, that action is an
-explicit per-chat change, not a global switch. Other tool, workspace-only,
-permission, and execution-placement restrictions remain independently enforced.
+Native runtime selection and sending can offer **Continue for this chat** when an
+administrator explicitly chooses the native agent's own permissions. This
+combines the optional sandbox opt-out with Full access and consent bound to that
+chat and runtime. Optional native tool and workspace restrictions are then
+delegated to the native agent; OpenClaw-hosted tools keep their existing policy.
+The action does not send the draft or change global settings. The native consent
+is cleared on reset or runtime change and is never inherited by a fork. Required
+sandboxing, required workspace boundaries, and remote execution placement remain
+independently enforced. See [native runtime permissions](/tools/acp-agents-setup#permissions-for-native-chat-runtimes).
 
 ### Scope and backend
 

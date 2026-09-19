@@ -39,6 +39,7 @@ type ResetSessionEntry = {
   createdAt?: number;
   sandbox?: "required";
   sandboxMode?: "off";
+  nativeRuntimeConsent?: string;
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   previousSessionId?: string;
   forkedFromParent?: boolean;
@@ -352,11 +353,14 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
 });
 
-test("sessions.reset retains this chat's authorized sandbox opt-out", async () => {
+test("sessions.reset retains sandbox choice but requires fresh native runtime consent", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry("sandbox-opt-out", { sandboxMode: "off" }),
+      main: sessionStoreEntry("sandbox-opt-out", {
+        sandboxMode: "off",
+        nativeRuntimeConsent: "native-fixture",
+      }),
     },
   });
   const reset = await directSessionReq<{ entry: ResetSessionEntry }>("sessions.reset", {
@@ -365,6 +369,10 @@ test("sessions.reset retains this chat's authorized sandbox opt-out", async () =
   expect(reset.ok).toBe(true);
   expect(reset.payload?.entry.sandboxMode).toBe("off");
   expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.sandboxMode).toBe("off");
+  expect(reset.payload?.entry.nativeRuntimeConsent).toBeUndefined();
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty(
+    "nativeRuntimeConsent",
+  );
 });
 
 test("sessions.reset clears stale estimated context budget status", async () => {

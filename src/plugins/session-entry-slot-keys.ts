@@ -48,6 +48,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "createdActor",
   "sandbox",
   "sandboxMode",
+  "nativeRuntimeConsent",
   "owner",
   "participants",
   "participantCount",

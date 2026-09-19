@@ -1,4 +1,7 @@
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { resolveSessionEntry } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
@@ -12,6 +15,9 @@ type ExecutionEnvironmentFacts = {
   workspaceOnly: boolean;
   permissionMode?: EmbeddedRunAttemptParams["permissionMode"];
   remoteExecution?: boolean;
+  nativeRuntimeConsent?: string;
+  toolPolicyRestricted?: boolean;
+  workspaceRequired?: boolean;
 };
 
 type ExecutionRestriction = {
@@ -21,7 +27,7 @@ type ExecutionRestriction = {
 
 /** Selection and invocation share this decision; a native working directory is not containment. */
 export function resolveAgentHarnessExecutionRestriction(
-  harness: Pick<AgentHarness, "label" | "executionEnvironment">,
+  harness: Pick<AgentHarness, "id" | "label" | "executionEnvironment">,
   facts: ExecutionEnvironmentFacts,
 ): ExecutionRestriction | undefined {
   if (harness.executionEnvironment !== "host-only") {
@@ -44,6 +50,16 @@ export function resolveAgentHarnessExecutionRestriction(
         " runs on the Gateway host and cannot use this chat's remote execution environment. Choose another runtime or a local chat.",
     };
   }
+  if (facts.workspaceRequired) {
+    return {
+      reason: "workspace-only",
+      message:
+        label + " cannot enforce this run's required workspace boundary. Choose another runtime.",
+    };
+  }
+  if (facts.nativeRuntimeConsent === harness.id) {
+    return undefined;
+  }
   if (facts.workspaceOnly) {
     return {
       reason: "workspace-only",
@@ -57,7 +73,7 @@ export function resolveAgentHarnessExecutionRestriction(
       reason: "sandbox",
       message:
         label +
-        " runs on the Gateway host, outside the sandbox. Run without sandbox for this chat, or choose another runtime.",
+        " runs on the Gateway host, outside the sandbox. Use its own permissions for this chat, or choose another runtime.",
     };
   }
   if (facts.permissionMode && facts.permissionMode !== "full") {
@@ -68,6 +84,13 @@ export function resolveAgentHarnessExecutionRestriction(
         " uses its own permissions and requires Full access. Change this chat's permissions explicitly, or choose another runtime.",
     };
   }
+  if (facts.toolPolicyRestricted) {
+    return {
+      reason: "tool-policy",
+      message:
+        label + " uses its own tools and cannot enforce this chat's OpenClaw tool restrictions.",
+    };
+  }
   return undefined;
 }
 
@@ -76,28 +99,63 @@ type ExecutionEnvironmentParams = Pick<
   | "config"
   | "agentId"
   | "sessionKey"
+  | "sessionId"
   | "sandboxSessionKey"
   | "sandboxAgentId"
   | "sandbox"
   | "permissionMode"
   | "requireWorkspaceOnly"
   | "execOverrides"
+  | "toolsAllow"
+  | "disableTools"
+  | "swarmCollector"
 >;
 
-/** Runs before native preparation and again at the shared invocation boundary. */
+/** Revalidates execution policy and returns whether this run has native permission consent. */
 export function assertAgentHarnessExecutionEnvironment(
   harness: AgentHarness,
   params: ExecutionEnvironmentParams,
-): void {
+): boolean {
   if (harness.executionEnvironment !== "host-only") {
-    return;
+    return false;
   }
+  const agentId = resolveSessionAgentId({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const entry = params.sessionKey
+    ? resolveSessionEntry(
+        {
+          agentId,
+          sessionKey: params.sessionKey,
+          storePath: resolveSessionStorePathCore(params.config?.session?.store, { agentId }),
+          clone: false,
+        },
+        { readOnly: true },
+      ).existing
+    : undefined;
+  // Consent belongs to this incarnation, never a parent or classification session.
+  const nativeRuntimeConsent =
+    entry?.sessionId === params.sessionId &&
+    entry.agentRuntimeOverride === harness.id &&
+    entry.permissionMode === "full" &&
+    entry.sandboxMode === "off" &&
+    !params.disableTools &&
+    params.toolsAllow === undefined &&
+    !params.swarmCollector
+      ? entry.nativeRuntimeConsent
+      : undefined;
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     classificationSessionKey: params.sandboxSessionKey,
     classificationAgentId: params.sandboxAgentId,
+    ...((!params.sandboxSessionKey || params.sandboxSessionKey === params.sessionKey) &&
+    (!params.sandboxAgentId || params.sandboxAgentId === agentId)
+      ? { preparedSessionEntry: entry ?? null }
+      : {}),
   });
   const exec = resolveExecConfigState({
     cfg: params.config,
@@ -107,7 +165,9 @@ export function assertAgentHarnessExecutionEnvironment(
   });
   const restriction = resolveAgentHarnessExecutionRestriction(harness, {
     sandboxed: params.sandbox?.enabled === true || runtime.sandboxed || exec.host === "sandbox",
-    sandboxRequired: runtime.sandboxRequired,
+    nativeRuntimeConsent,
+    workspaceRequired: params.requireWorkspaceOnly === true,
+    sandboxRequired: runtime.sandboxRequired || exec.host === "sandbox",
     workspaceOnly:
       params.requireWorkspaceOnly === true ||
       resolveEffectiveToolFsWorkspaceOnly({
@@ -123,4 +183,5 @@ export function assertAgentHarnessExecutionEnvironment(
       userMessage: restriction.message,
     });
   }
+  return nativeRuntimeConsent === harness.id;
 }

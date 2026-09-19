@@ -11,6 +11,23 @@ export function resolveSessionPatchExpectationError(
   if (patch.expectedPermissionMode !== undefined && patch.permissionMode === undefined) {
     return "expectedPermissionMode requires a permissionMode replacement.";
   }
+  if (
+    patch.expectedNativeRuntimeConsent !== undefined &&
+    patch.nativeRuntimeConsent === undefined
+  ) {
+    return "expectedNativeRuntimeConsent requires a nativeRuntimeConsent replacement.";
+  }
+  if (
+    typeof patch.nativeRuntimeConsent === "string" &&
+    (!patch.expectedSessionId ||
+      patch.expectedPermissionMode === undefined ||
+      patch.expectedSandboxMode === undefined ||
+      patch.expectedNativeRuntimeConsent === undefined ||
+      patch.permissionMode !== "full" ||
+      patch.sandboxMode !== "off")
+  ) {
+    return "Native runtime consent requires the current session and execution settings, Full access, and sandbox off.";
+  }
   if (patch.expectedToolOverrides !== undefined && patch.toolOverrides === undefined) {
     return "expectedToolOverrides requires a toolOverrides replacement.";
   }
@@ -26,6 +43,8 @@ export function sessionPatchExpectationsChanged(
       (entry?.sandboxMode ?? null) !== patch.expectedSandboxMode) ||
     (patch.expectedPermissionMode !== undefined &&
       (entry?.permissionMode ?? null) !== patch.expectedPermissionMode) ||
+    (patch.expectedNativeRuntimeConsent !== undefined &&
+      (entry?.nativeRuntimeConsent ?? null) !== patch.expectedNativeRuntimeConsent) ||
     (patch.expectedToolOverrides !== undefined &&
       !sessionToolOverridesEqual(entry?.toolOverrides, patch.expectedToolOverrides))
   );
@@ -46,6 +65,9 @@ export function sessionPatchTargetIdentity(patch: SessionsPatchParams) {
       : {}),
     ...(patch.expectedSandboxMode !== undefined
       ? { expectedSandboxMode: patch.expectedSandboxMode }
+      : {}),
+    ...(patch.expectedNativeRuntimeConsent !== undefined
+      ? { expectedNativeRuntimeConsent: patch.expectedNativeRuntimeConsent }
       : {}),
     ...(patch.expectedToolOverrides !== undefined
       ? { expectedToolOverrides: patch.expectedToolOverrides }
