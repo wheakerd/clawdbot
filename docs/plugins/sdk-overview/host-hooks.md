@@ -455,7 +455,7 @@ The `linkReader` fields are:
 | `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable. |
 | `detailMethod`  | Same-plugin read method receiving `{ url, refresh? }` and returning a `ControlUiLinkReaderDocument`.                                                                                   |
 | `previewMethod` | Optional same-plugin read method receiving `{ url }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews.        |
-| `imageMethod`   | Optional same-plugin read method receiving `ControlUiLinkReaderImageParams` (`{ url }`) and returning `ControlUiLinkReaderImage` (`{ url, dataUrl }`) for inline images.               |
+| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                               |
 
 Method names are bounded to 128 characters. Credentials in URLs and non-HTTPS
 URLs are never intercepted. A descriptor is a routing hint, not authorization

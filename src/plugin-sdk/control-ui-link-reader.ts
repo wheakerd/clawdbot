@@ -3,8 +3,6 @@ export type {
   ControlUiLinkReaderDescriptor,
   ControlUiLinkReaderDetailParams,
   ControlUiLinkReaderDocument,
-  ControlUiLinkReaderImage,
-  ControlUiLinkReaderImageParams,
   ControlUiLinkReaderMetadata,
   ControlUiLinkReaderPreview,
   ControlUiLinkReaderPreviewParams,

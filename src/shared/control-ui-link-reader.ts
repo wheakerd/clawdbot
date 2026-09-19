@@ -27,7 +27,6 @@ export type ControlUiLinkReaderPreviewParams = {
   agentId?: string;
 };
 export type ControlUiLinkReaderDetailParams = { url: string; refresh?: boolean };
-export type ControlUiLinkReaderImageParams = { url: string };
 export type ControlUiLinkReaderImage = {
   /** Echo the validated requested image URL. */
   url: string;

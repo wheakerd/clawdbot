@@ -1,4 +1,3 @@
-import type { ControlUiLinkReaderImage } from "openclaw/plugin-sdk/control-ui-link-reader";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -38,7 +37,7 @@ export function parseGitHubImageParams(params: unknown): string | undefined {
   }
 }
 
-export async function loadGitHubImage(url: string): Promise<ControlUiLinkReaderImage> {
+export async function loadGitHubImage(url: string): Promise<{ url: string; dataUrl: string }> {
   const { response, release } = await fetchWithSsrFGuard({
     url,
     requireHttps: true,
