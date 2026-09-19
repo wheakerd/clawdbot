@@ -431,6 +431,7 @@ async function confirmChatNativeRuntimeRecovery(
   model: string,
   selection: ChatModelSelection,
   selectionUnchanged: () => boolean = () => true,
+  retriesMessage = false,
 ): Promise<boolean> {
   const { owner, ownsSelection, agentScope, expectedSessionId } = selection;
   if (!ownsSelection()) {
@@ -452,6 +453,7 @@ async function confirmChatNativeRuntimeRecovery(
         model: model || null,
         expectedSessionId,
         signal: owner.signal,
+        retriesMessage,
         canDispatch: canRecover,
       },
     );
@@ -484,7 +486,7 @@ async function confirmChatNativeRuntimeRecovery(
 export function captureChatNativeRuntimeRecovery(
   host: ChatModelSettingsHost,
   targetSessionKey: string,
-): (restriction: AgentRuntimeRestrictionErrorDetails) => Promise<boolean> {
+): (restriction: AgentRuntimeRestrictionErrorDetails) => Promise<(() => boolean) | undefined> {
   const selection = claimChatModelSelection(host, targetSessionKey);
   const model = selection.activeRow?.model;
   const provider = selection.activeRow?.modelProvider;
@@ -496,8 +498,8 @@ export function captureChatNativeRuntimeRecovery(
     sessionKey: targetSessionKey,
     sessionsResult: host.sessionsResult ?? null,
   });
-  return (restriction) =>
-    confirmChatNativeRuntimeRecovery(
+  return async (restriction) => {
+    const recovered = await confirmChatNativeRuntimeRecovery(
       host,
       restriction,
       targetSessionKey,
@@ -515,7 +517,29 @@ export function captureChatNativeRuntimeRecovery(
           runtimeId === restriction.runtimeId,
         );
       },
+      true,
     );
+    if (!recovered) {
+      return undefined;
+    }
+    const readRow = () =>
+      host.sessionsResult?.sessions.find((row) =>
+        areUiSessionKeysEquivalent(row.key, targetSessionKey),
+      );
+    const confirmed = readRow();
+    const confirmedModel = confirmed?.model;
+    const confirmedProvider = confirmed?.modelProvider;
+    const confirmedRuntime = confirmed?.agentRuntime?.id;
+    return () => {
+      const current = readRow();
+      return (
+        selection.ownsSelection() &&
+        current?.model === confirmedModel &&
+        current?.modelProvider === confirmedProvider &&
+        current?.agentRuntime?.id === confirmedRuntime
+      );
+    };
+  };
 }
 
 export async function switchChatModel(

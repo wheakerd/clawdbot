@@ -4317,7 +4317,8 @@ export const en: TranslationMap & {
       title: "Use {runtime}’s native permissions?",
       confirm: "Continue for this chat",
       confirmMessage:
-        "{runtime} will run on the Gateway host under its own permissions. OpenClaw’s optional native tool and sandbox restrictions, including workspace-only restrictions, will not be enforced for this harness. Only this chat is changed; other chats and global configuration stay unchanged. OpenClaw-hosted tools keep their own policy checks. No message will be sent automatically.",
+        "{runtime} will run on the Gateway host under its own permissions. OpenClaw’s optional native tool and sandbox restrictions, including workspace-only restrictions, will not be enforced for this harness. Only this chat is changed; other chats and global configuration stay unchanged. OpenClaw-hosted tools keep their own policy checks.",
+      retryMessage: "Continue will retry the message you just sent.",
       chooseAnother: "Choose another model to keep this chat’s current execution restrictions.",
       failed: "Could not change this chat’s execution permissions: {error}",
       refreshFailed:

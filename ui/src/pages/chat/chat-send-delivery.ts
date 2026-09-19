@@ -4,7 +4,10 @@ import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
-import { INTERRUPTED_SETTINGS_WAIT_ERROR } from "../../lib/chat/outbox-store-codec.ts";
+import {
+  INTERRUPTED_SETTINGS_WAIT_ERROR,
+  sameQueuedDeliveryVersion,
+} from "../../lib/chat/outbox-store-codec.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -147,6 +150,7 @@ async function sendQueuedChatMessage(
   id: string,
   options?: QueuedChatSendOptions,
   queuedSessionKey = host.sessionKey,
+  allowNativeRecovery = true,
 ): Promise<QueuedChatSendResult> {
   const storageMode = options?.storageMode ?? "durable";
   let queued = readQueuedMessageById(host, id);
@@ -154,10 +158,31 @@ async function sendQueuedChatMessage(
   if (!queued || queued.pendingRunId || (queued.localCommandName && !approvedReset)) {
     return "failed";
   }
+  const retrySessionKey = queued.sessionKey ?? queuedSessionKey;
+  const retryAgentId = queued.agentId;
+  const retryOwnerIsCurrent = () => {
+    if (!options?.canDispatch || options.canDispatch()) {
+      return true;
+    }
+    deliveryStateWriter(host, storageMode, id)("failed", INTERRUPTED_SETTINGS_WAIT_ERROR);
+    surfaceChatDeliveryFailure(
+      host,
+      retrySessionKey,
+      retryAgentId,
+      INTERRUPTED_SETTINGS_WAIT_ERROR,
+    );
+    return false;
+  };
+  if (!retryOwnerIsCurrent()) {
+    return "failed";
+  }
   let expectedLeafEntryId = resolveQueuedChatLeaf(host, queued, options);
   const history = waitForQueuedChatHistory(host, queued, queuedSessionKey, options);
   if (history) {
     const ready = await history;
+    if (!retryOwnerIsCurrent()) {
+      return "failed";
+    }
     if (!ready) {
       return "pending";
     }
@@ -168,6 +193,9 @@ async function sendQueuedChatMessage(
     (queued.attachments?.length || queued.attachmentPayload || queued.attachmentStorageError)
   ) {
     const prepared = await prepareQueuedChatPayload(host, queued, queuedSessionKey);
+    if (!retryOwnerIsCurrent()) {
+      return "failed";
+    }
     if (typeof prepared === "string") {
       return prepared;
     }
@@ -202,6 +230,9 @@ async function sendQueuedChatMessage(
       { ...options, pendingSettings: latestSettings },
       consumedSettings,
     );
+  }
+  if (!retryOwnerIsCurrent()) {
+    return "failed";
   }
   if (typeof prepared === "string") {
     return prepared;
@@ -296,9 +327,8 @@ async function sendQueuedChatMessage(
     ...(prepared.agentId ? { agentId: prepared.agentId } : {}),
   };
   const isVisible = () => visibleSessionMatches(host, sessionKey, prepared.agentId);
-  const recoverNativeRuntime = isVisible()
-    ? captureChatNativeRuntimeRecovery(host, route)
-    : undefined;
+  const recoverNativeRuntime =
+    allowNativeRecovery && isVisible() ? captureChatNativeRuntimeRecovery(host, route) : undefined;
   if (isVisible()) {
     host.chatSendingScopeKey = storedChatOutboxScopeKey(scope);
     host.chatSending = true;
@@ -316,6 +346,16 @@ async function sendQueuedChatMessage(
   }
 
   try {
+    if (options?.canDispatch && !options.canDispatch()) {
+      setState("failed", INTERRUPTED_SETTINGS_WAIT_ERROR);
+      surfaceChatDeliveryFailure(
+        host,
+        sessionKey,
+        prepared.agentId,
+        INTERRUPTED_SETTINGS_WAIT_ERROR,
+      );
+      return "failed";
+    }
     const deliveryLeafEntryId = prepared.intent
       ? prepared.expectedLeafEntryId
       : expectedLeafEntryId;
@@ -491,18 +531,41 @@ async function sendQueuedChatMessage(
         ? readAgentRuntimeRestrictionErrorDetails(err.details)
         : undefined;
     if (restriction) {
-      // Admission refused before inference. Restore the input, or leave it failed
-      // in the outbox if a newer draft owns the composer; never schedule a retry.
+      // Keep the exact outbox input through confirmation; never retry a newer draft.
       finishScopedChatSending(host, scope);
-      const restored = restoreRejectedChatDelivery(host, prepared, options);
-      if (!restored) {
-        setState("failed", error);
-      }
-      surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {
-        inline: storageMode === "durable" && !restored,
-      });
+      const failed = setState("failed", error);
       recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
-      await recoverNativeRuntime?.(restriction);
+      const canRetry = allowNativeRecovery ? await recoverNativeRuntime?.(restriction) : undefined;
+      if (canRetry?.() && requestConnectionIsCurrent() && isVisible()) {
+        const current = readQueuedMessageById(host, id);
+        if (!failed || !current || !sameQueuedDeliveryVersion(failed, current)) {
+          return "failed";
+        }
+        const retry = updateQueuedSendItem(host, storageMode, id, (item) => ({
+          ...item,
+          sendRunId: generateUUID(),
+          sendError: undefined,
+          sessionId: restriction.recovery?.sessionId,
+          sendState: "sending",
+        }));
+        if (retry) {
+          return await sendQueuedChatMessage(
+            host,
+            id,
+            { ...options, canDispatch: canRetry, allowActiveRunSend: true },
+            queuedSessionKey,
+            false,
+          );
+        }
+      }
+      const restored = restoreRejectedChatDelivery(host, prepared, options);
+      surfaceChatDeliveryFailure(
+        host,
+        sessionKey,
+        prepared.agentId,
+        (isVisible() && host.chatError) || error,
+        { inline: storageMode === "durable" && !restored },
+      );
       return "failed";
     }
     if (err instanceof GatewayPayloadLimitError) {

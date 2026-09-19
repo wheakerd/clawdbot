@@ -77,7 +77,7 @@ import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
-import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
+import { admitInitialTurnHandoff, subscribeInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import {
   applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
@@ -409,6 +409,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       }
     }
     chatState.attach(pageState);
+    chatState.addCleanup(
+      subscribeInitialTurnHandoff(() => {
+        if (admitInitialTurnHandoff(pageState, pageState.sessionKey)) {
+          pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+          pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+        }
+        pageState.requestUpdate?.();
+      }),
+    );
     chatState.addCleanup(
       this.context.agentIdentity.subscribe(() => void pageState.loadAssistantIdentity()),
     );

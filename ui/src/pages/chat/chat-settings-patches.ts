@@ -143,6 +143,7 @@ export async function confirmNativeRuntimePermissionRecovery(
     expectedSessionId?: string;
     model?: string | null;
     signal?: AbortSignal;
+    retriesMessage?: boolean;
     canDispatch: () => boolean;
   },
 ): Promise<SessionPatchResult | null> {
@@ -166,7 +167,7 @@ export async function confirmNativeRuntimePermissionRecovery(
   }
   const confirmed = await showConfirmDialog({
     title: t("chat.nativeRuntimeRecovery.title", { runtime: restriction.runtimeLabel }),
-    message: `${t(`chat.nativeRuntimeRecovery.reasons.${restriction.reason}`, { runtime: restriction.runtimeLabel })}\n\n${t("chat.nativeRuntimeRecovery.confirmMessage", { runtime: restriction.runtimeLabel })}`,
+    message: `${t(`chat.nativeRuntimeRecovery.reasons.${restriction.reason}`, { runtime: restriction.runtimeLabel })}\n\n${t("chat.nativeRuntimeRecovery.confirmMessage", { runtime: restriction.runtimeLabel })}${options.retriesMessage ? `\n\n${t("chat.nativeRuntimeRecovery.retryMessage")}` : ""}`,
     confirmLabel: t("chat.nativeRuntimeRecovery.confirm"),
     danger: true,
     signal: options.signal,

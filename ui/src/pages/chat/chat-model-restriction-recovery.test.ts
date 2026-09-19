@@ -46,6 +46,7 @@ function fixture(
     rejectRecovery?: boolean;
     unrestricted?: boolean;
     send?: boolean;
+    repeatRefusal?: boolean;
   } = {},
 ) {
   const result = createSessionsListResult({ model: "original", modelProvider: "fixture" });
@@ -67,6 +68,7 @@ function fixture(
     ...options.details,
   };
   let patches = 0;
+  let sends = 0;
   const receipt: SessionsPatchResult = {
     ok: true,
     key: "global",
@@ -104,6 +106,9 @@ function fixture(
           : receipt;
       },
       "chat.send": () => {
+        if (++sends > 1 && !options.repeatRefusal) {
+          return { runId: "native-confirmed-retry", status: "started" };
+        }
         throw new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "Admission refused",
@@ -328,7 +333,7 @@ it("leaves an unrestricted model selection on the ordinary patch path", async ()
 });
 
 it.each(["confirm", "cancel"] as const)(
-  "preserves a refused native send and its attachment after %s without replay",
+  "retries the original native send and attachment only after %s",
   async (action) => {
     installOutboxBrowserStorage();
     vi.stubGlobal("localStorage", createStorageMock());
@@ -346,9 +351,8 @@ it.each(["confirm", "cancel"] as const)(
     onTestFinished(() => releaseChatAttachmentPayloads([attachment]));
     const sending = handleSendChat(host);
     const modal = await dialog();
-    expect(host.chatMessage).toBe("Keep this draft; never replay it");
-    expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(dataUrl);
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue).toHaveLength(1);
     expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(
       0,
     );
@@ -372,13 +376,56 @@ it.each(["confirm", "cancel"] as const)(
         expectedNativeRuntimeConsent: null,
       });
     }
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
+    expect(sends).toHaveLength(action === "confirm" ? 2 : 1);
+    if (action === "confirm") {
+      expect(sends[1]?.[1]).toMatchObject({
+        message: "Keep this draft; never replay it",
+        attachments: [{ fileName: "notes.txt", content: "cHJlc2VydmU=" }],
+      });
+    }
     expect(host.request.mock.calls.some(([method]) => method.startsWith("config."))).toBe(false);
-    expect(host.chatMessage).toBe("Keep this draft; never replay it");
-    expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(dataUrl);
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatMessage).toBe(action === "confirm" ? "" : "Keep this draft; never replay it");
+    if (action === "cancel") {
+      expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(dataUrl);
+      expect(host.chatQueue).toEqual([]);
+    }
   },
 );
+
+it("stops after one confirmed retry when native admission refuses again", async () => {
+  installOutboxBrowserStorage();
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  vi.stubGlobal("requestAnimationFrame", () => 1);
+  vi.stubGlobal("cancelAnimationFrame", () => undefined);
+  const { host } = fixture({ send: true, repeatRefusal: true });
+  const sending = handleSendChat(host);
+  click(await dialog(), "Continue for this chat");
+  await sending;
+  expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(2);
+  expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+  expect(host.chatMessage).toBe("Keep this draft; never replay it");
+});
+
+it("retries the refused input without sending or overwriting a newer composer draft", async () => {
+  installOutboxBrowserStorage();
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  vi.stubGlobal("requestAnimationFrame", () => 1);
+  vi.stubGlobal("cancelAnimationFrame", () => undefined);
+  const { host } = fixture({ send: true });
+  const sending = handleSendChat(host);
+  const modal = await dialog();
+  host.chatMessage = "A newer draft, not yet submitted";
+  click(modal, "Continue for this chat");
+  await sending;
+  const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
+  expect(sends).toHaveLength(2);
+  expect(sends[1]?.[1]).toMatchObject({ message: "Keep this draft; never replay it" });
+  expect(host.chatMessage).toBe("A newer draft, not yet submitted");
+});
 
 it.each(["newer-selection", "server-selection", "authority", "connection", "session"] as const)(
   "does not grant native send consent after %s",

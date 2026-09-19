@@ -1,4 +1,5 @@
 import { readAgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -21,7 +22,7 @@ type InitialTurn = {
   turn: Parameters<typeof buildInitialChatSubmission>[1] & { attachments: ChatAttachment[] };
 };
 
-function retainInitialSessionTurn(options: InitialTurn): boolean {
+function retainInitialSessionTurn(options: InitialTurn, retryAfter?: Promise<boolean>): boolean {
   const { context, client, result, turn } = options;
   const { text: message, attachments } = turn;
   const handedOffAttachments =
@@ -34,6 +35,8 @@ function retainInitialSessionTurn(options: InitialTurn): boolean {
       message,
       mentions: turn.mentions,
       sessionKey: result.key,
+      sessionId: typeof result.entry?.sessionId === "string" ? result.entry.sessionId : undefined,
+      retryAfter,
     });
   if (result.initialRun.status === "started") {
     context.chatSubmissions.retain(
@@ -67,56 +70,63 @@ export async function completeInitialSessionTurn(
     }
     return;
   }
-  const handedOffAttachments = retainInitialSessionTurn(options);
-  await options.clearDraft(!handedOffAttachments);
-  if (!options.isCurrent() || (instant && !instant.isCurrent())) {
-    return;
-  }
-  if (
-    options.completeInBackground(
-      key,
-      initialRun.status === "started" ? initialRun.runId : undefined,
-    )
-  ) {
-    return;
-  }
-  instant?.admitted(key, agentId);
-  await options.navigation.navigate(
-    context,
-    { client, key, agentId },
-    instant?.commit.bind(instant),
-  );
-  options.finishNavigation();
   const restriction =
     initialRun.status === "rejected"
       ? readAgentRuntimeRestrictionErrorDetails(initialRun.errorDetails)
       : undefined;
-  if (restriction) {
-    const snapshot = context.gateway.snapshot;
-    const canDispatch = () =>
-      context.gateway.snapshot.phase === "connected" &&
-      context.gateway.snapshot.client === client &&
-      context.gateway.snapshot.hello === snapshot.hello &&
-      areUiSessionKeysEquivalent(context.gateway.snapshot.sessionKey, key);
-    try {
-      await confirmNativeRuntimePermissionRecovery(
-        { sessions: context.sessions, hello: snapshot.hello },
+  const retry = restriction ? createDeferredCore<boolean>() : undefined;
+  try {
+    const handedOffAttachments = retainInitialSessionTurn(options, retry?.promise);
+    await options.clearDraft(!handedOffAttachments);
+    if (!options.isCurrent() || (instant && !instant.isCurrent())) {
+      return;
+    }
+    if (
+      options.completeInBackground(
         key,
-        restriction,
-        {
-          agentId,
-          expectedSessionId:
-            typeof result.entry?.sessionId === "string" ? result.entry.sessionId : undefined,
-          signal: context.lifecycleAbortSignal,
-          canDispatch,
-        },
-      );
-    } catch (error) {
-      if (canDispatch()) {
-        showToast({
-          message: t("chat.nativeRuntimeRecovery.failed", { error: formatUiError(error) }),
-        });
+        initialRun.status === "started" ? initialRun.runId : undefined,
+      )
+    ) {
+      return;
+    }
+    instant?.admitted(key, agentId);
+    await options.navigation.navigate(
+      context,
+      { client, key, agentId },
+      instant?.commit.bind(instant),
+    );
+    options.finishNavigation();
+    if (restriction) {
+      const snapshot = context.gateway.snapshot;
+      const canDispatch = () =>
+        context.gateway.snapshot.phase === "connected" &&
+        context.gateway.snapshot.client === client &&
+        context.gateway.snapshot.hello === snapshot.hello &&
+        areUiSessionKeysEquivalent(context.gateway.snapshot.sessionKey, key);
+      try {
+        const recovered = await confirmNativeRuntimePermissionRecovery(
+          { sessions: context.sessions, hello: snapshot.hello },
+          key,
+          restriction,
+          {
+            agentId,
+            expectedSessionId:
+              typeof result.entry?.sessionId === "string" ? result.entry.sessionId : undefined,
+            signal: context.lifecycleAbortSignal,
+            retriesMessage: true,
+            canDispatch,
+          },
+        );
+        retry?.resolve(Boolean(recovered && canDispatch()));
+      } catch (error) {
+        if (canDispatch()) {
+          showToast({
+            message: t("chat.nativeRuntimeRecovery.failed", { error: formatUiError(error) }),
+          });
+        }
       }
     }
+  } finally {
+    retry?.resolve(false);
   }
 }
