@@ -160,3 +160,25 @@ it("accepts the explicitly unrestricted candidate without changing the agent con
   expect(result.validate?.()).toMatchObject({ message: "Runtime owner changed" });
   expect(cfg.agents?.defaults?.sandbox?.mode).toBe("all");
 });
+
+it.each([false, true])(
+  "defers optional creation restrictions but preserves mandatory sandbox=%s",
+  async (mandatory) => {
+    const entry: SessionEntry = {
+      ...original,
+      ...(mandatory ? { sandbox: "required" as const } : {}),
+    };
+    const result = await prepareSessionPatchRuntimeSelection({
+      cfg,
+      agentId: "main",
+      patch: { key, model },
+      entry,
+    });
+    expect(result.ok).toBe(!mandatory);
+    expect(entry.nativeRuntimeConsent).toBeUndefined();
+    if (!result.ok) {
+      expect(result.error.details).toMatchObject({ reason: "sandbox-required" });
+      expect(result.error.details).not.toHaveProperty("recovery");
+    }
+  },
+);

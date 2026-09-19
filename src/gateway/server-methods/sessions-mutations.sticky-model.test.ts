@@ -1250,6 +1250,7 @@ registerSessionRuntimeWindowTests({
 it.each([false, true])(
   "commits model-only native creation only while its owner is current (stale=%s)",
   async (stale) => {
+    cfg.tools = { deny: ["browser"] };
     const sessionKey = `agent:main:model-only-${stale}`;
     const requestContext = context();
     requestContext.loadGatewayModelCatalogSnapshot.mockResolvedValue(
@@ -1258,6 +1259,13 @@ it.each([false, true])(
     runtimeChoice.prepare.mockResolvedValue({
       kind: "ready",
       runtimeId: "claude-cli",
+      harness: {
+        id: "claude-cli",
+        label: "Native fixture",
+        executionEnvironment: "host-only",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+      },
       validate: vi
         .fn<() => string | undefined>()
         .mockReturnValueOnce(undefined)
@@ -1281,6 +1289,9 @@ it.each([false, true])(
         modelOverride: "claude-sonnet-4-6",
         agentRuntimeOverride: "claude-cli",
       });
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey })?.nativeRuntimeConsent,
+      ).toBeUndefined();
     }
   },
 );

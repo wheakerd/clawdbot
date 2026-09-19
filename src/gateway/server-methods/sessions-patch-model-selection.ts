@@ -315,6 +315,16 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         });
         const details = readAgentRuntimeRestrictionErrorDetails(error?.details);
         const expected = params.expectedEntry;
+        // Creation has no persisted chat to authorize yet. The first send checks
+        // optional restrictions against the committed incarnation before execution.
+        if (
+          !expected &&
+          details &&
+          details.reason !== "sandbox-required" &&
+          details.reason !== "remote-execution"
+        ) {
+          return undefined;
+        }
         if (error && details?.recovery && expected) {
           return {
             ...error,
