@@ -75,7 +75,10 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { readStateDiagnosticCommand } from "./openclaw-state-read-diagnostics.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
-import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
+import type {
+  OpenClawStateReadReply,
+  OpenClawStateReadResult,
+} from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.js";
@@ -176,8 +179,8 @@ serveOwnedWorkerTasks(
                     },
                   };
             }
-            return withOpenClawStateReadOnlyLocation(
-              ({ db }) => {
+            const result = withOpenClawStateReadOnlyLocation(
+              ({ db }): OpenClawStateReadResult => {
                 sourceAdmitted = true;
                 if (command.type === "deliveryQueue.outbound") {
                   // Custody reads retain queue ownership admission even on a read-only connection.
@@ -187,17 +190,13 @@ serveOwnedWorkerTasks(
                     env: input.context.environment,
                   });
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     entries: readOutboundDeliveriesInDatabase({ db }, command),
                   };
                 }
                 if (command.type === "acpSessions.metadata") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     rows: command.entries.map(
                       (entry) => selectAcpSessionRowForRead(db, entry) ?? null,
                     ),
@@ -209,73 +208,55 @@ serveOwnedWorkerTasks(
                       ? loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db })
                       : loadSubagentRunsByRunIdsFromSqlite(command.scope.runIds, { db });
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     runs: new Map(rows.map((entry) => [entry.runId, entry])),
                   };
                 }
                 if (command.type === "mcpOAuth.statuses") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     value: readMcpOAuthStatusesInDatabase(db, command.input),
                   };
                 }
                 if (command.type === "mcpOAuth.readOnly") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     value: readMcpOAuthStoreIfPresentInDatabase(db, command.input),
                   };
                 }
                 if (command.type === "mcpOAuth.keys") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     value: listMcpOAuthStoreKeysInDatabase(db, command.input),
                   };
                 }
                 if (command.type === "mcpOAuth.pending") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     value: readMcpOAuthPendingInDatabase(db, command.input),
                   };
                 }
                 if (command.type === "mcpOAuth.countPrincipals") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     value: countMcpOAuthPrincipalsInDatabase(db, command.input),
                   };
                 }
                 if (command.type === "sessionGroups.snapshot") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted: true,
                     snapshot: readSessionGroupCatalogSnapshot(db),
                   };
                 }
                 if (command.type === "sessionGroups.members") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted: true,
                     snapshot: readSessionGroupMembership(command.cfg, input.context.environment),
                   };
                 }
                 if (command.type === "conversationBindings.inspect") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     record: inspectCurrentConversationBindingRecordInDatabase(
                       db,
                       command.conversation,
@@ -284,18 +265,14 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "cron.observeRunRecovery") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     observation: observeCronRunRecoveryInDatabase(db, command),
                   };
                 }
                 if (command.type === "cron.jobNames") {
                   const storePath = command.storePath ?? resolveCronJobsStorePath();
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     names: readCronJobNamesInDatabase(db, command.jobIds, storePath),
                   };
                 }
@@ -317,9 +294,7 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "tasks.mutationSnapshot") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     snapshot:
                       command.input === undefined
                         ? readTaskRegistrySnapshot({ db, path: input.databasePath })
@@ -328,9 +303,7 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "subagents.forChildSession") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     runs: loadSubagentRunsForChildSessionFromSqlite(command.childSessionKey, {
                       db,
                     }),
@@ -338,9 +311,7 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "pluginBlob.lookup") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     value: pluginBlobLookupInDatabase(db, {
                       ...command.input,
                       env: input.context.environment,
@@ -356,9 +327,7 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "pluginBlob.entries") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     value: pluginBlobEntriesInDatabase(db, {
                       ...command.input,
                       env: input.context.environment,
@@ -368,9 +337,7 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "updateRuns.get") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     run: tableExists(db, "update_runs")
                       ? readUpdateRunRecord(db, command.runId)
                       : undefined,
@@ -378,33 +345,25 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "updateRuns.list") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     runs: readUpdateRuns(db, command.input),
                   };
                 }
                 if (command.type === "updateRuns.interruptedCandidate") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     run: readInterruptedUpdateCandidate(db),
                   };
                 }
                 if (command.type === "exec-approvals.read") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     row: readExecApprovalsConfigRow(db),
                   };
                 }
                 if (command.type === "workerEnvironments.snapshot") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     facts: runSqliteDeferredTransactionSync(db, () =>
                       readWorkerEnvironmentFacts(db, command.ids),
                     ),
@@ -412,17 +371,13 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "workerEnvironments.pruneCandidates") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     page: readWorkerEnvironmentPrunePage(db, command.input),
                   };
                 }
                 if (command.type === "skills.library.descriptions") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     value: tableExists(db, "skill_library_entries")
                       ? selectSkillLibraryRevisionMetadataBatch(db, command.input)
                       : undefined,
@@ -430,9 +385,7 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "skills.library.manifests") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     value: tableExists(db, "skill_library_entries")
                       ? selectSkillLibraryRevisionManifestsBatch(db, command.input)
                       : undefined,
@@ -440,33 +393,25 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "operatorApprovals.history") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     history: listTerminalOperatorApprovalsInDatabase(command.input, db),
                   };
                 }
                 if (command.type === "onboardingRecommendations.read") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     record: readOnboardingRecommendationsInDatabase(db, command.configKey),
                   };
                 }
                 if (command.type === "nodeHost.config") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     row: readConfigMachineStateRowInDatabase(db, command.type),
                   };
                 }
                 if (command.type === "workspace.snapshot") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     snapshot: readWorkspaceStateSnapshotForDirectoryInDatabase({
                       workspaceDir: command.workspaceDir,
                       database: { db, path: input.databasePath },
@@ -475,25 +420,19 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "githubPublication.lifecycle") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     lifecycle: readGitHubPublicationSessionLifecycle(command, db),
                   };
                 }
                 if (command.type === "githubPublication.request") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
                   };
                 }
                 if (command.type === "githubRepository.request") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     row: readRepositoryGitHubPublicationInDatabase(db, command.requestId),
                   };
                 }
@@ -502,9 +441,7 @@ serveOwnedWorkerTasks(
                   command.type === "githubRepository.knownPullRequestUrls"
                 ) {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     urls:
                       command.type === "githubPublication.knownPullRequestUrls"
                         ? readKnownGitHubPublicationPullRequestUrlsInDatabase(db, command.input)
@@ -542,9 +479,7 @@ serveOwnedWorkerTasks(
                     };
                   });
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     profile,
                   };
                 }
@@ -552,13 +487,11 @@ serveOwnedWorkerTasks(
                   command.type === "userProfiles.githubIdentity.cached" ||
                   command.type === "userProfiles.githubAttribution.resolve"
                 ) {
-                  return { ok: true, ...readUserProfileGitHubCommand(db, command), sourceAdmitted };
+                  return readUserProfileGitHubCommand(db, command);
                 }
                 if (command.type === "userProfiles.channelIdentity.list") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     result: readUserChannelIdentityResult(() =>
                       listUserChannelIdentitiesInDatabase(db, command.profileId),
                     ),
@@ -566,9 +499,7 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "userProfiles.channelIdentity.resolve") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     linked: resolveUserChannelIdentityInDatabase(db, command.identity),
                   };
                 }
@@ -577,7 +508,7 @@ serveOwnedWorkerTasks(
                     profile: selectProfileDisplayEntries(db, [command.profileId])[0]?.[1],
                     emailBindings: readUserProfileEmailBindings(db, command.profileId),
                   }));
-                  return { ok: true, type: command.type, sourceAdmitted, ...facts };
+                  return { type: command.type, ...facts };
                 }
                 if (command.type === "userProfiles.catalog") {
                   const facts = runSqliteDeferredTransactionSync(db, () => ({
@@ -586,13 +517,11 @@ serveOwnedWorkerTasks(
                       : [],
                     emailBindings: readUserProfileEmailBindings(db),
                   }));
-                  return { ok: true, type: command.type, sourceAdmitted, ...facts };
+                  return { type: command.type, ...facts };
                 }
                 if (command.type === "userProfiles.email.resolve") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     profileId: runSqliteDeferredTransactionSync(db, () =>
                       readUserProfileIdForEmail(db, command.email),
                     ),
@@ -600,9 +529,7 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "sessionRepositoryWorkspaces.find") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     workspaces: runSqliteDeferredTransactionSync(db, () =>
                       command.owners.flatMap((owner) => {
                         const workspace = findSessionRepositoryWorkspaceInDatabase(db, owner);
@@ -613,17 +540,13 @@ serveOwnedWorkerTasks(
                 }
                 if (command.type === "workerPlacements.changeSnapshot") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     placements: readWorkerPlacementChangeSnapshotInDatabase(db, command.profileIds),
                   };
                 }
                 if (command.type === "workers.placementProjection") {
                   return {
-                    ok: true,
                     type: command.type,
-                    sourceAdmitted,
                     result: readWorkerSessionPlacementProjectionInDatabase(
                       db,
                       command.sessionIds,
@@ -640,6 +563,7 @@ serveOwnedWorkerTasks(
               input.snapshotRoot,
               true,
             );
+            return { ok: true, sourceAdmitted: true, ...result };
           },
         ),
       );

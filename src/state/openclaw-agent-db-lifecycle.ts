@@ -38,6 +38,7 @@ import {
   drainAgentDatabaseResources,
   matchesAgentDatabaseClose,
   revokeAgentDatabaseResources,
+  type AgentDatabaseCloseSelection,
 } from "./openclaw-agent-db-resources.js";
 import {
   assertSupportedAgentSchemaVersion,
@@ -481,6 +482,23 @@ export function closeOpenClawAgentDatabases(rootPath?: string): void {
   }
 }
 
+async function drainPendingAgentDatabaseOpens(
+  selection: AgentDatabaseCloseSelection,
+): Promise<void> {
+  while (true) {
+    const pending = [...cache.activePending].filter((owner) =>
+      matchesAgentDatabaseClose(selection, owner),
+    );
+    if (pending.length === 0) {
+      return;
+    }
+    for (const owner of pending) {
+      revokePendingAgentDatabaseOpen(owner.path, selection.agentId);
+    }
+    await Promise.allSettled(pending.map((owner) => owner.promise));
+  }
+}
+
 /** Drain native opens before a lifecycle owner releases shared state or removes its root. */
 export async function closeOpenClawAgentDatabasesAsync(rootPath?: string): Promise<void> {
   // Retained resources may drain slowly; revoke native admission before yielding to them.
@@ -490,18 +508,7 @@ export async function closeOpenClawAgentDatabasesAsync(rootPath?: string): Promi
     }
   }
   await drainAgentDatabaseResources({ rootPath }, async () => {
-    while (true) {
-      const pending = [...cache.activePending].filter(
-        (owner) => rootPath === undefined || isPathInside(rootPath, owner.path),
-      );
-      if (pending.length === 0) {
-        break;
-      }
-      for (const owner of pending) {
-        revokePendingAgentDatabaseOpen(owner.path);
-      }
-      await Promise.allSettled(pending.map((owner) => owner.promise));
-    }
+    await drainPendingAgentDatabaseOpens({ rootPath });
     closeOpenClawAgentDatabases(rootPath);
   });
 }
@@ -514,18 +521,7 @@ export async function closeOpenClawAgentDatabaseByPathAsync(
   const selection = { path: path.resolve(pathname), agentId: expectedAgentId };
   revokePendingAgentDatabaseOpen(selection.path, expectedAgentId);
   return drainAgentDatabaseResources(selection, async () => {
-    while (true) {
-      const pending = [...cache.activePending].filter((owner) =>
-        matchesAgentDatabaseClose(selection, owner),
-      );
-      if (pending.length === 0) {
-        break;
-      }
-      for (const owner of pending) {
-        revokePendingAgentDatabaseOpen(owner.path, expectedAgentId);
-      }
-      await Promise.allSettled(pending.map((owner) => owner.promise));
-    }
+    await drainPendingAgentDatabaseOpens(selection);
     return closeOpenClawAgentDatabaseByPath(selection.path, expectedAgentId);
   });
 }
