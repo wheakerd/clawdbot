@@ -158,7 +158,6 @@ function loadGatewayStoreEntries(params: {
 
 // The listing accessor owns delivery-key validation; federation owns config aliases and targets.
 function mergeSessionEntryIntoCombined(params: {
-  cfg: OpenClawConfig;
   combined: Record<string, SessionEntry>;
   targetsBySessionKey: Map<string, GatewayStoredSessionTarget>;
   entry: SessionEntry;
@@ -205,7 +204,6 @@ export function projectGatewaySessionEntry(
 }
 
 function mergeOpenIncognitoStores(params: {
-  cfg: OpenClawConfig;
   combined: Record<string, SessionEntry>;
   targetsBySessionKey: Map<string, GatewayStoredSessionTarget>;
   modelSources: ReturnType<typeof createSessionModelSources>;
@@ -228,7 +226,6 @@ function mergeOpenIncognitoStores(params: {
         continue;
       }
       mergeSessionEntryIntoCombined({
-        cfg: params.cfg,
         combined: params.combined,
         targetsBySessionKey: params.targetsBySessionKey,
         entry,
@@ -634,7 +631,6 @@ function mergeCombinedSessionStore(
             ])
           : canonicalKey;
       mergeSessionEntryIntoCombined({
-        cfg,
         combined,
         targetsBySessionKey,
         entry,
@@ -652,7 +648,6 @@ function mergeCombinedSessionStore(
   }
 
   const incognitoStorePaths = mergeOpenIncognitoStores({
-    cfg,
     combined,
     targetsBySessionKey,
     modelSources,
