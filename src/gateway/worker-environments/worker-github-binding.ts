@@ -14,8 +14,64 @@ import {
   sameGitHubPublicationWorkspace,
 } from "../github-publication-availability.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
+import { issueWorkerGitHubInstallationToken } from "./worker-github-installation-token.js";
 
 const log = createSubsystemLogger("gateway/worker-github");
+
+export type WorkerGitHubBindingGrant = {
+  binding: WorkerGitHubBinding;
+  expiresAtMs?: number;
+  revoke: () => Promise<void>;
+};
+
+export async function prepareWorkerGitHubBindingGrant(params: {
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  assertCurrent?: () => boolean;
+}): Promise<WorkerGitHubBindingGrant | undefined> {
+  if (params.assertCurrent?.() === false) return undefined;
+  const workspace = resolveGitHubPublicationWorkspaceOwner(params);
+  const originUrl =
+    workspace.kind === "repository"
+      ? workspace.workspace.url
+      : (await managedWorktrees.resolveRepositoryIdentity(workspace.worktree.path)).originUrl;
+  if (params.assertCurrent?.() === false) return undefined;
+  const githubHost = resolveGitHubHost();
+  const remote = parseGitHubRemoteUrl(originUrl, githubHost);
+  if (
+    !remote ||
+    !/^[A-Za-z0-9_.-]+$/u.test(remote.owner) ||
+    !/^[A-Za-z0-9_.-]+$/u.test(remote.repo)
+  ) {
+    return undefined;
+  }
+  const appGrant = await issueWorkerGitHubInstallationToken({});
+  if (!appGrant) {
+    const binding = await prepareWorkerGitHubBinding(params);
+    return binding ? { binding, revoke: async () => {} } : undefined;
+  }
+  if (
+    params.assertCurrent?.() === false ||
+    !sameGitHubPublicationWorkspace(workspace, resolveGitHubPublicationWorkspaceOwner(params))
+  ) {
+    await appGrant.revoke();
+    return undefined;
+  }
+  const binding = parseWorkerGitHubLaunchBinding({
+    token: appGrant.token,
+    login: "x-access-token",
+    ...(githubHost === "github.com" ? {} : { host: githubHost }),
+    branch:
+      workspace.kind === "repository" ? workspace.workspace.branch : workspace.worktree.branch,
+    remoteUrl: `https://${githubHost}/${remote.owner}/${remote.repo}.git`,
+  });
+  if (!binding) {
+    await appGrant.revoke();
+    throw new Error("Worker GitHub App binding does not meet the launch contract");
+  }
+  return { binding, expiresAtMs: appGrant.expiresAtMs, revoke: appGrant.revoke };
+}
 
 export async function prepareWorkerGitHubBinding(params: {
   sessionId: string;

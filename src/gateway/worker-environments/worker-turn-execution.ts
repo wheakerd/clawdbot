@@ -40,7 +40,10 @@ import {
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import {
+  prepareWorkerGitHubBindingGrant,
+  type WorkerGitHubBindingGrant,
+} from "./worker-github-binding.js";
 import { createWorkerReplyMedia } from "./worker-reply-media.js";
 import { releaseClaimIfOwned, waitForTurnOperation } from "./worker-turn-admission.js";
 import {
@@ -97,21 +100,6 @@ export async function executeWorkerTurn(
   await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
   params.assertRunCurrent?.();
   turn.abortSignal?.throwIfAborted();
-  // Shared account refresh and repository lookup own their own lifetime. A
-  // cancelled turn may stop waiting, but cannot consume a late binding.
-  const github = await raceNodeWorkerOperation(
-    prepareWorkerGitHubBinding({
-      sessionId: placement.sessionId,
-      sessionKey: placement.sessionKey,
-      agentId: placement.agentId,
-      assertCurrent: () =>
-        !turn.abortSignal?.aborted && params.placements.validateTurnClaim(params.turnClaim),
-    }),
-    turn.abortSignal,
-  );
-  params.assertRunCurrent?.();
-  turn.abortSignal?.throwIfAborted();
-
   const startedAt = Date.now();
   await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
   params.assertRunCurrent?.();
@@ -297,6 +285,7 @@ export async function executeWorkerTurn(
       throw new Error("Worker tool surface owner changed");
     }
   };
+  let githubGrant: WorkerGitHubBindingGrant | undefined;
   try {
     const isAuthorized = () => {
       try {
@@ -317,6 +306,13 @@ export async function executeWorkerTurn(
       throw new StaleWorkerBuildError();
     }
     let skillWorkshop: AnyAgentTool | undefined;
+    githubGrant = await prepareWorkerGitHubBindingGrant({
+      sessionId: placement.sessionId,
+      sessionKey: placement.sessionKey,
+      agentId: placement.agentId,
+      assertCurrent: isAuthorized,
+    });
+    const github = githubGrant?.binding;
     if (turn.skillLibraryAuthoring && toolAuthority.allowedToolNames.includes("skill_workshop")) {
       const assertSkillAuthority = () => {
         if (
@@ -697,6 +693,7 @@ export async function executeWorkerTurn(
       reply,
     });
   } finally {
+    await githubGrant?.revoke();
     await toolRuntime?.close();
     stopWatchingClaim();
     stopWatchingRun();
