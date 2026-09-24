@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import {
   installManagedGitHubProfile,
   resolveManagedGitHubProfileDir,
+  writeManagedGitHubProfileFiles,
 } from "../../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
@@ -63,13 +64,20 @@ const verified = {
 };
 let config: OpenClawConfig;
 
-async function installProfile(scope: "agent" | "system" = "system") {
+async function installProfile(scope: "agent" | "system" = "system", host?: string) {
   const profileDir = resolveManagedGitHubProfileDir({ agentId: "main", scope, profileId });
   await installManagedGitHubProfile({
     profileDir,
     token,
     commitConfig: async () => {},
   });
+  if (host) {
+    await writeManagedGitHubProfileFiles(profileDir, {
+      login: verified.account.login,
+      token,
+      host,
+    });
+  }
   mocks.verify.mockClear();
   return profileDir;
 }
@@ -114,6 +122,25 @@ describe("worker GitHub launch binding", () => {
       apiBaseUrl: "https://api.github.com",
     });
     expect(mocks.nativeToken).not.toHaveBeenCalled();
+  });
+
+  it("binds the configured enterprise host and canonical HTTPS remote", async () => {
+    vi.stubEnv("OPENCLAW_GITHUB_HOST", "microsoft.ghe.com");
+    vi.stubEnv("OPENCLAW_GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
+    await installProfile("system", "microsoft.ghe.com");
+    mocks.repository.mockResolvedValue({ originUrl: "git@microsoft.ghe.com:bic/lobster.git" });
+
+    await expect(prepareWorkerGitHubBinding(session)).resolves.toEqual({
+      token,
+      login: "shared-bot",
+      branch: worktree.branch,
+      host: "microsoft.ghe.com",
+      remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+      gitAuthor: { name: "Shared Bot" },
+    });
+    expect(mocks.verify).toHaveBeenCalledWith(token, {
+      apiBaseUrl: "https://api.microsoft.ghe.com",
+    });
   });
 
   it("uses the agent override author without inheriting system author fields", async () => {

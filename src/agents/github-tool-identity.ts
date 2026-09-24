@@ -267,7 +267,7 @@ async function readManagedGitHubToken(profileDir: string): Promise<string | unde
         hosts = value;
       }
     }
-    const host = isRecord(hosts) ? hosts[GITHUB_HOST] : undefined;
+    const host = isRecord(hosts) ? hosts[resolveGitHubHost()] : undefined;
     // gh reads the active host token before considering the global keyring.
     // User-keyed entries alone cannot prove isolation from native auth.
     return isRecord(host) && typeof host.oauth_token === "string"
@@ -662,7 +662,7 @@ async function verifyManagedGitHubCredential(token: string) {
 /** Write gh's external file contract without touching its OS keyring or verifying again. */
 export async function writeManagedGitHubProfileFiles(
   profileDir: string,
-  identity: { login: string; token: string },
+  identity: { login: string; token: string; host?: string },
 ): Promise<void> {
   await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
   await fs.chmod(profileDir, 0o700);

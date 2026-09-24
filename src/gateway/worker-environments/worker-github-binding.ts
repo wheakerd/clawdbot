@@ -1,3 +1,4 @@
+import { resolveGitHubHost } from "../../agents/github-host.js";
 import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -65,10 +66,11 @@ export async function prepareWorkerGitHubBinding(params: {
     if (!token) {
       return undefined;
     }
-    const remote = parseGitHubRemoteUrl(originUrl);
+    const githubHost = resolveGitHubHost();
+    const remote = parseGitHubRemoteUrl(originUrl, githubHost);
     const remoteUrl =
       remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo)
-        ? `https://github.com/${remote.owner}/${remote.repo}.git`
+        ? `https://${githubHost}/${remote.owner}/${remote.repo}.git`
         : undefined;
     const scope =
       identity.source === "agent-override"
@@ -86,6 +88,7 @@ export async function prepareWorkerGitHubBinding(params: {
     const binding = parseWorkerGitHubLaunchBinding({
       token,
       login: identity.account.login,
+      ...(githubHost === "github.com" ? {} : { host: githubHost }),
       branch:
         workspace.kind === "repository" ? workspace.workspace.branch : workspace.worktree.branch,
       ...(remoteUrl ? { remoteUrl } : {}),
