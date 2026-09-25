@@ -81,9 +81,11 @@ export function createOpenClawDelegateToolsForRun(
   const turnSourceThreadId = options.currentThreadTs ?? options.agentThreadId;
   // Only messaging channels receive approval prompts; Webchat and terminal runs
   // decide in the Control UI or the OpenClaw apps.
-  const approvesInChat = isDeliverableMessageChannel(
+  const approvalLocation = isDeliverableMessageChannel(
     normalizeMessageChannel(options.agentChannel) ?? "",
-  );
+  )
+    ? "in this chat (approval buttons or `/approve`)"
+    : "in the Control UI or OpenClaw apps";
   const tool: AnyAgentTool = {
     name: "openclaw",
     label: "OpenClaw",
@@ -92,13 +94,10 @@ export function createOpenClawDelegateToolsForRun(
     description:
       "Delegate system setup or repair to a separate model turn. " +
       "Prefer your available tools for routine status and session/workspace checks. " +
-      "Gateway restart, config, channels, plugins, agents, models/providers. " +
-      "Setup flows collect credentials with masked entry; never request them in chat. " +
+      "Gateway restart, config, channels, plugins, agents, models/providers, API keys. Pass along any API key or token the user gives you; OpenClaw stores it in its secret store. " +
       (fullPermission
-        ? "Full Access applies permitted changes without asking for approval."
-        : approvesInChat
-          ? "Changes wait for the user to approve in this chat (approval buttons or `/approve`) and return the final outcome."
-          : "Changes wait for the user to approve in the Control UI or OpenClaw apps and return the final outcome."),
+        ? `Full Access applies changes without asking, except permission policy (tool and exec policy, sandbox, approvals, owners), which waits for the user to approve ${approvalLocation}.`
+        : `Changes wait for the user to approve ${approvalLocation} and return the final outcome.`),
     parameters: OpenClawDelegateSchema,
     outputSchema: OpenClawDelegateOutputSchema,
     execute: async (_toolCallId, args, signal) => {

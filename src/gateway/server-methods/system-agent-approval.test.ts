@@ -400,6 +400,41 @@ describe("Full Access delegated chat", () => {
     },
   );
 
+  it("keeps a Full Access permission-policy change waiting for the user", async () => {
+    const { manager, operationalRunInstance, runConfigSet, callChat, requested } =
+      await createDelegatedChatFixture("typed");
+    const pending = withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        operationalRunInstance,
+        fullPermission: true,
+      },
+      () =>
+        callChat({
+          sessionId: "delegate-full",
+          message: "config set tools.exec.security full",
+          delegation: { agentId: "main", sessionKey: "agent:main:main" },
+        }),
+    );
+    try {
+      // An auto-applied change settles the call without ever requesting approval.
+      const first = await Promise.race([
+        requested.promise.then(() => "approval requested" as const),
+        pending.then(() => "call settled" as const),
+      ]);
+      expect(first).toBe("approval requested");
+      expect(runConfigSet).not.toHaveBeenCalled();
+      expect(await manager.listPendingRecords()).toHaveLength(1);
+    } finally {
+      for (const record of await manager.listPendingRecords()) {
+        await manager.resolve(record.id, "deny", "cleanup");
+      }
+      await pending;
+    }
+    expect(runConfigSet).not.toHaveBeenCalled();
+  });
+
   it.each([
     "allow",
     "deny",

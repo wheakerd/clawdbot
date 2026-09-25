@@ -62,6 +62,7 @@ export function makeContextParams(
       forwardExecApprovalRequest: undefined,
       forwardSystemAgentApprovalRequest: undefined,
       forwardSystemAgentApprovalResolved: undefined,
+      reloadSecretStoreReference: undefined,
       execApprovalIosPushDelivery: undefined,
       approvalWebPushDelivery: undefined,
       pluginApprovalIosPushDelivery: undefined,

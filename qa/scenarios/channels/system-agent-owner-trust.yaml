@@ -1,0 +1,173 @@
+title: OpenClaw stores a chat-provided key and holds permission-policy changes for the owner
+
+scenario:
+  id: system-agent-owner-trust
+  surface: channel
+  coverage:
+    primary:
+      - agent-runtime.delegated-tool-access
+    secondary:
+      - channels.qa-channel-outbound
+  objective: Verify a Full Access chat can hand OpenClaw an API key that lands in the secret store, while a permission-policy change still waits for the owner's approval.
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom: [qa-channel:alice]
+    agents:
+      entries:
+        qa:
+          tools:
+            alsoAllow: [openclaw]
+  successCriteria:
+    - A token given in chat is saved as a store SecretRef at the requested config key without an approval prompt, and never appears in chat or config.
+    - A Full Access change to approval policy posts an approval prompt instead of applying, and applies only after the owner approves.
+  docsRefs:
+    - docs/cli/openclaw.md
+    - docs/gateway/permission-modes.md
+  codeRefs:
+    - src/system-agent/operations-execution-helpers.ts
+    - src/system-agent/permission-policy.ts
+    - src/gateway/server-methods/system-agent-approval.ts
+  execution:
+    kind: flow
+    summary: Drive Full Access delegated changes through an ephemeral Gateway, qa-channel, and mock provider.
+    config:
+      requiredProviderMode: mock-openai
+      requiredProvider: mock-openai
+      policyConversationId: qa-system-agent-owner-trust-policy
+      secretConversationId: qa-system-agent-owner-trust-secret
+      secret: qa-owner-remote-token-5c1e8f2a9b7d
+      secretPrompt: "@openclaw tool search qa check target=openclaw openclaw_fixture=chat-secret. My remote Gateway token is qa-owner-remote-token-5c1e8f2a9b7d, save it. Call the openclaw tool exactly once, then reply exactly: QA-OWNER-TRUST-SECRET-OK."
+      secretMarker: QA-OWNER-TRUST-SECRET-OK
+      policyPrompt: "@openclaw tool search qa check target=openclaw openclaw_fixture=exec-policy. Call the openclaw tool exactly once, then reply exactly: QA-OWNER-TRUST-POLICY-OK."
+      policyMarker: QA-OWNER-TRUST-POLICY-OK
+
+flow:
+  steps:
+    # Policy first, applied through /approve. The key is stored last in its own
+    # conversation: a Full Access delegated change breaks a later agent turn in the
+    # same chat on current main (SQLite worker conflict), which this PR does not fix.
+    - name: holds a Full Access permission-policy change for the owner
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai'"
+            message: this boundary scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: policyConversation
+          value:
+            id:
+              expr: config.policyConversationId
+            kind: channel
+            title: QA Owner Trust Policy
+        - set: approvalsExecBefore
+          value:
+            expr: "(await env.gateway.call('config.get', {}, { timeoutMs: 60000 })).config?.approvals?.exec?.enabled ?? null"
+        - sendInbound:
+            conversation:
+              ref: policyConversation
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.policyPrompt
+        - call: waitForOutboundMessage
+          saveAs: policyPrompt
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === policyConversation.id && String(candidate.text ?? '').includes('/approve system-agent:')"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - assert:
+            expr: "String(policyPrompt.text).includes('approvals.exec.enabled')"
+            message:
+              expr: "`approval prompt did not describe the policy change: ${policyPrompt.text}`"
+        - set: approvalsExecPending
+          value:
+            expr: "(await env.gateway.call('config.get', {}, { timeoutMs: 60000 })).config?.approvals?.exec?.enabled ?? null"
+        - assert:
+            expr: "approvalsExecPending === approvalsExecBefore"
+            message:
+              expr: "`Full Access applied a permission-policy change before approval: ${approvalsExecPending}`"
+        - set: approvalId
+          value:
+            expr: "String(policyPrompt.text).split('/approve ')[1].split(' ')[0]"
+        - sendInbound:
+            conversation:
+              ref: policyConversation
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: "`/approve ${approvalId} allow-once`"
+            nativeCommand: { name: approve }
+        - call: waitForOutboundMessage
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === policyConversation.id && String(candidate.text ?? '').includes(config.policyMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - set: approvalsExecAfter
+          value:
+            expr: "(await env.gateway.call('config.get', {}, { timeoutMs: 60000 })).config?.approvals?.exec?.enabled ?? null"
+        - assert:
+            expr: "approvalsExecAfter === true"
+            message:
+              expr: "`approved policy change did not apply: ${approvalsExecAfter}`"
+      detailsExpr: "JSON.stringify({ approvalsExecBefore, approvalsExecPending, approvalsExecAfter, prompt: policyPrompt.text }, null, 2)"
+    - name: stores a key given in chat without an approval prompt
+      actions:
+        - set: secretConversation
+          value:
+            id:
+              expr: config.secretConversationId
+            kind: channel
+            title: QA Owner Trust Secret
+        - sendInbound:
+            conversation:
+              ref: secretConversation
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.secretPrompt
+        - call: waitForOutboundMessage
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === secretConversation.id && String(candidate.text ?? '').includes(config.secretMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - set: storedRef
+          value:
+            expr: "(await env.gateway.call('config.get', {}, { timeoutMs: 60000 })).config?.gateway?.remote?.token ?? null"
+        - assert:
+            expr: "storedRef?.source === 'store'"
+            message:
+              expr: "`expected a store SecretRef at gateway.remote.token, saw ${JSON.stringify(storedRef)}`"
+        - set: storeEntries
+          value:
+            expr: "(await env.gateway.call('secrets.store.list', {}, { timeoutMs: 60000 })).entries ?? []"
+        - assert:
+            expr: "storeEntries.some((entry) => entry.name === 'GATEWAY_REMOTE_TOKEN' && entry.kind === 'secret')"
+            message:
+              expr: "`the secret store has no GATEWAY_REMOTE_TOKEN entry: ${JSON.stringify(storeEntries.map((entry) => entry.name))}`"
+        - set: configRaw
+          value:
+            expr: "JSON.stringify(await env.gateway.call('config.get', {}, { timeoutMs: 60000 }))"
+        - assert:
+            expr: "!configRaw.includes(config.secret) && !JSON.stringify(storeEntries).includes(config.secret)"
+            message: the chat-provided token appeared in config or the store listing
+        - set: outboundTexts
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === secretConversation.id).map((message) => String(message.text ?? ''))"
+        - assert:
+            expr: "!outboundTexts.some((text) => text.includes(config.secret)) && !outboundTexts.some((text) => text.includes('/approve'))"
+            message:
+              expr: "`the token was echoed, or Full Access asked for approval: ${JSON.stringify(outboundTexts)}`"
+      detailsExpr: "JSON.stringify({ storedRef, storeEntryNames: storeEntries.map((entry) => entry.name), outboundTexts }, null, 2)"

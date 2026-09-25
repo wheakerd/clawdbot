@@ -3,8 +3,10 @@ import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
@@ -307,21 +309,58 @@ export async function runConfigSetOperation(params: {
       const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
       await importedRunConfigSet({ ...setOpts, runtime: createNoExitRuntime(ctx.runtime) });
     });
-  await ctx.commit(() =>
-    runConfigSet({
-      path: operation.path,
-      ...(operation.kind === "config-set"
-        ? { value: operation.value, cliOptions: {} }
-        : {
-            cliOptions: {
-              refProvider: operation.provider ?? "default",
-              refSource: operation.source,
-              refId: operation.id,
-            },
-          }),
-      ...(ctx.assertPersistentApply ? { beforePersistentApply: ctx.assertPersistentApply } : {}),
-    }),
-  );
+  const secret = operation.kind === "config-set-ref" ? operation.secret : undefined;
+  // The SQLite store stays off the load path of every other config write.
+  const storeModule =
+    secret === undefined ? undefined : await import("../secrets/store/secret-store.js");
+  const refProvider =
+    operation.kind !== "config-set-ref"
+      ? undefined
+      : (operation.provider ??
+        (secret === undefined
+          ? "default"
+          : resolveDefaultSecretProviderAlias(
+              (await (await loadConfigModule()).readConfigFileSnapshot()).config,
+              "store",
+              { preferFirstProviderForSource: true },
+            )));
+  await ctx.commit(async () => {
+    // The owner handed this value over in chat: register it for redaction before
+    // anything can log it, and keep it in the store rather than in config.
+    let storeWrite: { rollback: () => boolean } | undefined;
+    if (storeModule && secret !== undefined && operation.kind === "config-set-ref") {
+      registerSecretValueForRedaction(secret);
+      storeWrite = storeModule.writeSecretStoreEntryWithRollback({
+        scope: { kind: "team" },
+        name: operation.id,
+        value: secret,
+        kind: "secret",
+        updatedBy: "openclaw",
+      });
+    }
+    try {
+      await runConfigSet({
+        path: operation.path,
+        ...(operation.kind === "config-set"
+          ? { value: operation.value, cliOptions: {} }
+          : {
+              cliOptions: {
+                refProvider: refProvider ?? "default",
+                refSource: operation.source,
+                refId: operation.id,
+              },
+            }),
+        ...(ctx.assertPersistentApply ? { beforePersistentApply: ctx.assertPersistentApply } : {}),
+      });
+    } catch (error) {
+      storeWrite?.rollback();
+      throw error;
+    }
+  });
+  if (secret !== undefined && operation.kind === "config-set-ref") {
+    // A replaced key keeps the same ref, so config reload alone would not refresh its readers.
+    await ctx.deps?.reloadSecretStoreReference?.(operation.id);
+  }
 }
 
 async function verifyCurrentSetupInference(

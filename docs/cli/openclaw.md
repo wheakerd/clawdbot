@@ -120,7 +120,11 @@ Changes delegated by a regular agent, including requests from messaging channels
 follow the requesting run's effective [session permission policy](/gateway/permission-modes).
 Full Access applies the exact proposed operation automatically, including when
 Full Access comes from the configured default rather than an explicit session
-mode. Restricted runs from messaging channels ask for approval in the chat that
+mode. Changes to permission policy (tool and exec policy, sandboxing, approvals,
+`commands.ownerAllowFrom`/`allowFrom`, channel exec approvers, `security`, and
+`skills.workshop.approvalPolicy`) are the exception: they always wait for a human
+decision, even in Full Access, so a run cannot widen its own authority unseen.
+Restricted runs from messaging channels ask for approval in the chat that
 made the request: channels with native approval cards show **Allow once** and
 **Deny** buttons, and other messaging chats receive the change summary with a
 `/approve <id> allow-once|deny` reply. Webchat and terminal runs decide in the
@@ -162,8 +166,11 @@ New agents inherit the live-verified default inference route. The agent ids `ope
 writes use the existing config validator and writer. Validation or write errors
 return to the assistant for one corrective proposal, which needs fresh approval.
 A failure after saving is reported as such. Config writes do not test whether a
-model route or API key works. Follow your secret storage preference; for environment
-storage, use `config set-ref`. Secret values are not echoed in chat.
+model route or API key works. You can give OpenClaw an API key or token in chat:
+it saves the value in the [shared secret store](/gateway/secrets/secret-store-and-egress#shared-secret-store),
+points the config key at it with a `store` SecretRef, registers the value for log
+and transcript redaction, and never echoes it back. For environment storage, use
+`config set-ref <path> env <ENV_VAR>`.
 `set default model <provider/model>` still live-tests the route before saving it.
 
 Plugin installation keeps its source restrictions. Plugin uninstall refuses a
@@ -221,8 +228,8 @@ when it finishes, run `openclaw gateway restart` to apply the saved settings.
 
 `configure model provider` directs you to **Settings → Models → Connect provider**
 without starting a wizard or changing config. Check the connected Gateway and
-selected **System** or agent scope in Settings before signing in. Enter credentials
-only in the protected sign-in controls, never in chat. Connecting another provider
+selected **System** or agent scope in Settings before signing in, and sign in with
+the controls there. Connecting another provider
 does not select it as the active model or require stopping the host. Model selection
 is separate; replacing credentials for a provider already in use can affect work.
 

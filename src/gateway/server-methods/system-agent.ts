@@ -478,6 +478,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           deps: {
             gatewayHostLifecycle: context.hostLifecycle,
             applyPluginRuntime: context.applyPluginLifecycleChange,
+            ...(context.reloadSecretStoreReference
+              ? { reloadSecretStoreReference: context.reloadSecretStoreReference }
+              : {}),
           },
           verifiedInference: inference.binding,
           operatorApprovalOnly: params.delegation !== undefined,

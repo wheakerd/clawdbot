@@ -16,6 +16,7 @@ import {
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
+import { changesPermissionPolicy } from "../../system-agent/permission-policy.js";
 import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
 import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
 import { sameWorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
@@ -242,7 +243,8 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       };
       // Only a fresh proposal belongs to this input. An existing operator request
       // stays bound to its original decision, even if this caller has Full Access.
-      if (callerIdentity?.fullPermission === true) {
+      // Permission policy always waits for a human, so a run cannot widen itself.
+      if (callerIdentity?.fullPermission === true && !changesPermissionPolicy(proposal.operation)) {
         const reply = await applyDecision("allow-once");
         if (!reply) {
           throw new Error("OpenClaw change is no longer pending. Retry the request.");

@@ -322,12 +322,12 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     case "model-setup":
       runtime.log(
-        "Open Settings → Models → Connect provider. Check the connected Gateway and the selected System or agent scope in Settings before signing in. Enter credentials only in the protected sign-in controls, never in chat. Connecting another provider does not select it as the active model or require stopping the host. Model selection is separate; replacing credentials for a provider already in use can affect current work. Nothing has changed.",
+        "Open Settings → Models → Connect provider. Check the connected Gateway and the selected System or agent scope in Settings before signing in. Connecting another provider does not select it as the active model or require stopping the host. Model selection is separate; replacing credentials for a provider already in use can affect current work. Nothing has changed.",
       );
       return { applied: false };
     case "model-accounts":
       runtime.log(
-        "Manage your personal accounts in Settings → Profile → Connected accounts, or run `openclaw models accounts list` / `openclaw models accounts login <provider>`. Check the Gateway, person, and Personal scope before signing in. Nothing has changed. Enter credentials only in the protected sign-in controls, never in chat.",
+        "Manage your personal accounts in Settings → Profile → Connected accounts, or run `openclaw models accounts list` / `openclaw models accounts login <provider>`. Check the Gateway, person, and Personal scope before signing in. Nothing has changed.",
       );
       return { applied: false };
     case "open-setup": {

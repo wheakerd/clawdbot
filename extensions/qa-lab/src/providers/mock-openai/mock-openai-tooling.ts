@@ -199,6 +199,8 @@ export function toolSearchOutputHasCandidate(output: unknown, targetTool: string
   );
 }
 
+/** Stand-in for an API key an owner pastes into chat. */
+export const QA_OWNER_CHAT_SECRET = "qa-owner-remote-token-5c1e8f2a9b7d";
 export function buildQaToolSearchArgs(
   targetTool: string,
   failureMode: boolean,
@@ -268,10 +270,25 @@ export function buildQaToolSearchArgs(
     return { action: "send", message: "runtime parity message fixture" };
   }
   if (targetTool === "openclaw") {
+    // The system agent's own turn sees only the delegated message.
+    if (/\bopenclaw_fixture=system-store-secret\b/u.test(prompt)) {
+      return {
+        action: "config_set_ref",
+        path: "gateway.remote.token",
+        secret: QA_OWNER_CHAT_SECRET,
+      };
+    }
+    if (/\bopenclaw_fixture=chat-secret\b/u.test(prompt)) {
+      return {
+        message: `tool search qa check target=openclaw openclaw_fixture=system-store-secret. Save the user's remote Gateway token ${QA_OWNER_CHAT_SECRET}.`,
+      };
+    }
     return {
       message: /\bopenclaw_fixture=logging-level-info\b/u.test(prompt)
         ? 'config set logging.level "info"'
-        : "Reply exactly QA-SYSTEM-AGENT-DELEGATE-INFERENCE-OK. Do not call tools.",
+        : /\bopenclaw_fixture=exec-policy\b/u.test(prompt)
+          ? "config set approvals.exec.enabled true"
+          : "Reply exactly QA-SYSTEM-AGENT-DELEGATE-INFERENCE-OK. Do not call tools.",
     };
   }
   if (targetTool === "ask_user") {

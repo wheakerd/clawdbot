@@ -50,6 +50,7 @@ type GatewayRequestContextRuntime = Pick<
   | "forwardExecApprovalRequest"
   | "forwardSystemAgentApprovalRequest"
   | "forwardSystemAgentApprovalResolved"
+  | "reloadSecretStoreReference"
   | "execApprovalIosPushDelivery"
   | "approvalWebPushDelivery"
   | "pluginApprovalIosPushDelivery"
@@ -295,6 +296,7 @@ export function createGatewayRequestContext(
     forwardExecApprovalRequest: runtime.forwardExecApprovalRequest,
     forwardSystemAgentApprovalRequest: runtime.forwardSystemAgentApprovalRequest,
     forwardSystemAgentApprovalResolved: runtime.forwardSystemAgentApprovalResolved,
+    reloadSecretStoreReference: runtime.reloadSecretStoreReference,
     execApprovalIosPushDelivery: runtime.execApprovalIosPushDelivery,
     approvalWebPushDelivery: runtime.approvalWebPushDelivery,
     pluginApprovalIosPushDelivery: runtime.pluginApprovalIosPushDelivery,

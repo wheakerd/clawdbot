@@ -10,6 +10,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { readSecretStoreValue } from "../secrets/store/secret-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runGatewayLifecycle } from "./operations-execution-helpers.js";
 import {
@@ -763,6 +764,56 @@ describe("system agent operations", () => {
         refSource: "env",
         refId: "TELEGRAM_BOT_TOKEN",
       },
+    });
+  });
+
+  describe("an API key the owner gives in chat", () => {
+    const operation = {
+      kind: "config-set-ref" as const,
+      path: "memory.search.remote.apiKey",
+      source: "store" as const,
+      id: "MEMORY_SEARCH_REMOTE_API_KEY",
+      secret: "embed-owner-key-7f3c9a1d",
+    };
+    const readStored = () => readSecretStoreValue({ scope: { kind: "team" }, name: operation.id });
+
+    it("stores the key, points config at it, and refreshes its readers", async () => {
+      useOperationStateDir("openclaw-chat-secret-");
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      const runConfigSet = vi.fn(async () => {});
+      const reloadSecretStoreReference = vi.fn(async () => {});
+
+      const result = await executeSystemAgentOperation(operation, runtime, {
+        approved: true,
+        deps: { runConfigSet, reloadSecretStoreReference },
+      });
+
+      expect(result.applied).toBe(true);
+      expect(readStored()).toMatchObject({ ok: true, value: operation.secret });
+      expect(runConfigSet).toHaveBeenCalledWith({
+        path: operation.path,
+        cliOptions: { refProvider: "default", refSource: "store", refId: operation.id },
+      });
+      expect(reloadSecretStoreReference).toHaveBeenCalledWith(operation.id);
+      expect(lines.join("\n")).not.toContain(operation.secret);
+      expect(JSON.stringify(readLastAuditEntry())).not.toContain(operation.secret);
+    });
+
+    it("removes the stored key when the config write fails", async () => {
+      useOperationStateDir("openclaw-chat-secret-rollback-");
+      const { runtime } = createSystemAgentTestRuntime();
+      const runConfigSet = vi.fn(async () => {
+        throw new Error("Config validation failed: fixture rejected");
+      });
+
+      await expect(
+        executeSystemAgentOperation(operation, runtime, {
+          approved: true,
+          deps: { runConfigSet },
+        }),
+      ).rejects.toThrow("fixture rejected");
+
+      expect(readStored()).toMatchObject({ ok: false });
     });
   });
 
