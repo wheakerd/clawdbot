@@ -77,7 +77,6 @@ import type {
   RetainedReadScope,
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 const artifactPreservingReads = resolveGlobalSingleton(
   Symbol.for("openclaw.artifactPreservingStateReads"),
@@ -392,14 +391,13 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
 export function executeExistingOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
-  { context, current, mapError }: OpenClawStateReadOptions = {},
+  { context, current, mapError, signal }: OpenClawStateReadOptions = {},
 ): Promise<OpenClawStateReadReply | undefined> {
   return mapOpenClawStateReadError(mapError, (receipt) => {
     context?.admission.assertCurrent();
-    const read = () => {
-      const execute = () => executeRetainedOpenClawStateRead(options, command, receipt, context);
-      return current ? stateSnapshotReads.exit(execute) : execute();
-    };
+    const execute = () =>
+      executeRetainedOpenClawStateRead(options, command, receipt, context, signal);
+    const read = current ? () => stateSnapshotReads.exit(execute) : execute;
     const run = () =>
       context
         ? withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, read)
@@ -412,7 +410,8 @@ function executeRetainedOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
   receipt: OpenClawStateReadReceipt,
-  capturedContext?: OpenClawStateWorkerContext,
+  capturedContext?: OpenClawStateReadOptions["context"],
+  signal?: AbortSignal,
 ): Promise<OpenClawStateReadReply | undefined> {
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
@@ -435,6 +434,7 @@ function executeRetainedOpenClawStateRead(
   const excluded = hasStateDatabaseSourceExclusion(pathname);
   const preserveArtifacts = requiresArtifactPreservingSnapshot(pathname);
   const controller = new AbortController();
+  const readSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   const run = async (): Promise<OpenClawStateReadReply | undefined> => {
     const producerSettled = createDeferredCore();
     const transport = createOpenClawStateReadTransport(command);
@@ -449,9 +449,9 @@ function executeRetainedOpenClawStateRead(
     let expectedIdentity: string | undefined;
     let releasePreparedSource: (() => void) | undefined;
     const authority: OpenClawStateReadAuthority = {
-      signal: controller.signal,
+      signal: readSignal,
       assertCurrent() {
-        controller.signal.throwIfAborted();
+        readSignal.throwIfAborted();
         context.maintenanceScope?.assertAdmission();
         context.admission.assertCurrent();
         if (excluded && !hasStateDatabaseSourceExclusion(pathname)) {
