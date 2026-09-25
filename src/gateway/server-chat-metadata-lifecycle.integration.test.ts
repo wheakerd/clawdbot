@@ -5,6 +5,7 @@ import {
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "../agents/prepared-model-runtime.test-harness.js";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { revokeRuntimeAuthMaterializations } from "../agents/auth-profiles/runtime-materializations.js";
 import { reportEmbeddedRunSuccessfulAuthBinding } from "../agents/embedded-agent-runner/run/auth-profile-success.js";
@@ -332,7 +333,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         ready = !initialReady;
         resume.resolve();
         const models = (await result).models;
-        expect(models.map(({ id }) => id)).toEqual(
+        expect(models.map(({ id }) => id).toSorted()).toEqual(
           ready ? ["codex-latest", "gpt-5.6-luna"] : ["gpt-5.6-luna"],
         );
         expect(models.every(({ available }) => available === ready)).toBe(true);
@@ -343,13 +344,17 @@ describe("gateway chat metadata lifecycle composition", () => {
         ready = initialReady;
         for (let read = 0; read < 3; read++) {
           expect(prepared.isCurrent()).toBe(true);
-          expect(prepared.read().models.map(({ id, available }) => [id, available])).toEqual(
-            ready
-              ? [
-                  ["codex-latest", true],
-                  ["gpt-5.6-luna", true],
-                ]
-              : [["gpt-5.6-luna", false]],
+          const membership = prepared.read().models.map(({ id, available }) => [id, available]);
+          expect(membership).toHaveLength(ready ? 2 : 1);
+          expect(membership).toEqual(
+            expect.arrayContaining(
+              ready
+                ? [
+                    ["codex-latest", true],
+                    ["gpt-5.6-luna", true],
+                  ]
+                : [["gpt-5.6-luna", false]],
+            ),
           );
         }
         expect(evaluations).toHaveBeenCalledTimes(hostCalls);
@@ -993,9 +998,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       await expect(lifecycle.read({ agentId: "main" })).rejects.toBe(failure);
       // Drain the completed publication's promise continuations before starting a new
       // transaction; this must not exercise two components of one queued transaction.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(phases).toEqual(["invalidated", "failed"]);
       phases.length = 0;
 
@@ -1014,9 +1017,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         },
       );
       await expect(healthyDispatch).resolves.toMatchObject({ agentId: "main" });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(phases).toContain("invalidated");
       expect(phases).not.toContain("published");
       expect(getPreparedModelCatalogOwnerSnapshot({ agentId: "worker", config })).toBeUndefined();

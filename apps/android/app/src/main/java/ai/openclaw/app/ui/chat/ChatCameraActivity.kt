@@ -88,7 +88,7 @@ class ChatCameraActivity : ComponentActivity() {
     )
   private var provider: ProcessCameraProvider? = null
   private var cameraLease: AutoCloseable? = null
-  private var recording: Recording? = null
+  private var recording by mutableStateOf<Recording?>(null)
   private var retired = false
   private var capturePending = false
   private var mode by mutableStateOf(Mode.Photo)
@@ -96,7 +96,6 @@ class ChatCameraActivity : ComponentActivity() {
   private var canSwitchCamera by mutableStateOf(false)
   private var ready by mutableStateOf(false)
   private var busy by mutableStateOf(false)
-  private var recordingActive by mutableStateOf(false)
   private var stoppingVideo by mutableStateOf(false)
   private var error by mutableStateOf<String?>(null)
 
@@ -187,16 +186,11 @@ class ChatCameraActivity : ComponentActivity() {
       preview.targetRotation = rotation
       imageCapture.targetRotation = rotation
       videoCapture.targetRotation = rotation
-      if (mode == Mode.Photo) {
-        cameraProvider.bindToLifecycle(this, selector, preview, imageCapture)
-      } else {
-        cameraProvider.bindToLifecycle(this, selector, preview, videoCapture)
-      }
+      cameraProvider.bindToLifecycle(this, selector, preview, if (mode == Mode.Photo) imageCapture else videoCapture)
       ready = true
     } catch (_: Exception) {
       cameraProvider.unbind(preview, imageCapture, videoCapture)
-      cameraLease?.close()
-      cameraLease = null
+      releaseCamera()
       canSwitchCamera = false
       error = nativeString("Could not start the camera.")
     }
@@ -253,7 +247,6 @@ class ChatCameraActivity : ComponentActivity() {
     val file = createOutput("video-", ".mp4") ?: return
     busy = true
     capturePending = true
-    recordingActive = true
     stoppingVideo = false
     error = null
     try {
@@ -266,7 +259,6 @@ class ChatCameraActivity : ComponentActivity() {
           .start(ContextCompat.getMainExecutor(this)) { event ->
             if (event is VideoRecordEvent.Finalize) {
               recording = null
-              recordingActive = false
               stoppingVideo = false
               val usable = !event.hasError() || event.error == VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED
               completeCapture(file, usable && file.length() <= OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES)
@@ -274,7 +266,6 @@ class ChatCameraActivity : ComponentActivity() {
           }
     } catch (_: Exception) {
       recording = null
-      recordingActive = false
       completeCapture(file, success = false)
     }
   }
@@ -373,30 +364,23 @@ class ChatCameraActivity : ComponentActivity() {
           if (!ready && provider != null) TextButton(onClick = ::bindCamera) { Text(nativeString("Try again")) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-          FilterChip(
-            selected = mode == Mode.Photo,
-            enabled = !busy,
-            onClick = {
-              mode = Mode.Photo
-              bindCamera()
-            },
-            label = { Text(nativeString("Photo")) },
-          )
-          FilterChip(
-            selected = mode == Mode.Video,
-            enabled = !busy,
-            onClick = {
-              mode = Mode.Video
-              bindCamera()
-            },
-            label = { Text(nativeString("Video")) },
-          )
+          for (option in Mode.entries) {
+            FilterChip(
+              selected = mode == option,
+              enabled = !busy,
+              onClick = {
+                mode = option
+                bindCamera()
+              },
+              label = { Text(if (option == Mode.Photo) nativeString("Photo") else nativeString("Video")) },
+            )
+          }
         }
         IconButton(
           modifier = Modifier.size(72.dp).background(if (mode == Mode.Video) ClawTheme.colors.accent else Color.White, CircleShape),
-          enabled = ready && (!busy || (recordingActive && !stoppingVideo)),
+          enabled = ready && (!busy || (recording != null && !stoppingVideo)),
           onClick = {
-            if (recordingActive) {
+            if (recording != null) {
               stoppingVideo = true
               recording?.stop()
             } else if (mode == Mode.Photo) {
@@ -406,21 +390,11 @@ class ChatCameraActivity : ComponentActivity() {
             }
           },
         ) {
-          val icon =
-            if (recordingActive) {
-              Icons.Default.Stop
-            } else if (mode == Mode.Photo) {
-              Icons.Default.PhotoCamera
-            } else {
-              Icons.Default.Videocam
-            }
-          val label =
-            if (recordingActive) {
-              nativeString("Stop recording")
-            } else if (mode == Mode.Photo) {
-              nativeString("Take photo")
-            } else {
-              nativeString("Record video")
+          val (icon, label) =
+            when {
+              recording != null -> Icons.Default.Stop to nativeString("Stop recording")
+              mode == Mode.Photo -> Icons.Default.PhotoCamera to nativeString("Take photo")
+              else -> Icons.Default.Videocam to nativeString("Record video")
             }
           Icon(icon, label, modifier = Modifier.size(32.dp), tint = if (mode == Mode.Photo) Color.Black else Color.White)
         }

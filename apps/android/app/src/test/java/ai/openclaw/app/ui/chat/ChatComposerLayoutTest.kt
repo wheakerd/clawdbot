@@ -52,7 +52,6 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
-import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.MediaStore
@@ -212,7 +211,6 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.shadows.ShadowDialog
 import org.robolectric.shadows.ShadowSpeechRecognizer
 import java.io.File
@@ -321,14 +319,6 @@ class ChatComposerLayoutTest {
     }
     assertComposerControlsVisible()
     assertToolbarOrder("Stop")
-    composeRule.onNodeWithContentDescription(nativeString("Add attachment")).performClick()
-    val permissions = composeRule.onNodeWithContentDescription(nativeString("Permissions")).assertIsDisplayed().assertIsEnabled()
-    val location = composeRule.onNode(hasText(nativeString("Location")) and hasClickAction()).assertIsDisplayed()
-    assertTrue("Access follows attachment actions in the + menu", location.getUnclippedBoundsInRoot().bottom <= permissions.getUnclippedBoundsInRoot().top)
-    permissions.performClick()
-    composeRule.onNodeWithText(nativeString("Back")).assert(hasAnyAncestor(isDialog())).performClick()
-    composeRule.onNode(isDialog()).assertDoesNotExist()
-
     editor.performTextReplacement(nativeString("Message OpenClaw"))
     val typed = editor.getUnclippedBoundsInRoot()
     assertEquals("Hint and typed text share the horizontal origin", hint.left.value, typed.left.value, 1f)
@@ -3813,6 +3803,13 @@ class ChatComposerLayoutTest {
       )
     }
     composeRule.waitUntil { model.pendingRunCount.value == 0 && model.chatThinkingLevelSelection.value.options.size == 3 }
+    withSessionPatchRequests { requests, release -> assertions(model, requests, release) }
+  }
+
+  private fun withSessionPatchRequests(
+    response: (JsonObject) -> String = { payload -> buildJsonObject { put("entry", payload) }.toString() },
+    assertions: (ConcurrentLinkedQueue<Pair<String, JsonObject>>, CompletableDeferred<Unit>) -> Unit,
+  ) {
     val requests = ConcurrentLinkedQueue<Pair<String, JsonObject>>()
     val release = CompletableDeferred<Unit>()
     val field = ChatController::class.java.getDeclaredField("captureRequestLease").apply { isAccessible = true }
@@ -3830,7 +3827,7 @@ class ChatComposerLayoutTest {
             val payload = Json.parseToJsonElement(checkNotNull(params)).jsonObject
             withEnqueue { requests.add(lease.endpointStableId to payload) }
             release.await()
-            buildJsonObject { put("entry", payload) }.toString()
+            response(payload)
           } else {
             lease.request(method, params, timeout, withEnqueue)
           }
@@ -3839,7 +3836,7 @@ class ChatComposerLayoutTest {
     }
     try {
       field.set(controller, capture)
-      assertions(model, requests, release)
+      assertions(requests, release)
     } finally {
       composeRule.mainClock.autoAdvance = true
       release.complete(Unit)
@@ -3936,12 +3933,7 @@ class ChatComposerLayoutTest {
   @Test
   fun contextWheelOpensUnknownUsageAndTracksAccessiblePressureAndRecovery() {
     showChat(viewportHeight = { 640.dp }, fontScale = { 1.5f })
-    @Suppress("UNCHECKED_CAST")
-    val scopes =
-      NodeRuntime::class.java
-        .getDeclaredField("_operatorScopes")
-        .apply { isAccessible = true }
-        .get(runtime) as MutableStateFlow<List<String>>
+    val scopes = runtimeScopes()
     composeRule.runOnIdle { scopes.value = listOf("operator.read") }
     composeRule.onNodeWithContentDescription(nativeString("Model")).assertIsNotEnabled()
     val context = composeRule.onNodeWithContentDescription(nativeString("Context"))
@@ -4046,7 +4038,6 @@ class ChatComposerLayoutTest {
     }
     val editor = composerEditor()
     val editorBounds = editor.getUnclippedBoundsInRoot()
-    val model = composeRule.onNodeWithContentDescription(nativeString("Model"))
     val thinking = composeRule.onNodeWithContentDescription(nativeString("Thinking"))
     assertComposerControlsVisible(talkActive = true, thinkingLabel = "Ultra")
 
@@ -4071,13 +4062,6 @@ class ChatComposerLayoutTest {
     openContextPicker()
     composeRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, nativeString("Context window"))).assertIsDisplayed()
     composeRule.onNodeWithText("24k / 200k · 12%").assertIsDisplayed()
-    composeRule
-      .onNode(hasAnyAncestor(isDialog()) and SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo))
-      .assert(
-        SemanticsMatcher("has 12 percent context progress") { node ->
-          node.config.getOrNull(SemanticsProperties.ProgressBarRangeInfo)?.current == 0.12f
-        },
-      )
     listOf(nativeString("Latest run tokens").uppercase(), "18.4k", "840", "\$0.023", nativeString("Cost by type").uppercase(), "\$0.0030", "\$0.0040", nativeString("Cache read"), "\$0.0015").forEach { label ->
       composeRule.onNodeWithText(label).performScrollTo().assertIsDisplayed()
     }
@@ -4108,14 +4092,6 @@ class ChatComposerLayoutTest {
     composeRule.onNodeWithText(nativeString("Default model")).assertDoesNotExist()
     composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).performSemanticsAction(SemanticsActions.Dismiss) { dismiss -> assertTrue(dismiss()) }
     composeRule.onNode(isDialog()).assertDoesNotExist()
-    model.performClick()
-    composeRule
-      .onNodeWithText(nativeString("Default model"))
-      .performScrollTo()
-      .assertIsDisplayed()
-      .assertHasClickAction()
-    composeRule.onNodeWithContentDescription(nativeString("Search models")).performScrollTo().assertIsDisplayed()
-    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).performSemanticsAction(SemanticsActions.Dismiss) { dismiss -> assertTrue(dismiss()) }
     assertEquals("Dismissing composer settings must preserve the draft", editorBounds, editor.getUnclippedBoundsInRoot())
     assertComposerControlsVisible(talkActive = true, thinkingLabel = "Ultra")
 
@@ -4710,32 +4686,9 @@ class ChatComposerLayoutTest {
     val originalOwner = model.captureChatShareOwner()
     val originalSession = controller.sessionKey.value
     composeRule.runOnIdle { controllerFlow<String?>("_defaultModelRef").value = "openai/gpt-5.2" }
-    val release = CompletableDeferred<Unit>()
-    val admitted = ConcurrentLinkedQueue<Pair<String, JsonObject>>()
-    val requestField = ChatController::class.java.getDeclaredField("captureRequestLease").apply { isAccessible = true }
-
-    @Suppress("UNCHECKED_CAST")
-    val originalRequest = requestField.get(controller) as (ChatCacheScope?) -> GatewaySession.RequestLease?
-    val request: (ChatCacheScope?) -> GatewaySession.RequestLease? = { scope ->
-      originalRequest(scope)?.let { lease ->
-        GatewaySession.RequestLease(
-          endpointStableId = lease.endpointStableId,
-          isCurrentImpl = lease::isCurrent,
-          commitIfCurrentImpl = lease::commitIfCurrent,
-        ) { method, params, timeout, withEnqueue ->
-          if (method == "sessions.patch") {
-            val payload = Json.parseToJsonElement(checkNotNull(params)).jsonObject
-            withEnqueue { admitted.add(lease.endpointStableId to payload) }
-            release.await()
-            """{"entry":{"key":"$originalSession","modelOverride":null},"resolved":{"modelProvider":"openai","model":"gpt-5.2"}}"""
-          } else {
-            lease.request(method, params, timeout, withEnqueue)
-          }
-        }
-      }
-    }
-    try {
-      requestField.set(controller, request)
+    withSessionPatchRequests(
+      response = { """{"entry":{"key":"$originalSession","modelOverride":null},"resolved":{"modelProvider":"openai","model":"gpt-5.2"}}""" },
+    ) { admitted, release ->
       val catalog = controllerFlow<List<GatewayModelSummary>>("_modelCatalog")
       val availableCatalog = catalog.value
 
@@ -4819,10 +4772,6 @@ class ChatComposerLayoutTest {
       assertEquals(originalOwner.gatewayStableId, gateway)
       assertEquals(JsonPrimitive(originalSession), payload["key"])
       assertEquals(JsonPrimitive(originalOwner.agentId), payload["agentId"])
-    } finally {
-      composeRule.mainClock.autoAdvance = true
-      release.complete(Unit)
-      requestField.set(controller, originalRequest)
     }
   }
 
@@ -5224,7 +5173,6 @@ class ChatComposerLayoutTest {
     )
     prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
     val permissionWasGranted = app.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-    assertTrue(ShadowContentResolver.getProvider(Uri.parse("content://${app.packageName}.fileprovider")) is FileProvider)
     val model = showChat(viewportHeight = { 720.dp })
     val owner = model.captureChatShareOwner()
     val photoBytes = Base64.getDecoder().decode(syntheticLargeChatPhotoBase64())

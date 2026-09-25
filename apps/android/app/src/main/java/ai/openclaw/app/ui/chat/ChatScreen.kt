@@ -19,7 +19,6 @@ import ai.openclaw.app.chat.ChatFastMode
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatMessageCost
-import ai.openclaw.app.chat.ChatMessageUsage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -129,7 +128,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -184,10 +182,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
-import androidx.compose.material3.ModalBottomSheetProperties
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderState
 import androidx.compose.material3.Surface
@@ -642,35 +637,14 @@ internal fun ChatScreen(
     return true
   }
 
-  rememberWindowDisplayFeatureState { publication ->
-    modelPicker.publishFeatures(publication)
-    contextPicker.publishFeatures(publication)
-    effortPicker.publishFeatures(publication)
-    backgroundTasks.publishFeatures(publication)
-    reviewDiff.publishFeatures(publication)
-    branchPicker.publishFeatures(publication)
-    attachmentPicker.publishFeatures(publication)
-  }
+  val pickers = listOf(modelPicker, contextPicker, effortPicker, backgroundTasks, reviewDiff, branchPicker, attachmentPicker)
+  rememberWindowDisplayFeatureState { publication -> pickers.forEach { it.publishFeatures(publication) } }
   SideEffect {
-    modelPicker.refreshTarget()
-    contextPicker.refreshTarget()
-    effortPicker.refreshTarget()
-    backgroundTasks.refreshTarget()
-    reviewDiff.refreshTarget()
-    branchPicker.refreshTarget()
-    attachmentPicker.refreshTarget()
+    pickers.forEach { it.refreshTarget() }
     branchOpening?.let { isCurrentBranchOpening(it) }
   }
-  DisposableEffect(modelPicker, contextPicker, effortPicker, backgroundTasks, reviewDiff, branchPicker, attachmentPicker) {
-    onDispose {
-      modelPicker.dispose()
-      contextPicker.dispose()
-      effortPicker.dispose()
-      backgroundTasks.dispose()
-      reviewDiff.dispose()
-      branchPicker.dispose()
-      attachmentPicker.dispose()
-    }
+  DisposableEffect(pickers) {
+    onDispose { pickers.forEach { it.dispose() } }
   }
   var detailsExpanded by rememberSaveable { mutableStateOf(false) }
   var sendMessageTooLong by rememberSaveable(composerOwner) { mutableStateOf(false) }
@@ -1391,81 +1365,90 @@ internal fun ChatScreen(
         opening.sessionKey !in viewModel.chatPendingSessionSettingsKeys.value
 
     key(opening) {
-      ChatComposerPicker(
-        opening = opening,
+      val permissions = modelPickerPage == ChatComposerPickerPage.Permissions
+      ChatComposerPopover(
+        geometry = opening.geometry,
+        title = if (permissions) nativeString("Permissions") else nativeString("Model"),
         composerAnchor = composerAnchor,
         admit = { modelPicker.admit(opening) },
-        page = modelPickerPage,
-        sections = modelSections,
-        favorites = modelFavorites.toSet(),
-        selectedModelLabel = selectedModelLabel,
-        selectedModelRef = selectedModelRef,
-        defaultModelRef = defaultModelRef,
-        modelSelectionLocked = modelSelectionLocked,
-        permissionMode = activeSession?.permissionMode,
-        permissionModePending = permissionModePending,
-        permissionPickerEnabled =
-          permissionSettingsAvailable &&
-            !activeSession?.sessionId.isNullOrBlank() &&
-            gatewayConnectionDisplay.isConnected &&
-            canWriteSessionSettings &&
-            !permissionModePending &&
-            !sessionSettingsPending,
-        permissionUnavailableReason =
-          when {
-            !permissionSettingsAvailable -> nativeString("Update the Gateway to change session permissions.")
-            activeSession?.sessionId.isNullOrBlank() -> nativeString("Refresh this chat before changing permissions.")
-            else -> null
-          },
-        canSelectFullPermission = canAdminSessionSettings,
-        onPermissionModeChange = { mode ->
-          if (admitPermissions() && canSelectChatPermissionMode(mode, operatorScopesAllowAdmin(viewModel.operatorScopes.value))) {
-            viewModel.setChatSessionPermissionMode(opening.sessionKey, mode)
-            true
-          } else {
-            false
-          }
-        },
         onDismiss = { modelPicker.retire(opening) },
-        onSelect = { modelRef ->
-          val model = viewModel.chatModelCatalog.value.firstOrNull { it.providerQualifiedRef() == modelRef }
-          if (modelPicker.admit(opening) && currentSession()?.modelSelectionLocked != true &&
-            (modelRef == null || model?.let(::chatModelPickerAction) == ChatModelPickerAction.Select)
-          ) {
-            modelPicker.retire(opening)
-            viewModel.setChatSessionModel(
-              sessionKey = opening.sessionKey,
-              modelRef = modelRef.takeUnless { it == viewModel.chatDefaultModelRef.value },
+        maximumWidth = if (permissions) 340.dp else 440.dp,
+      ) { admitAction ->
+        if (permissions) {
+          Column {
+            val notice =
+              when {
+                permissionModePending -> nativeString("Applying permissions…")
+                !permissionSettingsAvailable -> nativeString("Update the Gateway to change session permissions.")
+                activeSession?.sessionId.isNullOrBlank() -> nativeString("Refresh this chat before changing permissions.")
+                else -> null
+              }
+            notice?.let { Text(it, style = ClawTheme.type.caption, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) }
+            ChatPermissionPicker(
+              selectedMode = activeSession?.permissionMode,
+              canSelectFull = canAdminSessionSettings,
+              enabled =
+                permissionSettingsAvailable && !activeSession?.sessionId.isNullOrBlank() &&
+                  gatewayConnectionDisplay.isConnected && canWriteSessionSettings && !permissionModePending && !sessionSettingsPending,
+              onBack = { if (admitAction()) modelPicker.retire(opening) },
+              onSelect = { mode ->
+                if (admitAction() && admitPermissions() && canSelectChatPermissionMode(mode, operatorScopesAllowAdmin(viewModel.operatorScopes.value))) {
+                  viewModel.setChatSessionPermissionMode(opening.sessionKey, mode)
+                  modelPicker.retire(opening)
+                }
+              },
             )
           }
-        },
-        onOpenProviders = { ref ->
-          val model = viewModel.chatModelCatalog.value.firstOrNull { it.providerQualifiedRef() == ref }
-          if (modelPicker.admit(opening) &&
-            model?.let(::chatModelPickerAction) == ChatModelPickerAction.OpenProviders
-          ) {
-            modelPicker.retire(opening)
-            openProviderSignIn()
-          }
-        },
-        onSignIn =
-          if (canAdminSessionSettings) {
-            {
-              modelPicker.retire(opening)
-              openProviderSignIn()
-            }
-          } else {
-            null
-          },
-        onToggleFavorite = { ref ->
-          val model = viewModel.chatModelCatalog.value.firstOrNull { it.providerQualifiedRef() == ref }
-          if (modelPicker.admit(opening) && currentSession()?.modelSelectionLocked != true &&
-            model != null && model.available != false
-          ) {
-            viewModel.toggleModelFavorite(ref)
-          }
-        },
-      )
+        } else {
+          ChatModelPickerContent(
+            sections = modelSections,
+            favorites = modelFavorites.toSet(),
+            selectedModelLabel = selectedModelLabel,
+            selectedModelRef = selectedModelRef,
+            defaultModelRef = defaultModelRef,
+            modelSelectionLocked = modelSelectionLocked,
+            admit = admitAction,
+            onSelect = { modelRef ->
+              val model = viewModel.chatModelCatalog.value.firstOrNull { it.providerQualifiedRef() == modelRef }
+              if (modelPicker.admit(opening) && currentSession()?.modelSelectionLocked != true &&
+                (modelRef == null || model?.let(::chatModelPickerAction) == ChatModelPickerAction.Select)
+              ) {
+                modelPicker.retire(opening)
+                viewModel.setChatSessionModel(
+                  sessionKey = opening.sessionKey,
+                  modelRef = modelRef.takeUnless { it == viewModel.chatDefaultModelRef.value },
+                )
+              }
+            },
+            onOpenProviders = { ref ->
+              val model = viewModel.chatModelCatalog.value.firstOrNull { it.providerQualifiedRef() == ref }
+              if (modelPicker.admit(opening) &&
+                model?.let(::chatModelPickerAction) == ChatModelPickerAction.OpenProviders
+              ) {
+                modelPicker.retire(opening)
+                openProviderSignIn()
+              }
+            },
+            onConfigureModels =
+              if (canAdminSessionSettings) {
+                {
+                  modelPicker.retire(opening)
+                  openProviderSignIn()
+                }
+              } else {
+                null
+              },
+            onToggleFavorite = { ref ->
+              val model = viewModel.chatModelCatalog.value.firstOrNull { it.providerQualifiedRef() == ref }
+              if (modelPicker.admit(opening) && currentSession()?.modelSelectionLocked != true &&
+                model != null && model.available != false
+              ) {
+                viewModel.toggleModelFavorite(ref)
+              }
+            },
+          )
+        }
+      }
     }
   }
 
@@ -3883,7 +3866,6 @@ private fun ChatEffortPopover(
       modifier =
         Modifier
           .fillMaxWidth()
-          .heightIn(max = 560.dp)
           .verticalScroll(rememberScrollState())
           .padding(bottom = 8.dp),
     ) {
@@ -4009,70 +3991,6 @@ internal fun branchMetadataText(branch: SessionBranch): String {
 }
 
 @Composable
-private fun ChatComposerPicker(
-  opening: ChatModelPickerSession,
-  composerAnchor: LayoutCoordinates?,
-  admit: () -> Boolean,
-  page: ChatComposerPickerPage,
-  sections: ChatModelPickerSections,
-  favorites: Set<String>,
-  selectedModelLabel: String,
-  selectedModelRef: String?,
-  defaultModelRef: String?,
-  modelSelectionLocked: Boolean,
-  permissionMode: ChatPermissionMode?,
-  permissionModePending: Boolean,
-  permissionPickerEnabled: Boolean,
-  permissionUnavailableReason: String?,
-  canSelectFullPermission: Boolean,
-  onPermissionModeChange: (ChatPermissionMode?) -> Boolean,
-  onDismiss: () -> Unit,
-  onSelect: (String?) -> Unit,
-  onOpenProviders: (String) -> Unit,
-  onSignIn: (() -> Unit)?,
-  onToggleFavorite: (String) -> Unit,
-) {
-  val title =
-    when (page) {
-      ChatComposerPickerPage.Models -> nativeString("Model")
-      ChatComposerPickerPage.Permissions -> nativeString("Permissions")
-    }
-  ChatComposerPopover(opening.geometry, title, composerAnchor, admit, onDismiss, maximumWidth = if (page == ChatComposerPickerPage.Permissions) 340.dp else 440.dp) { admitAction ->
-    when (page) {
-      ChatComposerPickerPage.Models -> {
-        ChatModelPickerContent(
-          sections = sections,
-          favorites = favorites,
-          selectedModelLabel = selectedModelLabel,
-          selectedModelRef = selectedModelRef,
-          defaultModelRef = defaultModelRef,
-          modelSelectionLocked = modelSelectionLocked,
-          admit = admitAction,
-          onSelect = onSelect,
-          onOpenProviders = onOpenProviders,
-          onConfigureModels = onSignIn,
-          onToggleFavorite = onToggleFavorite,
-        )
-      }
-
-      ChatComposerPickerPage.Permissions -> {
-        Column {
-          val notice = if (permissionModePending) nativeString("Applying permissions…") else permissionUnavailableReason
-          notice?.let { Text(it, style = ClawTheme.type.caption, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) }
-          ChatPermissionPicker(
-            selectedMode = permissionMode,
-            canSelectFull = canSelectFullPermission,
-            enabled = permissionPickerEnabled,
-            onBack = { if (admitAction()) onDismiss() },
-            onSelect = { mode -> if (admitAction() && onPermissionModeChange(mode)) onDismiss() },
-          )
-        }
-      }
-    }
-  }
-}
-
-@Composable
 private fun ChatModelPickerContent(
   sections: ChatModelPickerSections,
   favorites: Set<String>,
@@ -4093,6 +4011,7 @@ private fun ChatModelPickerContent(
 
   fun matches(model: GatewayModelSummary): Boolean = query.isBlank() || listOf(model.name, model.id, providerDisplayName(model.provider)).any { it.contains(query.trim(), ignoreCase = true) }
 
+  val matchingModels = models.filter(::matches)
   LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 8.dp)) {
     item {
       if (modelSelectionLocked) {
@@ -4138,22 +4057,7 @@ private fun ChatModelPickerContent(
       return@LazyColumn
     }
 
-    fun LazyListScope.modelRows(entries: List<GatewayModelSummary>) {
-      itemsIndexed(entries, key = { _, model -> model.providerQualifiedRef() }) { _, model ->
-        val ref = model.providerQualifiedRef()
-        val isDefault = ref == defaultModelRef
-        ChatModelPickerRow(
-          model = model,
-          pinned = ref in favorites,
-          selected = ref == selectedModelRef,
-          isDefault = isDefault,
-          onSelect = { if (admit()) onSelect(ref) },
-          onOpenProviders = { if (admit()) onOpenProviders(ref) },
-          onToggleFavorite = { if (admit()) onToggleFavorite(ref) },
-        )
-      }
-    }
-    models.filter(::matches).groupBy { it.provider }.entries.sortedBy { if (it.key == defaultModel?.provider) 0 else 1 }.forEach { (provider, entries) ->
+    matchingModels.groupBy { it.provider }.entries.sortedBy { if (it.key == defaultModel?.provider) 0 else 1 }.forEach { (provider, entries) ->
       val expanded = query.isNotBlank() || provider in expandedProviders
       item(key = "provider-$provider") {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -4177,16 +4081,30 @@ private fun ChatModelPickerContent(
           }
         }
       }
-      if (expanded) modelRows(entries.sortedBy { if (it.providerQualifiedRef() == defaultModelRef) 0 else 1 })
+      if (expanded) {
+        itemsIndexed(entries.sortedBy { if (it.providerQualifiedRef() == defaultModelRef) 0 else 1 }, key = { _, model -> model.providerQualifiedRef() }) { _, model ->
+          val ref = model.providerQualifiedRef()
+          val isDefault = ref == defaultModelRef
+          ChatModelPickerRow(
+            model = model,
+            pinned = ref in favorites,
+            selected = ref == selectedModelRef,
+            isDefault = isDefault,
+            onSelect = { if (admit()) onSelect(ref) },
+            onOpenProviders = { if (admit()) onOpenProviders(ref) },
+            onToggleFavorite = { if (admit()) onToggleFavorite(ref) },
+          )
+        }
+      }
     }
-    if (query.isNotBlank() && models.none(::matches)) {
+    if (query.isNotBlank() && matchingModels.isEmpty()) {
       item { Text(nativeString("No matching models"), modifier = Modifier.padding(12.dp), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) }
     }
-    if (defaultModel == null || (models.none(::matches) && onConfigureModels != null)) {
+    if (defaultModel == null || (matchingModels.isEmpty() && onConfigureModels != null)) {
       item {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
           if (defaultModel == null) TextButton(onClick = { if (admit()) onSelect(null) }) { Text(nativeString("Default model")) }
-          if (models.none(::matches) && onConfigureModels != null) {
+          if (matchingModels.isEmpty() && onConfigureModels != null) {
             IconButton(onClick = { if (admit()) onConfigureModels() }, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
               Icon(Icons.Default.Settings, contentDescription = nativeString("Providers"), tint = ClawTheme.colors.textSubtle, modifier = Modifier.size(16.dp))
             }
@@ -4750,7 +4668,6 @@ private fun ChatPermissionPicker(
 
 internal data class ChatContextSummary(
   val fraction: Float,
-  val percent: Int,
   val approximate: Boolean,
   val detail: String,
 )
@@ -4767,7 +4684,6 @@ internal fun chatContextSummary(
   val percent = (fraction * 100).roundToInt()
   return ChatContextSummary(
     fraction = fraction,
-    percent = percent,
     approximate = approximate,
     detail = "$approximation${formatCompactTokenCount(used, locale)} / ${formatCompactTokenCount(context, locale)} \u00b7 $approximation$percent%",
   )
@@ -4790,23 +4706,16 @@ internal fun formatContextEstimatedCost(value: Double?): String {
   return "\u0024" + String.format(Locale.US, format, cost)
 }
 
-private fun ChatMessage.isContextBoundary(): Boolean =
-  when (transcriptMarker?.kind) {
-    "compaction", "reset" -> true
-    else -> false
-  }
-
-private fun latestRealAssistantMessage(messages: List<ChatMessage>): ChatMessage? {
+internal fun latestChatMessageCost(messages: List<ChatMessage>): ChatMessageCost? {
   for (message in messages.asReversed()) {
-    if (message.isContextBoundary()) return null
-    if (message.role != "assistant" || message.isSyntheticDisplay) continue
-    if (message.isTranscriptOnlyOpenClawAssistant()) continue
-    return message
+    when (message.transcriptMarker?.kind) {
+      "compaction", "reset" -> return null
+    }
+    if (message.role != "assistant" || message.isSyntheticDisplay || message.isTranscriptOnlyOpenClawAssistant()) continue
+    return message.cost
   }
   return null
 }
-
-internal fun latestChatMessageCost(messages: List<ChatMessage>): ChatMessageCost? = latestRealAssistantMessage(messages)?.cost
 
 internal fun chatThinkingChipStateDescription(
   fastMode: Boolean,

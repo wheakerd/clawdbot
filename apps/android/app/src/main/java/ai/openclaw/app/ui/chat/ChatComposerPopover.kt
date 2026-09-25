@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.AppDialog
 import ai.openclaw.app.ui.FoldAwareSheetState
 import ai.openclaw.app.ui.OverlayWindowGeometry
