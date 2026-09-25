@@ -351,6 +351,13 @@ export function recoverContextEngineTurnOutbox(params: {
   }
 }
 
+/** Runs one synchronous outbox mutation under the caller's write admission. */
+export type ContextEngineTurnOutboxWriteAdmission = <T>(write: () => T) => Promise<T>;
+
+const runContextEngineTurnOutboxWriteDirectly: ContextEngineTurnOutboxWriteAdmission = async (
+  write,
+) => write();
+
 export async function drainContextEngineTurnOutbox(params: {
   database: OpenClawAgentDatabase;
   engine: ContextEngine;
@@ -360,6 +367,12 @@ export async function drainContextEngineTurnOutbox(params: {
   limit?: number;
   /** Observe acknowledged turns without changing durable advancement on observer failure. */
   onCommitted?: (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => void;
+  /**
+   * Admits each synchronous row mutation. Host callers pass the agent database
+   * write admission, so a worker transaction that waits on this thread for its
+   * commit grant is never blocked by a native busy wait here.
+   */
+  admitWrite?: ContextEngineTurnOutboxWriteAdmission;
   warn: (message: string) => void;
 }): Promise<{ pending: boolean }> {
   if (typeof params.engine.commitTurn !== "function") {
@@ -447,6 +460,7 @@ async function commitPendingContextEngineTurn(
   },
 ): Promise<boolean> {
   const { row } = params;
+  const admitWrite = params.admitWrite ?? runContextEngineTurnOutboxWriteDirectly;
   try {
     const payload = JSON.parse(row.payload_json) as ContextEngineTurnOutboxPayload;
     if (payload.state !== "ready") {
@@ -475,11 +489,13 @@ async function commitPendingContextEngineTurn(
     if (result.status !== "committed" && result.status !== "duplicate") {
       throw new Error(`invalid commitTurn result status: ${String(result.status)}`);
     }
-    executeSqliteQuerySync(
-      params.database.db,
-      params.db
-        .deleteFrom("context_engine_turn_outbox")
-        .where("advancement_key", "=", row.advancement_key),
+    await admitWrite(() =>
+      executeSqliteQuerySync(
+        params.database.db,
+        params.db
+          .deleteFrom("context_engine_turn_outbox")
+          .where("advancement_key", "=", row.advancement_key),
+      ),
     );
     // Notification is best effort after acknowledgment; its failure must never requeue a commit.
     try {
@@ -492,16 +508,18 @@ async function commitPendingContextEngineTurn(
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    executeSqliteQuerySync(
-      params.database.db,
-      params.db
-        .updateTable("context_engine_turn_outbox")
-        .set((eb) => ({
-          attempt_count: eb("attempt_count", "+", 1),
-          last_attempt_at: Date.now(),
-          last_error: message,
-        }))
-        .where("advancement_key", "=", row.advancement_key),
+    await admitWrite(() =>
+      executeSqliteQuerySync(
+        params.database.db,
+        params.db
+          .updateTable("context_engine_turn_outbox")
+          .set((eb) => ({
+            attempt_count: eb("attempt_count", "+", 1),
+            last_attempt_at: Date.now(),
+            last_error: message,
+          }))
+          .where("advancement_key", "=", row.advancement_key),
+      ),
     );
     params.warn(
       `[context-engine] durable turn advancement remains queued: ${row.advancement_key}: ${message}`,

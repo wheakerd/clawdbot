@@ -14,6 +14,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import {
+  runOpenClawAgentWorkerWrite,
+  SQLITE_SESSION_WRITER_QUEUES,
+} from "../../state/openclaw-agent-write-admission.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
   drainPendingContextEngineTurnsBeforeRun,
@@ -584,6 +588,126 @@ describe("accepted context-engine turn finalization", () => {
       expect.objectContaining({ role: "assistant", content: "answer" }),
     ]);
     expect(commitParams).not.toHaveProperty("prePromptMessageCount");
+  });
+
+  it("queues outbox writes behind an in-flight worker write instead of busy-waiting", async () => {
+    const { admission, database, facts } = await createAcceptedTurnFixture({
+      answer: "answer",
+      logicalTurnId: "logical-turn-worker-write",
+      prefix: [],
+      sessionId: "worker-write-turn",
+    });
+    const { commitTurn, lease } = createDurableLease();
+    const warn = vi.fn();
+    const readState = () =>
+      (
+        database.db
+          .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
+          .get(admission.logicalTurnId) as { payload_json: string } | undefined
+      )?.payload_json;
+    // A worker transaction holds the SQLite write lock while it waits on the
+    // host thread for its commit grant. The outbox must queue behind it.
+    let releaseWorker!: () => void;
+    let workerAdmitted!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+      workerAdmitted = resolve;
+    });
+    const worker = runOpenClawAgentWorkerWrite(
+      { agentId: database.agentId, path: database.path },
+      async () => {
+        workerAdmitted();
+        await new Promise<void>((resolve) => {
+          releaseWorker = resolve;
+        });
+      },
+    );
+    await admitted;
+
+    // Observe synchronously after the call: an unqueued finalization writes and
+    // dispatches before its first await, while an admitted one waits its turn.
+    const finalizing = finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+    const stateWhileWorkerHeld = readState();
+    const committedWhileWorkerHeld = commitTurn.mock.calls.length;
+    const queuedWhileWorkerHeld = [...SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
+      (count, queue) => count + queue.pending.length,
+      0,
+    );
+    releaseWorker();
+    await worker;
+    await finalizing;
+
+    expect(JSON.parse(stateWhileWorkerHeld ?? "{}")).toMatchObject({ state: "admitted" });
+    expect(committedWhileWorkerHeld).toBe(0);
+    expect(queuedWhileWorkerHeld).toBe(1);
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(commitTurn).toHaveBeenCalledOnce();
+    expect(readState()).toBeUndefined();
+  });
+
+  it("queues the before-run drain behind an in-flight worker write", async () => {
+    const { admission, database, facts } = await createAcceptedTurnFixture({
+      answer: "answer",
+      logicalTurnId: "logical-turn-pending-ready",
+      prefix: [],
+      sessionId: "pending-ready-turn",
+    });
+    const { commitTurn, lease } = createDurableLease();
+    // Leave the accepted turn ready but uncommitted, as a degraded turn does.
+    commitTurn.mockRejectedValueOnce(new Error("engine offline"));
+    await finalizeAcceptedContextEngineTurn({ facts, lease, warn: vi.fn() });
+    const readPayload = (key: string) =>
+      (
+        database.db
+          .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
+          .get(key) as { payload_json: string } | undefined
+      )?.payload_json;
+    expect(JSON.parse(readPayload(admission.logicalTurnId) ?? "{}")).toMatchObject({
+      state: "ready",
+    });
+
+    let releaseWorker!: () => void;
+    let workerAdmitted!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+      workerAdmitted = resolve;
+    });
+    const worker = runOpenClawAgentWorkerWrite(
+      { agentId: database.agentId, path: database.path },
+      async () => {
+        workerAdmitted();
+        await new Promise<void>((resolve) => {
+          releaseWorker = resolve;
+        });
+      },
+    );
+    await admitted;
+
+    const warn = vi.fn();
+    const commitsBeforeDrain = commitTurn.mock.calls.length;
+    const nextAdmission = { ...admission, logicalTurnId: "logical-turn-after-pending" };
+    const draining = drainPendingContextEngineTurnsBeforeRun({
+      admission: nextAdmission,
+      lease,
+      warn,
+    });
+    const committedWhileWorkerHeld = commitTurn.mock.calls.length;
+    const queuedWhileWorkerHeld = [...SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
+      (count, queue) => count + queue.pending.length,
+      0,
+    );
+    releaseWorker();
+    await worker;
+    await draining;
+
+    expect(committedWhileWorkerHeld).toBe(commitsBeforeDrain);
+    expect(queuedWhileWorkerHeld).toBe(1);
+    expect(warn).not.toHaveBeenCalled();
+    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+    expect(commitTurn).toHaveBeenCalledTimes(2);
+    expect(readPayload(admission.logicalTurnId)).toBeUndefined();
+    expect(JSON.parse(readPayload(nextAdmission.logicalTurnId) ?? "{}")).toMatchObject({
+      state: "admitted",
+    });
   });
 
   it("still blocks an accepted turn whose own range exceeds the cap", async () => {

@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { supportsContextEngineDurableTurnAdvancement } from "../../context-engine/host-compat.js";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
@@ -19,11 +21,27 @@ import {
   enqueueContextEngineTurnIntent,
   isRetryableContextEngineTurnReadFailure,
   recoverContextEngineTurnOutbox,
+  type ContextEngineTurnOutboxWriteAdmission,
   type ContextEngineTurnRuntimeContext,
 } from "./context-engine-turn-outbox.js";
 
 const ACCEPTED_TURN_MAX_EVENTS = 20_000;
 const ACCEPTED_TURN_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Outbox mutations share the agent database with worker transactions. A worker
+ * holds its SQLite write lock while it waits on this thread for its commit
+ * grant, so a native busy wait here would stall both until the busy timeout.
+ * Queue behind the agent database write admission instead.
+ */
+function admitOutboxWrites(database: OpenClawAgentDatabase): ContextEngineTurnOutboxWriteAdmission {
+  return (write) =>
+    withOpenClawAgentDatabaseWrite(
+      { agentId: database.agentId, path: database.path },
+      () => write(),
+      database.db,
+    );
+}
 
 export type ContextEngineTurnAttemptFacts = {
   boundary: TranscriptTurnBoundary;
@@ -73,14 +91,19 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
       agentId: target.agentId,
       path: databasePath,
     });
-    recoverContextEngineTurnOutbox({
-      database,
-      engineId: params.lease.effectiveEngineId,
-      ownerPluginId: params.lease.effectiveEnginePluginId,
-      sessionId: target.sessionId,
-      warn,
-    });
+    const admitWrite = admitOutboxWrites(database);
+    const sessionId = target.sessionId;
+    await admitWrite(() =>
+      recoverContextEngineTurnOutbox({
+        database,
+        engineId: params.lease.effectiveEngineId,
+        ownerPluginId: params.lease.effectiveEnginePluginId,
+        sessionId,
+        warn,
+      }),
+    );
     const result = await drainContextEngineTurnOutbox({
+      admitWrite,
       database,
       engine: params.lease.engine,
       engineId: params.lease.effectiveEngineId,
@@ -112,7 +135,8 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
       });
     };
     if (params.admission) {
-      enqueueAdmission(params.admission);
+      const admission = params.admission;
+      await admitWrite(() => enqueueAdmission(admission));
       return;
     }
     if (!params.recorder?.setAdmissionHandler) {
@@ -131,23 +155,26 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
   }
 }
 
-export function discardContextEngineTurnAttemptIntent(params: {
+export async function discardContextEngineTurnAttemptIntent(params: {
   facts: ContextEngineTurnAttemptFacts;
   lease: ContextEngineLogicalTurnLease;
   warn?: (message: string) => void;
-}): void {
+}): Promise<void> {
   const warn = params.warn ?? console.warn;
   try {
     const admission = params.facts.boundary.admission;
-    discardContextEngineTurnIntent({
-      admission,
-      database: openOpenClawAgentDatabase({
-        agentId: admission.agentId,
-        path: admission.storePath,
-      }),
-      engineId: params.lease.effectiveEngineId,
-      ownerPluginId: params.lease.effectiveEnginePluginId,
+    const database = openOpenClawAgentDatabase({
+      agentId: admission.agentId,
+      path: admission.storePath,
     });
+    await admitOutboxWrites(database)(() =>
+      discardContextEngineTurnIntent({
+        admission,
+        database,
+        engineId: params.lease.effectiveEngineId,
+        ownerPluginId: params.lease.effectiveEnginePluginId,
+      }),
+    );
   } catch (error) {
     warn(
       `[context-engine] failed to discard unaccepted turn intent: ${error instanceof Error ? error.message : String(error)}`,
@@ -194,7 +221,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
   }
   const warn = params.warn ?? console.warn;
   if (params.facts.promptError || params.facts.aborted || params.facts.yieldAborted) {
-    discardContextEngineTurnAttemptIntent({ facts: params.facts, lease: params.lease, warn });
+    await discardContextEngineTurnAttemptIntent({ facts: params.facts, lease: params.lease, warn });
     return;
   }
   try {
@@ -207,48 +234,58 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       agentId: admission.agentId,
       path: admission.storePath,
     });
-    acceptContextEngineTurnIntent({
-      boundary: params.facts.boundary,
-      database,
-      engineId: params.lease.effectiveEngineId,
-      isHeartbeat: params.facts.isHeartbeat === true,
-      ownerPluginId: params.lease.effectiveEnginePluginId,
-      runtimeContext: params.facts.runtimeContext,
-    });
-    const closedTurn = readClosedTranscriptTurn({
-      boundary: params.facts.boundary,
-      maxEvents: ACCEPTED_TURN_MAX_EVENTS,
-      maxBytes: ACCEPTED_TURN_MAX_BYTES,
-    });
-    if (closedTurn.kind !== "ok") {
-      if (!isRetryableContextEngineTurnReadFailure(closedTurn.kind)) {
-        blockContextEngineTurnIntent({
-          boundary: params.facts.boundary,
-          database,
-          engineId: params.lease.effectiveEngineId,
-          failure: closedTurn.kind,
-          isHeartbeat: params.facts.isHeartbeat === true,
-          ownerPluginId: params.lease.effectiveEnginePluginId,
-        });
-      }
-      throw new Error(`accepted context-engine transcript range is ${closedTurn.kind}`);
-    }
-    enqueueContextEngineTurnCommit({
-      database,
-      engineId: params.lease.effectiveEngineId,
-      ownerPluginId: params.lease.effectiveEnginePluginId,
-      payload: {
+    const admitWrite = admitOutboxWrites(database);
+    // Accept, read, and publish the closed range in one admitted section, as the
+    // unqueued sequence did, so no other outbox writer interleaves between them.
+    const closedTurnKind = await admitWrite(() => {
+      acceptContextEngineTurnIntent({
         boundary: params.facts.boundary,
+        database,
+        engineId: params.lease.effectiveEngineId,
         isHeartbeat: params.facts.isHeartbeat === true,
-        messages: closedTurn.messages,
+        ownerPluginId: params.lease.effectiveEnginePluginId,
         runtimeContext: params.facts.runtimeContext,
-      },
+      });
+      const closedTurn = readClosedTranscriptTurn({
+        boundary: params.facts.boundary,
+        maxEvents: ACCEPTED_TURN_MAX_EVENTS,
+        maxBytes: ACCEPTED_TURN_MAX_BYTES,
+      });
+      if (closedTurn.kind !== "ok") {
+        if (!isRetryableContextEngineTurnReadFailure(closedTurn.kind)) {
+          blockContextEngineTurnIntent({
+            boundary: params.facts.boundary,
+            database,
+            engineId: params.lease.effectiveEngineId,
+            failure: closedTurn.kind,
+            isHeartbeat: params.facts.isHeartbeat === true,
+            ownerPluginId: params.lease.effectiveEnginePluginId,
+          });
+        }
+        return closedTurn.kind;
+      }
+      enqueueContextEngineTurnCommit({
+        database,
+        engineId: params.lease.effectiveEngineId,
+        ownerPluginId: params.lease.effectiveEnginePluginId,
+        payload: {
+          boundary: params.facts.boundary,
+          isHeartbeat: params.facts.isHeartbeat === true,
+          messages: closedTurn.messages,
+          runtimeContext: params.facts.runtimeContext,
+        },
+      });
+      return closedTurn.kind;
     });
+    if (closedTurnKind !== "ok") {
+      throw new Error(`accepted context-engine transcript range is ${closedTurnKind}`);
+    }
     const maintenanceBySession = new Map<
       string,
       Parameters<typeof runContextEngineMaintenance>[0]
     >();
     await drainContextEngineTurnOutbox({
+      admitWrite,
       database,
       engine: params.lease.engine,
       engineId: params.lease.effectiveEngineId,
