@@ -590,6 +590,34 @@ describe("accepted context-engine turn finalization", () => {
     expect(commitParams).not.toHaveProperty("prePromptMessageCount");
   });
 
+  it("runs outbox SQL in the agent database worker, not on the host connection", async () => {
+    const { admission, database, facts } = await createAcceptedTurnFixture({
+      answer: "answer",
+      logicalTurnId: "logical-turn-worker-sql",
+      prefix: [],
+      sessionId: "worker-sql-turn",
+    });
+    const { commitTurn, lease } = createDurableLease();
+    const warn = vi.fn();
+    const hostOutboxSql = trackSqliteStatementExecutions(database.db, ["outbox"], (sql) =>
+      sql.includes("context_engine_turn_outbox") ? "outbox" : null,
+    );
+    try {
+      await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+    } finally {
+      hostOutboxSql.restore();
+    }
+
+    expect(hostOutboxSql.counts.outbox).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+    expect(commitTurn).toHaveBeenCalledOnce();
+    expect(
+      database.db
+        .prepare("SELECT advancement_key FROM context_engine_turn_outbox WHERE advancement_key = ?")
+        .get(admission.logicalTurnId),
+    ).toBeUndefined();
+  });
+
   it("queues outbox writes behind an in-flight worker write instead of busy-waiting", async () => {
     const { admission, database, facts } = await createAcceptedTurnFixture({
       answer: "answer",
@@ -709,6 +737,85 @@ describe("accepted context-engine turn finalization", () => {
       state: "admitted",
     });
   });
+
+  it.each([{ outcome: "committed" as const }, { outcome: "failed" as const }])(
+    "settles a drained row behind a worker write that starts during commitTurn ($outcome)",
+    async ({ outcome }) => {
+      const { admission, database, facts } = await createAcceptedTurnFixture({
+        answer: "answer",
+        logicalTurnId: `logical-turn-during-commit-${outcome}`,
+        prefix: [],
+        sessionId: `during-commit-${outcome}`,
+      });
+      const { commitTurn, lease } = createDurableLease();
+      const warn = vi.fn();
+      const readRow = () =>
+        database.db
+          .prepare(
+            "SELECT payload_json, attempt_count, last_error FROM context_engine_turn_outbox WHERE advancement_key = ?",
+          )
+          .get(admission.logicalTurnId) as
+          | { payload_json: string; attempt_count: number; last_error: string | null }
+          | undefined;
+      let releaseWorker!: () => void;
+      let worker: Promise<void> | undefined;
+      let commitReturning!: () => void;
+      const commitSettling = new Promise<void>((resolve) => {
+        commitReturning = resolve;
+      });
+      commitTurn.mockImplementationOnce(async () => {
+        let workerAdmitted!: () => void;
+        const admitted = new Promise<void>((resolve) => {
+          workerAdmitted = resolve;
+        });
+        worker = runOpenClawAgentWorkerWrite(
+          { agentId: database.agentId, path: database.path },
+          async () => {
+            workerAdmitted();
+            await new Promise<void>((resolve) => {
+              releaseWorker = resolve;
+            });
+          },
+        );
+        await admitted;
+        commitReturning();
+        if (outcome === "failed") {
+          throw new Error("engine offline");
+        }
+        return { status: "committed" };
+      });
+
+      const finalizing = finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+      await commitSettling;
+      // Let the drain reach its settlement write without a timer.
+      for (let hop = 0; hop < 20; hop += 1) {
+        await Promise.resolve();
+      }
+      const rowWhileWorkerHeld = readRow();
+      const queuedWhileWorkerHeld = [...SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
+        (count, queue) => count + queue.pending.length,
+        0,
+      );
+      releaseWorker();
+      await worker;
+      await finalizing;
+
+      expect(JSON.parse(rowWhileWorkerHeld?.payload_json ?? "{}")).toMatchObject({
+        state: "ready",
+      });
+      expect(rowWhileWorkerHeld?.attempt_count).toBe(0);
+      expect(queuedWhileWorkerHeld).toBe(1);
+      if (outcome === "committed") {
+        expect(readRow()).toBeUndefined();
+        expect(warn).not.toHaveBeenCalled();
+      } else {
+        expect(readRow()).toMatchObject({ attempt_count: 1, last_error: "engine offline" });
+        expect(warn).toHaveBeenCalledWith(
+          `[context-engine] durable turn advancement remains queued: ${admission.logicalTurnId}: engine offline`,
+        );
+      }
+    },
+  );
 
   it("still blocks an accepted turn whose own range exceeds the cap", async () => {
     const { admission, database, facts } = await createAcceptedTurnFixture({

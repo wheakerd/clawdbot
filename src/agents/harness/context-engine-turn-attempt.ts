@@ -1,5 +1,4 @@
 import {
-  readClosedTranscriptTurn,
   resolveSessionTranscriptDatabasePath,
   type TranscriptTurnBoundary,
 } from "../../config/sessions/session-accessor.js";
@@ -7,41 +6,16 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { supportsContextEngineDurableTurnAdvancement } from "../../context-engine/host-compat.js";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
+import { openContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
 import {
-  acceptContextEngineTurnIntent,
-  blockContextEngineTurnIntent,
-  discardContextEngineTurnIntent,
   drainContextEngineTurnOutbox,
-  enqueueContextEngineTurnCommit,
-  enqueueContextEngineTurnIntent,
-  isRetryableContextEngineTurnReadFailure,
-  recoverContextEngineTurnOutbox,
-  type ContextEngineTurnOutboxWriteAdmission,
   type ContextEngineTurnRuntimeContext,
 } from "./context-engine-turn-outbox.js";
 
 const ACCEPTED_TURN_MAX_EVENTS = 20_000;
 const ACCEPTED_TURN_MAX_BYTES = 8 * 1024 * 1024;
-
-/**
- * Outbox mutations share the agent database with worker transactions. A worker
- * holds its SQLite write lock while it waits on this thread for its commit
- * grant, so a native busy wait here would stall both until the busy timeout.
- * Queue behind the agent database write admission instead.
- */
-function admitOutboxWrites(database: OpenClawAgentDatabase): ContextEngineTurnOutboxWriteAdmission {
-  return (write) =>
-    withOpenClawAgentDatabaseWrite(
-      { agentId: database.agentId, path: database.path },
-      () => write(),
-      database.db,
-    );
-}
 
 export type ContextEngineTurnAttemptFacts = {
   boundary: TranscriptTurnBoundary;
@@ -87,35 +61,40 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
           sessionKey: target.sessionKey,
           storePath: target.storePath,
         });
-    const database = openOpenClawAgentDatabase({
+    // Outbox SQLite runs in the agent database worker; this thread only awaits it.
+    const store = openContextEngineTurnOutboxWorkerStore({
       agentId: target.agentId,
       path: databasePath,
     });
-    const admitWrite = admitOutboxWrites(database);
-    const sessionId = target.sessionId;
-    await admitWrite(() =>
-      recoverContextEngineTurnOutbox({
-        database,
-        engineId: params.lease.effectiveEngineId,
-        ownerPluginId: params.lease.effectiveEnginePluginId,
-        sessionId,
-        warn,
-      }),
-    );
-    const result = await drainContextEngineTurnOutbox({
-      admitWrite,
-      database,
-      engine: params.lease.engine,
+    const owner = {
       engineId: params.lease.effectiveEngineId,
       ownerPluginId: params.lease.effectiveEnginePluginId,
+    };
+    // One worker transaction recovers, checks for advanceable rows, and records a
+    // known admission when none remain; only pending work needs the drain.
+    const prepared = await store.prepareRun({
+      ...owner,
+      admission: params.admission,
+      isHeartbeat: params.isHeartbeat === true,
       sessionId: target.sessionId,
-      warn,
     });
-    if (result.pending) {
-      params.lease.degradeBeforeStart(
-        "pending durable turn advancement could not be completed before the next turn",
-      );
-      return;
+    for (const message of prepared.warnings) {
+      warn(message);
+    }
+    if (prepared.pending) {
+      const result = await drainContextEngineTurnOutbox({
+        store,
+        engine: params.lease.engine,
+        ...owner,
+        sessionId: target.sessionId,
+        warn,
+      });
+      if (result.pending) {
+        params.lease.degradeBeforeStart(
+          "pending durable turn advancement could not be completed before the next turn",
+        );
+        return;
+      }
     }
     const enqueueAdmission = (admission: TranscriptTurnBoundary["admission"]) => {
       if (
@@ -126,17 +105,16 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
       ) {
         throw new Error("context-engine transcript target changed before provider dispatch");
       }
-      enqueueContextEngineTurnIntent({
+      return store.enqueueIntent({
+        ...owner,
         admission,
-        database,
-        engineId: params.lease.effectiveEngineId,
         isHeartbeat: params.isHeartbeat === true,
-        ownerPluginId: params.lease.effectiveEnginePluginId,
       });
     };
     if (params.admission) {
-      const admission = params.admission;
-      await admitWrite(() => enqueueAdmission(admission));
+      if (!prepared.admitted) {
+        await enqueueAdmission(params.admission);
+      }
       return;
     }
     if (!params.recorder?.setAdmissionHandler) {
@@ -163,18 +141,14 @@ export async function discardContextEngineTurnAttemptIntent(params: {
   const warn = params.warn ?? console.warn;
   try {
     const admission = params.facts.boundary.admission;
-    const database = openOpenClawAgentDatabase({
+    await openContextEngineTurnOutboxWorkerStore({
       agentId: admission.agentId,
       path: admission.storePath,
+    }).discardIntent({
+      admission,
+      engineId: params.lease.effectiveEngineId,
+      ownerPluginId: params.lease.effectiveEnginePluginId,
     });
-    await admitOutboxWrites(database)(() =>
-      discardContextEngineTurnIntent({
-        admission,
-        database,
-        engineId: params.lease.effectiveEngineId,
-        ownerPluginId: params.lease.effectiveEnginePluginId,
-      }),
-    );
   } catch (error) {
     warn(
       `[context-engine] failed to discard unaccepted turn intent: ${error instanceof Error ? error.message : String(error)}`,
@@ -230,52 +204,20 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       throw new Error("accepted context engine does not support durable turn advancement");
     }
     const admission = params.facts.boundary.admission;
-    const database = openOpenClawAgentDatabase({
+    const store = openContextEngineTurnOutboxWorkerStore({
       agentId: admission.agentId,
       path: admission.storePath,
     });
-    const admitWrite = admitOutboxWrites(database);
-    // Accept, read, and publish the closed range in one admitted section, as the
-    // unqueued sequence did, so no other outbox writer interleaves between them.
-    const closedTurnKind = await admitWrite(() => {
-      acceptContextEngineTurnIntent({
-        boundary: params.facts.boundary,
-        database,
-        engineId: params.lease.effectiveEngineId,
-        isHeartbeat: params.facts.isHeartbeat === true,
-        ownerPluginId: params.lease.effectiveEnginePluginId,
-        runtimeContext: params.facts.runtimeContext,
-      });
-      const closedTurn = readClosedTranscriptTurn({
-        boundary: params.facts.boundary,
-        maxEvents: ACCEPTED_TURN_MAX_EVENTS,
-        maxBytes: ACCEPTED_TURN_MAX_BYTES,
-      });
-      if (closedTurn.kind !== "ok") {
-        if (!isRetryableContextEngineTurnReadFailure(closedTurn.kind)) {
-          blockContextEngineTurnIntent({
-            boundary: params.facts.boundary,
-            database,
-            engineId: params.lease.effectiveEngineId,
-            failure: closedTurn.kind,
-            isHeartbeat: params.facts.isHeartbeat === true,
-            ownerPluginId: params.lease.effectiveEnginePluginId,
-          });
-        }
-        return closedTurn.kind;
-      }
-      enqueueContextEngineTurnCommit({
-        database,
-        engineId: params.lease.effectiveEngineId,
-        ownerPluginId: params.lease.effectiveEnginePluginId,
-        payload: {
-          boundary: params.facts.boundary,
-          isHeartbeat: params.facts.isHeartbeat === true,
-          messages: closedTurn.messages,
-          runtimeContext: params.facts.runtimeContext,
-        },
-      });
-      return closedTurn.kind;
+    // Accept, read, and publish the closed range in one worker transaction, so no
+    // other outbox writer interleaves between them.
+    const closedTurnKind = await store.acceptClosedTurn({
+      boundary: params.facts.boundary,
+      engineId: params.lease.effectiveEngineId,
+      isHeartbeat: params.facts.isHeartbeat === true,
+      maxBytes: ACCEPTED_TURN_MAX_BYTES,
+      maxEvents: ACCEPTED_TURN_MAX_EVENTS,
+      ownerPluginId: params.lease.effectiveEnginePluginId,
+      runtimeContext: params.facts.runtimeContext,
     });
     if (closedTurnKind !== "ok") {
       throw new Error(`accepted context-engine transcript range is ${closedTurnKind}`);
@@ -285,8 +227,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       Parameters<typeof runContextEngineMaintenance>[0]
     >();
     await drainContextEngineTurnOutbox({
-      admitWrite,
-      database,
+      store,
       engine: params.lease.engine,
       engineId: params.lease.effectiveEngineId,
       ownerPluginId: params.lease.effectiveEnginePluginId,
