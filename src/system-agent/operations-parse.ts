@@ -54,7 +54,9 @@ export type SystemAgentCommandDeps = {
     beforePersistentApply?: () => void;
   }) => Promise<void>;
   /** Refreshes runtime readers of one secret-store entry after its value is replaced. */
-  reloadSecretStoreReference?: (name: string) => Promise<unknown>;
+  reloadSecretStoreReference?: (
+    name: string,
+  ) => Promise<{ reloaded: boolean; warningCount?: number }>;
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;

@@ -388,13 +388,20 @@ export async function runConfigSetOperation(params: {
     await storeWrite.rollback();
     throw error;
   }
+  let warningCount = 0;
   try {
     // A replaced entry keeps the same ref, so config reload alone would not refresh its readers.
-    await ctx.deps?.reloadSecretStoreReference?.(storeWrite.name);
+    const reload = await ctx.deps?.reloadSecretStoreReference?.(storeWrite.name);
+    warningCount = reload?.warningCount ?? 0;
   } catch (error) {
     // Both writes committed; report the stale runtime instead of a failed change.
     ctx.runtime.error(
       `Saved the secret as ${storeWrite.name}, but the running Gateway could not reload it: ${formatErrorMessage(error)}. Run \`openclaw secrets reload\` after fixing the provider error.`,
+    );
+  }
+  if (warningCount > 0) {
+    ctx.runtime.error(
+      `Saved the secret as ${storeWrite.name}, but the Gateway reloaded secrets with ${warningCount} warning(s); some features may still use an older or missing credential. Run \`openclaw doctor\` to see them.`,
     );
   }
   return { storeEntry: storeWrite.name };

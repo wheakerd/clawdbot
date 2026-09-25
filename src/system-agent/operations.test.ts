@@ -821,7 +821,7 @@ describe("system agent operations", () => {
       useOperationStateDir("openclaw-chat-secret-");
       const { runtime, lines } = createSystemAgentTestRuntime();
       const runConfigSet = vi.fn(async () => {});
-      const reloadSecretStoreReference = vi.fn(async () => {});
+      const reloadSecretStoreReference = vi.fn(async () => ({ reloaded: true, warningCount: 0 }));
 
       const result = await executeSystemAgentOperation(operation, runtime, {
         approved: true,
@@ -928,6 +928,22 @@ describe("system agent operations", () => {
       expect(result.applied).toBe(true);
       expect(readStored()).toMatchObject({ ok: true, value: operation.secret });
       expect(lines.join("\n")).toContain("could not reload it: provider unavailable");
+    });
+
+    it("tells the owner when the saved key reloaded with warnings", async () => {
+      useOperationStateDir("openclaw-chat-secret-warnings-");
+      const { runtime, lines } = createSystemAgentTestRuntime();
+
+      const result = await executeSystemAgentOperation(operation, runtime, {
+        approved: true,
+        deps: {
+          runConfigSet: vi.fn(async () => {}),
+          reloadSecretStoreReference: vi.fn(async () => ({ reloaded: true, warningCount: 2 })),
+        },
+      });
+
+      expect(result.applied).toBe(true);
+      expect(lines.join("\n")).toContain("reloaded secrets with 2 warning(s)");
     });
   });
 
