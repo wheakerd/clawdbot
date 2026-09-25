@@ -12,10 +12,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../sentinel.js";
-import {
-  rollbackSecretStoreEntryWriteInDatabase,
-  writeSecretStoreEntryForConfigRefInDatabase,
-} from "./secret-store-config-ref.kernel.js";
+import { writeSecretStoreEntryForConfigRefInDatabase } from "./secret-store-config-ref.kernel.js";
 import {
   captureSecretStoreExpiryCutoffs,
   purgeExpiredSecretStoreEntriesInDatabase,
@@ -121,15 +118,6 @@ describe("secret store", () => {
       ok: true,
       value: "owned-elsewhere",
     });
-    expect(
-      rollbackSecretStoreEntryWriteInDatabase(
-        { name: write.name, expectedUpdatedBy: "openclaw:1", now: 2 },
-        database,
-      ),
-    ).toBe(true);
-    expect(listSecretStoreEntries({ scope: team, database }).map((entry) => entry.name)).toEqual([
-      "GATEWAY_REMOTE_TOKEN",
-    ]);
   });
 
   it("rotates a key into a fresh entry and leaves its previous entry for other users", () => {
@@ -164,7 +152,7 @@ describe("secret store", () => {
     });
   });
 
-  it("drops a deleted entry's host grants when a chat secret reuses its name", () => {
+  it("never reuses a deleted entry's name, which a config key may still point at", () => {
     const database = createDatabaseOptions();
     writeSecretStoreEntry({
       scope: team,
@@ -182,9 +170,11 @@ describe("secret store", () => {
       database,
     );
 
-    expect(write.name).toBe("GATEWAY_REMOTE_TOKEN");
-    const [entry] = listSecretStoreEntries({ scope: team, database });
-    expect(entry?.allowedHosts ?? []).toEqual([]);
+    expect(write.name).toBe("GATEWAY_REMOTE_TOKEN_2");
+    const live = listSecretStoreEntries({ scope: team, database });
+    expect(live.map((entry) => [entry.name, entry.allowedHosts ?? []])).toEqual([
+      ["GATEWAY_REMOTE_TOKEN_2", []],
+    ]);
   });
 
   it("writes nothing when the requester loses authority before commit", () => {

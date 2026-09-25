@@ -456,8 +456,6 @@ export function createGatewayAuxHandlers(
     forwardExecApprovalRequest: execApprovalForwarder.handleRequested,
     forwardSystemAgentApprovalRequest: execApprovalForwarder.handleSystemAgentApprovalRequested,
     forwardSystemAgentApprovalResolved: execApprovalForwarder.handleSystemAgentApprovalResolved,
-    reloadSecretStoreReference: async (name: string) =>
-      await (await loadSecretStoreWriteService()).reloadReference(name),
     execApprovalIosPushDelivery,
     approvalWebPushDelivery,
     pluginApprovalIosPushDelivery,

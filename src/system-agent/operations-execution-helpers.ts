@@ -301,7 +301,7 @@ export async function applyPersistentOperation(params: {
 export async function runConfigSetOperation(params: {
   operation: Extract<SystemAgentOperation, { kind: "config-set" | "config-set-ref" }>;
   ctx: PersistentApplyContext;
-}): Promise<{ storeEntry?: string }> {
+}): Promise<{ storeEntry?: string; storeProvider?: string }> {
   const { operation, ctx } = params;
   const runConfigSet =
     ctx.deps?.runConfigSet ??
@@ -350,10 +350,10 @@ export async function runConfigSetOperation(params: {
       : defaultStoreProvider);
   // The SQLite store stays off the load path of every other config write.
   const { writeSecretStoreEntryForConfigRef } = await import("../secrets/store/secret-store.js");
-  // Every save gets a fresh entry: an existing entry may be shared with, or
-  // become shared with, another consumer before this write lands, so it is
-  // never overwritten. The key's previous entry stays for any other users.
-  const storeWrite = await ctx.commit(() =>
+  // Every save gets a fresh entry and no entry is ever overwritten or deleted
+  // here: another config key or auth profile may use, or start using, any
+  // entry at any time. The new ref is picked up by the normal config reload.
+  const storeEntry = await ctx.commit(() =>
     writeSecretStoreEntryForConfigRef({
       baseName: operation.id,
       value: secret,
@@ -365,30 +365,16 @@ export async function runConfigSetOperation(params: {
   try {
     await runConfigSet({
       path: operation.path,
-      cliOptions: { refProvider, refSource: "store", refId: storeWrite.name },
+      cliOptions: { refProvider, refSource: "store", refId: storeEntry },
       ...beforePersistentApply,
     });
   } catch (error) {
-    await storeWrite.rollback();
-    throw error;
-  }
-  let warningCount = 0;
-  try {
-    // A replaced entry keeps the same ref, so config reload alone would not refresh its readers.
-    const reload = await ctx.deps?.reloadSecretStoreReference?.(storeWrite.name);
-    warningCount = reload?.warningCount ?? 0;
-  } catch (error) {
-    // Both writes committed; report the stale runtime instead of a failed change.
-    ctx.runtime.error(
-      `Saved the secret as ${storeWrite.name}, but the running Gateway could not reload it: ${formatErrorMessage(error)}. Run \`openclaw secrets reload\` after fixing the provider error.`,
+    throw new Error(
+      `Saved the secret as ${storeEntry}, but could not point ${operation.path} at it: ${formatErrorMessage(error)}. Retry, or remove the entry with \`openclaw secrets store rm ${storeEntry}\`.`,
+      { cause: error },
     );
   }
-  if (warningCount > 0) {
-    ctx.runtime.error(
-      `Saved the secret as ${storeWrite.name}, but the Gateway reloaded secrets with ${warningCount} warning(s); some features may still use an older or missing credential. Run \`openclaw doctor\` to see them.`,
-    );
-  }
-  return { storeEntry: storeWrite.name };
+  return { storeEntry, storeProvider: refProvider };
 }
 
 async function verifyCurrentSetupInference(

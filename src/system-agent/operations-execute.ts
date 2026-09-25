@@ -366,7 +366,7 @@ export async function executeSystemAgentOperation(
         runtime,
         opts,
         run: async (ctx) => {
-          const { storeEntry } = await runConfigSetOperation({ operation, ctx });
+          const { storeEntry, storeProvider } = await runConfigSetOperation({ operation, ctx });
           return {
             summary: storeEntry
               ? `Saved the secret as ${storeEntry} and set config ${operation.path} SecretRef`
@@ -374,7 +374,7 @@ export async function executeSystemAgentOperation(
             details: {
               path: operation.path,
               source: operation.source,
-              provider: operation.provider ?? "default",
+              provider: storeProvider ?? operation.provider ?? "default",
               ...(storeEntry ? { storeEntry } : {}),
             },
           };

@@ -66,10 +66,7 @@ import type { PluginBindingApprovalEntry } from "../plugins/conversation-binding
 import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
 import type { HostedCatalogSnapshotWorkerOperations } from "../plugins/official-external-plugin-catalog-snapshot-store.worker-contract.js";
 import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
-import type {
-  SecretStoreConfigRefWrite,
-  SecretStoreRollbackWrite,
-} from "../secrets/store/secret-store-config-ref.kernel.js";
+import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
@@ -197,7 +194,6 @@ export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
       input: SecretStoreConfigRefWrite;
       output: { name: string };
     };
-    "secrets.rollbackWrite": { input: SecretStoreRollbackWrite; output: boolean };
     "promotions.markNotified": { input: { slugs: string[]; now: number }; output: true };
     "promotions.recordClaim": { input: PreparedPromotionClaim; output: void };
     "managedImages.read": { input: { attachmentId: string }; output: ManagedImageRecord | null };

@@ -27,10 +27,6 @@ import {
 } from "../../state/openclaw-state-worker-store.js";
 import { normalizeExactAllowedHost } from "../exact-hostname.js";
 import { sealSecretSentinel } from "../sentinel.js";
-import {
-  rollbackSecretStoreEntryWriteInDatabase,
-  type SecretStoreWriteSnapshot,
-} from "./secret-store-config-ref.kernel.js";
 import { captureSecretStoreExpiryCutoffs } from "./secret-store-expiry.kernel.js";
 import {
   classifyHiddenGitHubStoreName,
@@ -70,6 +66,13 @@ export type SecretStoreWriteParams = {
   allowedHosts?: readonly string[];
   updatedBy: string | null;
   database?: OpenClawStateDatabaseOptions;
+};
+
+type SecretStoreWriteSnapshot = {
+  value: string;
+  kind: SecretStoreKind;
+  allowedHosts: string | null;
+  updatedBy: string | null;
 };
 
 export type SecretStoreEntryMetadata = {
@@ -517,15 +520,49 @@ function rollbackSecretStoreEntryWrite(params: {
   database?: OpenClawStateDatabaseOptions;
 }): boolean {
   assertSecretStoreMutationName(params.name);
-  return rollbackSecretStoreEntryWriteInDatabase(
-    {
-      name: params.name,
-      expectedUpdatedBy: params.expectedUpdatedBy,
-      ...(params.previous ? { previous: params.previous } : {}),
-      now: Date.now(),
-    },
-    params.database,
-  );
+  const { scopeKind, scopeId } = normalizeScope(params.scope);
+  const now = Date.now();
+  try {
+    return runOpenClawStateWriteTransaction(
+      ({ db: sqlite }) => {
+        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+        const query =
+          params.previous === undefined
+            ? db
+                .updateTable("secret_store_entries")
+                .set({ deleted_at_ms: now, updated_at_ms: now })
+                .where("scope_kind", "=", scopeKind)
+                .where("scope_id", "=", scopeId)
+                .where("name", "=", params.name)
+                .where("updated_by", "=", params.expectedUpdatedBy)
+                .where("deleted_at_ms", "is", null)
+            : db
+                .updateTable("secret_store_entries")
+                .set({
+                  value: params.previous.value,
+                  kind: params.previous.kind,
+                  allowed_hosts: params.previous.allowedHosts,
+                  updated_at_ms: now,
+                  updated_by: params.previous.updatedBy,
+                  deleted_at_ms: null,
+                })
+                .where("scope_kind", "=", scopeKind)
+                .where("scope_id", "=", scopeId)
+                .where("name", "=", params.name)
+                .where("updated_by", "=", params.expectedUpdatedBy)
+                .where("deleted_at_ms", "is", null);
+        const result = executeSqliteQuerySync(sqlite, query);
+        return Number(result.numAffectedRows ?? 0n) === 1;
+      },
+      params.database,
+      { operationLabel: "secrets.store.rollback-write" },
+    );
+  } catch (error) {
+    if (isMissingSecretStoreTableError(error)) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 /** Writes one entry and returns owner-checked compensation for that exact write. */
@@ -553,10 +590,10 @@ export function writeSecretStoreEntryWithRollback(params: SecretStoreWriteParams
 }
 
 /**
- * Saves a secret for one config key in the team store through the state worker.
- * `assertCurrent` is the requester's live authority; the worker checks it again
- * at transaction and commit admission, so a revoked request writes nothing.
- * Returns the entry name the key should reference and owner-checked compensation.
+ * Saves a secret for one config key in a fresh team-store entry through the
+ * state worker and returns the entry name. `assertCurrent` is the requester's
+ * live authority; the worker checks it again at transaction and commit
+ * admission, so a revoked request writes nothing.
  */
 export async function writeSecretStoreEntryForConfigRef(params: {
   baseName: string;
@@ -564,10 +601,9 @@ export async function writeSecretStoreEntryForConfigRef(params: {
   updatedBy: string;
   assertCurrent?: () => void;
   database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
-}): Promise<{ name: string; rollback: () => Promise<boolean> }> {
+}): Promise<string> {
   registerSecretValueForRedaction(params.value);
   assertSecretStoreValue(params.value, "secret", params.baseName);
-  const writer = `${params.updatedBy}:${randomUUID()}`;
   const context = captureOpenClawStateWorkerContext(params.database);
   const assertCurrent = () => {
     context.admission.assertCurrent();
@@ -581,7 +617,7 @@ export async function writeSecretStoreEntryForConfigRef(params: {
         input: {
           baseName: params.baseName,
           value: params.value,
-          writer,
+          writer: params.updatedBy,
           now: Date.now(),
         },
       }),
@@ -592,19 +628,7 @@ export async function writeSecretStoreEntryForConfigRef(params: {
       ]),
     },
   );
-  let rollbackResult: Promise<boolean> | undefined;
-  return {
-    name,
-    rollback: () =>
-      (rollbackResult ??= executeOpenClawStateWorker(context, {
-        type: "secrets.rollbackWrite",
-        input: {
-          name,
-          expectedUpdatedBy: writer,
-          now: Date.now(),
-        },
-      })),
-  };
+  return name;
 }
 
 export function updateSecretStoreAllowedHosts(params: {

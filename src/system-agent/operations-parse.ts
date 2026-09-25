@@ -53,10 +53,6 @@ export type SystemAgentCommandDeps = {
     cliOptions: ConfigSetOptions;
     beforePersistentApply?: () => void;
   }) => Promise<void>;
-  /** Refreshes runtime readers of one secret-store entry after its value is replaced. */
-  reloadSecretStoreReference?: (
-    name: string,
-  ) => Promise<{ reloaded: boolean; warningCount?: number }>;
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;

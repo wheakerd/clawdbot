@@ -230,10 +230,6 @@ type GatewayKernelContext = {
   forwardExecApprovalRequest?: (request: ExecApprovalRequest) => Promise<boolean>;
   forwardSystemAgentApprovalRequest?: (request: SystemAgentApprovalRequest) => Promise<boolean>;
   forwardSystemAgentApprovalResolved?: (resolved: SystemAgentApprovalResolved) => Promise<void>;
-  /** Refreshes runtime readers of one replaced secret-store entry. */
-  reloadSecretStoreReference?: (
-    name: string,
-  ) => Promise<{ reloaded: boolean; warningCount?: number }>;
   execApprovalIosPushDelivery?: {
     handleRequested?: (
       request: ExecApprovalRequest,

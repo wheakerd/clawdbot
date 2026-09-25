@@ -22,7 +22,7 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-it("saves a chat secret beside an existing entry and rolls back only its own write", async () => {
+it("saves a chat secret beside an existing entry without touching it", async () => {
   writeSecretStoreEntry({
     scope: team,
     name: "GATEWAY_REMOTE_TOKEN",
@@ -31,22 +31,15 @@ it("saves a chat secret beside an existing entry and rolls back only its own wri
     updatedBy: "cli",
   });
 
-  const write = await writeSecretStoreEntryForConfigRef({
+  const name = await writeSecretStoreEntryForConfigRef({
     baseName: "GATEWAY_REMOTE_TOKEN",
     value: "from-chat",
     updatedBy: "openclaw",
     assertCurrent: () => {},
   });
 
-  expect(write.name).toBe("GATEWAY_REMOTE_TOKEN_2");
-  expect(readSecretStoreValue({ scope: team, name: write.name })).toEqual({
-    ok: true,
-    value: "from-chat",
-  });
-  expect(await write.rollback()).toBe(true);
-  expect(listSecretStoreEntries({ scope: team }).map((entry) => entry.name)).toEqual([
-    "GATEWAY_REMOTE_TOKEN",
-  ]);
+  expect(name).toBe("GATEWAY_REMOTE_TOKEN_2");
+  expect(readSecretStoreValue({ scope: team, name })).toEqual({ ok: true, value: "from-chat" });
   expect(readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN" })).toEqual({
     ok: true,
     value: "owned-elsewhere",

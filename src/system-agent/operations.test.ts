@@ -196,17 +196,10 @@ vi.mock("../state/openclaw-state-worker-store.js", async (importOriginal) => {
         assertCurrent?.(),
       );
     }
-    if (command.type === "secrets.rollbackWrite") {
-      return kernel.rollbackSecretStoreEntryWriteInDatabase(command.input);
-    }
     throw new Error(`unexpected state worker command ${command.type}`);
   };
   return {
     ...(await importOriginal<typeof import("../state/openclaw-state-worker-store.js")>()),
-    executeOpenClawStateWorker: async (
-      _context: unknown,
-      command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
-    ) => await execute(command),
     runOpenClawStateWorkerOperation: async (
       _context: unknown,
       operation: (scope: {
@@ -817,15 +810,14 @@ describe("system agent operations", () => {
     };
     const readStored = () => readSecretStoreValue({ scope: { kind: "team" }, name: operation.id });
 
-    it("stores the key, points config at it, and refreshes its readers", async () => {
+    it("stores the key and points config at it without repeating it", async () => {
       useOperationStateDir("openclaw-chat-secret-");
       const { runtime, lines } = createSystemAgentTestRuntime();
       const runConfigSet = vi.fn(async () => {});
-      const reloadSecretStoreReference = vi.fn(async () => ({ reloaded: true, warningCount: 0 }));
 
       const result = await executeSystemAgentOperation(operation, runtime, {
         approved: true,
-        deps: { runConfigSet, reloadSecretStoreReference },
+        deps: { runConfigSet },
       });
 
       expect(result.applied).toBe(true);
@@ -834,7 +826,6 @@ describe("system agent operations", () => {
         path: operation.path,
         cliOptions: { refProvider: "default", refSource: "store", refId: operation.id },
       });
-      expect(reloadSecretStoreReference).toHaveBeenCalledWith(operation.id);
       expect(lines.join("\n")).not.toContain(operation.secret);
       expect(JSON.stringify(readLastAuditEntry())).not.toContain(operation.secret);
     });
@@ -858,31 +849,22 @@ describe("system agent operations", () => {
       expect(runConfigSet).not.toHaveBeenCalled();
     });
 
-    it("removes the stored key when authority is revoked at the config write", async () => {
-      useOperationStateDir("openclaw-chat-secret-rollback-");
-      const { runtime } = createSystemAgentTestRuntime();
-      let revoked = false;
-      const runConfigSet = vi.fn(async (setOpts: { beforePersistentApply?: () => void }) => {
-        // The run is stopped after the key is stored, before the config write lands.
-        expect(readStored()).toMatchObject({ ok: true, value: operation.secret });
-        revoked = true;
-        setOpts.beforePersistentApply?.();
+    it("names the saved entry when the config write fails", async () => {
+      useOperationStateDir("openclaw-chat-secret-config-fails-");
+      const runConfigSet = vi.fn(async () => {
+        throw new Error("Config validation failed: fixture rejected");
       });
 
       await expect(
-        executeSystemAgentOperation(operation, runtime, {
+        executeSystemAgentOperation(operation, createSystemAgentTestRuntime().runtime, {
           approved: true,
-          beforePersistentApply: () => {
-            if (revoked) {
-              throw new Error("requesting run is no longer active");
-            }
-          },
           deps: { runConfigSet },
         }),
-      ).rejects.toThrow("no longer active");
-
-      expect(runConfigSet).toHaveBeenCalledOnce();
-      expect(readStored()).toMatchObject({ ok: false });
+      ).rejects.toThrow(
+        `Saved the secret as ${operation.id}, but could not point ${operation.path} at it: Config validation failed: fixture rejected. Retry, or remove the entry with \`openclaw secrets store rm ${operation.id}\`.`,
+      );
+      // Another consumer may already use the fresh entry, so it is never deleted here.
+      expect(readStored()).toMatchObject({ ok: true, value: operation.secret });
     });
 
     it("keeps the key's configured store provider when rotating it", async () => {
@@ -909,41 +891,9 @@ describe("system agent operations", () => {
           cliOptions: expect.objectContaining({ refProvider: "team", refSource: "store" }),
         }),
       );
-    });
-
-    it("reports a saved key whose runtime refresh failed as applied", async () => {
-      useOperationStateDir("openclaw-chat-secret-refresh-");
-      const { runtime, lines } = createSystemAgentTestRuntime();
-
-      const result = await executeSystemAgentOperation(operation, runtime, {
-        approved: true,
-        deps: {
-          runConfigSet: vi.fn(async () => {}),
-          reloadSecretStoreReference: vi.fn(async () => {
-            throw new Error("provider unavailable");
-          }),
-        },
+      expect(requireRecord(readLastAuditEntry(), "audit").details).toMatchObject({
+        provider: "team",
       });
-
-      expect(result.applied).toBe(true);
-      expect(readStored()).toMatchObject({ ok: true, value: operation.secret });
-      expect(lines.join("\n")).toContain("could not reload it: provider unavailable");
-    });
-
-    it("tells the owner when the saved key reloaded with warnings", async () => {
-      useOperationStateDir("openclaw-chat-secret-warnings-");
-      const { runtime, lines } = createSystemAgentTestRuntime();
-
-      const result = await executeSystemAgentOperation(operation, runtime, {
-        approved: true,
-        deps: {
-          runConfigSet: vi.fn(async () => {}),
-          reloadSecretStoreReference: vi.fn(async () => ({ reloaded: true, warningCount: 2 })),
-        },
-      });
-
-      expect(result.applied).toBe(true);
-      expect(lines.join("\n")).toContain("reloaded secrets with 2 warning(s)");
     });
   });
 
