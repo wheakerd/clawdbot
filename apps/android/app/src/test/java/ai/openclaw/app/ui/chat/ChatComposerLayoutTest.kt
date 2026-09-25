@@ -4107,6 +4107,25 @@ class ChatComposerLayoutTest {
     composeRule.onNodeWithText(nativeString("Cost by type").uppercase()).assertDoesNotExist()
     composeRule.onNodeWithText("\$0.023").assertDoesNotExist()
     composeRule.onNodeWithText(nativeString("Default model")).assertDoesNotExist()
+    for (cost in listOf(ChatMessageCost(input = 0.0, output = 0.0, cacheRead = 0.0, cacheWrite = 0.0), null)) {
+      composeRule.runOnIdle {
+        val messages = controllerFlow<List<ChatMessage>>("_messages")
+        val latestAssistant = messages.value.indexOfLast { it.role == "assistant" }
+        messages.value = messages.value.mapIndexed { index, message -> if (index == latestAssistant) message.copy(cost = cost) else message }
+      }
+      if (cost != null) {
+        composeRule.onNodeWithText(nativeString("Cost by type").uppercase()).performScrollTo().assertIsDisplayed()
+        composeRule.onAllNodesWithText("\$0.00").assertCountEquals(4)
+        listOf(nativeString("Cache read"), nativeString("Cache write")).forEach { label ->
+          composeRule.onNodeWithText(label).performScrollTo().assertIsDisplayed()
+        }
+      } else {
+        composeRule.onNodeWithText(nativeString("Cost by type").uppercase()).assertDoesNotExist()
+        composeRule.onAllNodesWithText("\$0.00").assertCountEquals(0)
+      }
+      composeRule.onNodeWithText(nativeString("Est. cost")).assertDoesNotExist()
+      composeRule.onNodeWithText(nativeString("Latest model call").uppercase()).assertDoesNotExist()
+    }
     composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).performSemanticsAction(SemanticsActions.Dismiss) { dismiss -> assertTrue(dismiss()) }
     composeRule.onNode(isDialog()).assertDoesNotExist()
     assertEquals("Dismissing composer settings must preserve the draft", editorBounds, editor.getUnclippedBoundsInRoot())

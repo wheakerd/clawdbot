@@ -60,7 +60,7 @@ internal fun ChatContextPopoverContent(
           nativeString("Cache read") to cost.cacheRead,
           nativeString("Cache write") to cost.cacheWrite,
         ).mapNotNull { (label, value) ->
-          value?.takeIf { it.isFinite() && it > 0.0 }?.let { label to formatContextEstimatedCost(it) }
+          value?.takeIf { it.isFinite() && it >= 0.0 }?.let { label to formatContextEstimatedCost(it) }
         }
       }.orEmpty()
 
