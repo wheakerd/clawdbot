@@ -186,7 +186,7 @@ describe("openclaw tool", () => {
 
   it("proposes storing a key the user gave in chat without repeating it", async () => {
     const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
-    const secret = "sk-owner-pasted-9d2e4b7c";
+    const secret = " sk-owner-pasted-9d2e4b7c\n";
     const result = await createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
       "owner-key",
       { action: "config_set_ref", path: "models.providers.openai.apiKey", secret },

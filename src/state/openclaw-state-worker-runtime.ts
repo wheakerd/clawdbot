@@ -99,6 +99,10 @@ import {
   executeProjectRegistryCommand,
   isProjectRegistryCommand,
 } from "../projects/project-registry.worker.js";
+import {
+  rollbackSecretStoreEntryWriteInDatabase,
+  writeSecretStoreEntryForConfigRefInDatabase,
+} from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
@@ -500,6 +504,12 @@ export function executeSharedStateCommand(
   }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
+  }
+  if (command.type === "secrets.writeForConfigRef") {
+    return writeSecretStoreEntryForConfigRefInDatabase(command.input, writeOptions);
+  }
+  if (command.type === "secrets.rollbackWrite") {
+    return rollbackSecretStoreEntryWriteInDatabase(command.input, writeOptions);
   }
   if (conversationBindings.isWriteCommand(command)) {
     return conversationBindings.executeCommand(command, writeOptions);

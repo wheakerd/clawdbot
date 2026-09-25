@@ -94,9 +94,10 @@ export function createOpenClawDelegateToolsForRun(
     description:
       "Delegate system setup or repair to a separate model turn. " +
       "Prefer your available tools for routine status and session/workspace checks. " +
-      "Gateway restart, config, channels, plugins, agents, models/providers, API keys. Pass along any API key or token the user gives you; OpenClaw stores it in its secret store. " +
+      "Gateway restart, config, channels, plugins, agents, models/providers, API keys. " +
+      "Setup flows use masked entry, which keeps keys out of model context; if the user already gave a key or token in chat, pass it along and OpenClaw stores it without echoing it. " +
       (fullPermission
-        ? `Full Access applies changes without asking, except permission policy (tool and exec policy, sandbox, approvals, owners), which waits for the user to approve ${approvalLocation}.`
+        ? "Full Access applies permitted changes without asking for approval."
         : `Changes wait for the user to approve ${approvalLocation} and return the final outcome.`),
     parameters: OpenClawDelegateSchema,
     outputSchema: OpenClawDelegateOutputSchema,

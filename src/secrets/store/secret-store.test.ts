@@ -13,6 +13,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../sentinel.js";
 import {
+  rollbackSecretStoreEntryWriteInDatabase,
+  writeSecretStoreEntryForConfigRefInDatabase,
+} from "./secret-store-config-ref.kernel.js";
+import {
   captureSecretStoreExpiryCutoffs,
   purgeExpiredSecretStoreEntriesInDatabase,
 } from "./secret-store-expiry.kernel.js";
@@ -94,6 +98,83 @@ describe("secret store", () => {
       ok: true,
       value: "unrelated-value",
     });
+  });
+
+  it("saves a chat secret beside another entry that already uses its preferred name", () => {
+    const database = createDatabaseOptions();
+    writeSecretStoreEntry({
+      scope: team,
+      name: "GATEWAY_REMOTE_TOKEN",
+      value: "owned-elsewhere",
+      kind: "secret",
+      updatedBy: "cli",
+      database,
+    });
+
+    const write = writeSecretStoreEntryForConfigRefInDatabase(
+      { baseName: "GATEWAY_REMOTE_TOKEN", value: "from-chat", writer: "openclaw:1", now: 1 },
+      database,
+    );
+
+    expect(write).toEqual({ name: "GATEWAY_REMOTE_TOKEN_2" });
+    expect(readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database })).toEqual({
+      ok: true,
+      value: "owned-elsewhere",
+    });
+    expect(
+      rollbackSecretStoreEntryWriteInDatabase(
+        { name: write.name, expectedUpdatedBy: "openclaw:1", now: 2 },
+        database,
+      ),
+    ).toBe(true);
+    expect(listSecretStoreEntries({ scope: team, database }).map((entry) => entry.name)).toEqual([
+      "GATEWAY_REMOTE_TOKEN",
+    ]);
+  });
+
+  it("replaces the entry a config key already references and rolls it back exactly", () => {
+    const database = createDatabaseOptions();
+    writeSecretStoreEntry({
+      scope: team,
+      name: "OPENAI_KEY",
+      value: "old-key",
+      kind: "secret",
+      updatedBy: "cli",
+      database,
+    });
+
+    const write = writeSecretStoreEntryForConfigRefInDatabase(
+      {
+        baseName: "MODELS_PROVIDERS_OPENAI_API_KEY",
+        value: "new-key",
+        replaceableName: "OPENAI_KEY",
+        writer: "openclaw:1",
+        now: 1,
+      },
+      database,
+    );
+
+    expect(write.name).toBe("OPENAI_KEY");
+    expect(readSecretStoreValue({ scope: team, name: "OPENAI_KEY", database })).toEqual({
+      ok: true,
+      value: "new-key",
+    });
+    rollbackSecretStoreEntryWriteInDatabase(
+      {
+        name: write.name,
+        expectedUpdatedBy: "openclaw:1",
+        ...(write.previous ? { previous: write.previous } : {}),
+        now: 2,
+      },
+      database,
+    );
+    expect(readSecretStoreValue({ scope: team, name: "OPENAI_KEY", database })).toEqual({
+      ok: true,
+      value: "old-key",
+    });
+    expect(listSecretStoreEntries({ scope: team, database })).toEqual([
+      expect.objectContaining({ name: "OPENAI_KEY", updatedBy: "cli" }),
+    ]);
   });
 
   it("round-trips env and secret entries without disclosing secret list values", () => {

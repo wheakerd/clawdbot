@@ -587,7 +587,7 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
     case "config-set-ref":
       return operation.secret === undefined
         ? `set config ${redactSystemAgentConfigPath(operation.path)} to ${operation.source} SecretRef <redacted>`
-        : `save the provided secret as ${operation.id} in the secret store and point config ${redactSystemAgentConfigPath(operation.path)} at it`;
+        : `save the provided secret in the secret store and point config ${redactSystemAgentConfigPath(operation.path)} at it`;
     case "setup":
       return formatSetupPlanDescription(operation);
     case "model-setup":

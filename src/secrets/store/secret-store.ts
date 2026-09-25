@@ -23,6 +23,10 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { normalizeExactAllowedHost } from "../exact-hostname.js";
 import { sealSecretSentinel } from "../sentinel.js";
+import {
+  rollbackSecretStoreEntryWriteInDatabase,
+  type SecretStoreWriteSnapshot,
+} from "./secret-store-config-ref.kernel.js";
 import { captureSecretStoreExpiryCutoffs } from "./secret-store-expiry.kernel.js";
 import {
   classifyHiddenGitHubStoreName,
@@ -62,13 +66,6 @@ export type SecretStoreWriteParams = {
   allowedHosts?: readonly string[];
   updatedBy: string | null;
   database?: OpenClawStateDatabaseOptions;
-};
-
-type SecretStoreWriteSnapshot = {
-  value: string;
-  kind: SecretStoreKind;
-  allowedHosts: string | null;
-  updatedBy: string | null;
 };
 
 export type SecretStoreEntryMetadata = {
@@ -516,49 +513,15 @@ function rollbackSecretStoreEntryWrite(params: {
   database?: OpenClawStateDatabaseOptions;
 }): boolean {
   assertSecretStoreMutationName(params.name);
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
-  const now = Date.now();
-  try {
-    return runOpenClawStateWriteTransaction(
-      ({ db: sqlite }) => {
-        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-        const query =
-          params.previous === undefined
-            ? db
-                .updateTable("secret_store_entries")
-                .set({ deleted_at_ms: now, updated_at_ms: now })
-                .where("scope_kind", "=", scopeKind)
-                .where("scope_id", "=", scopeId)
-                .where("name", "=", params.name)
-                .where("updated_by", "=", params.expectedUpdatedBy)
-                .where("deleted_at_ms", "is", null)
-            : db
-                .updateTable("secret_store_entries")
-                .set({
-                  value: params.previous.value,
-                  kind: params.previous.kind,
-                  allowed_hosts: params.previous.allowedHosts,
-                  updated_at_ms: now,
-                  updated_by: params.previous.updatedBy,
-                  deleted_at_ms: null,
-                })
-                .where("scope_kind", "=", scopeKind)
-                .where("scope_id", "=", scopeId)
-                .where("name", "=", params.name)
-                .where("updated_by", "=", params.expectedUpdatedBy)
-                .where("deleted_at_ms", "is", null);
-        const result = executeSqliteQuerySync(sqlite, query);
-        return Number(result.numAffectedRows ?? 0n) === 1;
-      },
-      params.database,
-      { operationLabel: "secrets.store.rollback-write" },
-    );
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return false;
-    }
-    throw error;
-  }
+  return rollbackSecretStoreEntryWriteInDatabase(
+    {
+      name: params.name,
+      expectedUpdatedBy: params.expectedUpdatedBy,
+      ...(params.previous ? { previous: params.previous } : {}),
+      now: Date.now(),
+    },
+    params.database,
+  );
 }
 
 /** Writes one entry and returns owner-checked compensation for that exact write. */
@@ -582,6 +545,47 @@ export function writeSecretStoreEntryWithRollback(params: SecretStoreWriteParams
       });
       return rollbackResult;
     },
+  };
+}
+
+/**
+ * Saves a secret for one config key in the team store through the state worker.
+ * Returns the entry name the key should reference and owner-checked compensation.
+ */
+export async function writeSecretStoreEntryForConfigRef(params: {
+  baseName: string;
+  value: string;
+  replaceableName?: string;
+  updatedBy: string;
+  database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+}): Promise<{ name: string; rollback: () => Promise<boolean> }> {
+  registerSecretValueForRedaction(params.value);
+  assertSecretStoreValue(params.value, "secret", params.baseName);
+  const writer = `${params.updatedBy}:${randomUUID()}`;
+  const context = captureOpenClawStateWorkerContext(params.database);
+  const { name, previous } = await executeOpenClawStateWorker(context, {
+    type: "secrets.writeForConfigRef",
+    input: {
+      baseName: params.baseName,
+      value: params.value,
+      ...(params.replaceableName ? { replaceableName: params.replaceableName } : {}),
+      writer,
+      now: Date.now(),
+    },
+  });
+  let rollbackResult: Promise<boolean> | undefined;
+  return {
+    name,
+    rollback: () =>
+      (rollbackResult ??= executeOpenClawStateWorker(context, {
+        type: "secrets.rollbackWrite",
+        input: {
+          name,
+          expectedUpdatedBy: writer,
+          ...(previous ? { previous } : {}),
+          now: Date.now(),
+        },
+      })),
   };
 }
 

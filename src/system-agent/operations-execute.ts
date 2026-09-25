@@ -366,13 +366,16 @@ export async function executeSystemAgentOperation(
         runtime,
         opts,
         run: async (ctx) => {
-          await runConfigSetOperation({ operation, ctx });
+          const { storeEntry } = await runConfigSetOperation({ operation, ctx });
           return {
-            summary: `Set config ${operation.path} SecretRef`,
+            summary: storeEntry
+              ? `Saved the secret as ${storeEntry} and set config ${operation.path} SecretRef`
+              : `Set config ${operation.path} SecretRef`,
             details: {
               path: operation.path,
               source: operation.source,
               provider: operation.provider ?? "default",
+              ...(storeEntry ? { storeEntry } : {}),
             },
           };
         },

@@ -120,11 +120,7 @@ Changes delegated by a regular agent, including requests from messaging channels
 follow the requesting run's effective [session permission policy](/gateway/permission-modes).
 Full Access applies the exact proposed operation automatically, including when
 Full Access comes from the configured default rather than an explicit session
-mode. Changes to permission policy (tool and exec policy, sandboxing, approvals,
-`commands.ownerAllowFrom`/`allowFrom`, channel exec approvers, `security`, and
-`skills.workshop.approvalPolicy`) are the exception: they always wait for a human
-decision, even in Full Access, so a run cannot widen its own authority unseen.
-Restricted runs from messaging channels ask for approval in the chat that
+mode. Restricted runs from messaging channels ask for approval in the chat that
 made the request: channels with native approval cards show **Allow once** and
 **Deny** buttons, and other messaging chats receive the change summary with a
 `/approve <id> allow-once|deny` reply. Webchat and terminal runs decide in the
@@ -166,10 +162,17 @@ New agents inherit the live-verified default inference route. The agent ids `ope
 writes use the existing config validator and writer. Validation or write errors
 return to the assistant for one corrective proposal, which needs fresh approval.
 A failure after saving is reported as such. Config writes do not test whether a
-model route or API key works. You can give OpenClaw an API key or token in chat:
-it saves the value in the [shared secret store](/gateway/secrets/secret-store-and-egress#shared-secret-store),
-points the config key at it with a `store` SecretRef, registers the value for log
-and transcript redaction, and never echoes it back. For environment storage, use
+model route or API key works. Masked setup flows keep keys out of the model's
+context. If you paste an API key or token in chat anyway, OpenClaw saves it in the
+[shared secret store](/gateway/secrets/secret-store-and-egress#shared-secret-store),
+points the config key at it with a `store` SecretRef, and does not echo it back.
+The pasted message itself already reached the model provider and the transcript;
+OpenClaw masks the value in later logs and output from that point on. A key that
+already references a store entry replaces that entry; otherwise OpenClaw names the
+entry after the config key (for example `GATEWAY_REMOTE_TOKEN`) and adds a `_2`,
+`_3`, ... suffix rather than overwrite an existing entry. If the running Gateway
+cannot reload the new value, the change still counts as saved and OpenClaw tells
+you to run `openclaw secrets reload`. For environment storage, use
 `config set-ref <path> env <ENV_VAR>`.
 `set default model <provider/model>` still live-tests the route before saving it.
 
