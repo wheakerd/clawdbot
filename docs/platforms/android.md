@@ -429,7 +429,7 @@ usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
 permission to change session settings. A reported model-call total remains visible
 when no cost breakdown is available. Missing usage is shown as unknown.
 Tap the model name to open a compact menu above the composer, search by model or
-provider, and expand provider groups. Provider gears open model setup. The Gateway's
+provider, and expand provider groups. The picker has no settings buttons. The Gateway's
 configured default is labeled on its model row; selecting it clears the session's
 model override. If that model is not known, **Default model** still resets the override.
 Pinned and recent models remain available. Long model names use a middle

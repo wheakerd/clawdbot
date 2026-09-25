@@ -170,7 +170,6 @@ import androidx.compose.material.icons.filled.Policy
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -1429,15 +1428,6 @@ internal fun ChatScreen(
                 openProviderSignIn()
               }
             },
-            onConfigureModels =
-              if (canAdminSessionSettings) {
-                {
-                  modelPicker.retire(opening)
-                  openProviderSignIn()
-                }
-              } else {
-                null
-              },
             onToggleFavorite = { ref ->
               val model = viewModel.chatModelCatalog.value.firstOrNull { it.providerQualifiedRef() == ref }
               if (modelPicker.admit(opening) && currentSession()?.modelSelectionLocked != true &&
@@ -4001,7 +3991,6 @@ private fun ChatModelPickerContent(
   admit: () -> Boolean,
   onSelect: (String?) -> Unit,
   onOpenProviders: (String) -> Unit,
-  onConfigureModels: (() -> Unit)?,
   onToggleFavorite: (String) -> Unit,
 ) {
   var query by remember { mutableStateOf("") }
@@ -4046,38 +4035,27 @@ private fun ChatModelPickerContent(
         )
       }
     }
-    if (modelSelectionLocked) {
-      if (onConfigureModels != null) {
-        item {
-          IconButton(onClick = { if (admit()) onConfigureModels() }, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
-            Icon(Icons.Default.Settings, contentDescription = nativeString("Providers"), tint = ClawTheme.colors.textSubtle, modifier = Modifier.size(16.dp))
-          }
-        }
-      }
-      return@LazyColumn
-    }
+    if (modelSelectionLocked) return@LazyColumn
 
     matchingModels.groupBy { it.provider }.entries.sortedBy { if (it.key == defaultModel?.provider) 0 else 1 }.forEach { (provider, entries) ->
       val expanded = query.isNotBlank() || provider in expandedProviders
       item(key = "provider-$provider") {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-          Surface(
-            onClick = { if (admit()) expandedProviders = if (expanded) expandedProviders - provider else expandedProviders + provider },
-            modifier = Modifier.weight(1f).heightIn(min = ClawTheme.spacing.touchTarget).semantics { stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed") },
-            color = Color.Transparent,
-            contentColor = ClawTheme.colors.textMuted,
-          ) {
-            Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-              ProviderBrandIcon(provider, size = 18.dp)
-              Text(providerDisplayName(provider), style = ClawTheme.type.label)
-              Text(entries.size.toString(), style = ClawTheme.type.caption)
-              Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(14.dp))
-            }
-          }
-          if (onConfigureModels != null) {
-            IconButton(onClick = { if (admit()) onConfigureModels() }, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
-              Icon(Icons.Default.Settings, contentDescription = nativeString("Providers"), tint = ClawTheme.colors.textSubtle, modifier = Modifier.size(16.dp))
-            }
+        Surface(
+          onClick = { if (admit()) expandedProviders = if (expanded) expandedProviders - provider else expandedProviders + provider },
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 8.dp)
+              .heightIn(min = ClawTheme.spacing.touchTarget)
+              .semantics { stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed") },
+          color = Color.Transparent,
+          contentColor = ClawTheme.colors.textMuted,
+        ) {
+          Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ProviderBrandIcon(provider, size = 18.dp)
+            Text(providerDisplayName(provider), style = ClawTheme.type.label)
+            Text(entries.size.toString(), style = ClawTheme.type.caption)
+            Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(14.dp))
           }
         }
       }
@@ -4100,15 +4078,10 @@ private fun ChatModelPickerContent(
     if (query.isNotBlank() && matchingModels.isEmpty()) {
       item { Text(nativeString("No matching models"), modifier = Modifier.padding(12.dp), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) }
     }
-    if (defaultModel == null || (matchingModels.isEmpty() && onConfigureModels != null)) {
+    if (defaultModel == null) {
       item {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
-          if (defaultModel == null) TextButton(onClick = { if (admit()) onSelect(null) }) { Text(nativeString("Default model")) }
-          if (matchingModels.isEmpty() && onConfigureModels != null) {
-            IconButton(onClick = { if (admit()) onConfigureModels() }, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
-              Icon(Icons.Default.Settings, contentDescription = nativeString("Providers"), tint = ClawTheme.colors.textSubtle, modifier = Modifier.size(16.dp))
-            }
-          }
+          TextButton(onClick = { if (admit()) onSelect(null) }) { Text(nativeString("Default model")) }
         }
       }
     }

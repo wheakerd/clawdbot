@@ -3845,8 +3845,9 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  @Config(qualifiers = "en-rUS-w390dp-h844dp-mdpi")
   fun modelSheetKeepsChatVisibleAndSearchesExpandableProviderGroups() {
-    showChat(viewportHeight = { 640.dp })
+    showChat(viewportWidth = 390.dp, viewportHeight = { 844.dp })
     val editor = composerEditor()
     editor.performTextReplacement("Keep this draft")
     composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
@@ -3858,6 +3859,22 @@ class ChatComposerLayoutTest {
     composeRule.onNodeWithText(nativeString("Sign in")).assertDoesNotExist()
     composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
     composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().assertHasClickAction()
+    System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR")?.let { directory ->
+      val folder = File(directory).apply { mkdirs() }
+      val image =
+        composeRule
+          .onNodeWithTag("chat-viewport")
+          .captureToImage()
+          .asAndroidBitmap()
+          .copy(Bitmap.Config.ARGB_8888, true)
+      composeRule.runOnIdle {
+        val root = checkNotNull(checkNotNull(ShadowDialog.getLatestDialog()).window).decorView
+        assertEquals(image.width, root.width)
+        assertEquals(image.height, root.height)
+        root.draw(Canvas(image))
+      }
+      File(folder, "model-picker.png").outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+    }
     val provider = composeRule.onNode(hasText("OpenAI") and SemanticsMatcher.keyIsDefined(SemanticsProperties.StateDescription))
     provider.performScrollTo().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed"))).performClick()
     provider.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
@@ -3870,9 +3887,9 @@ class ChatComposerLayoutTest {
     composeRule.onNode(hasText("GPT-5.2") and hasClickAction() and hasAnyAncestor(isDialog())).performScrollTo().assertIsDisplayed()
     composeRule.onNodeWithContentDescription(nativeString("Pin model")).performClick()
     provider.assertIsDisplayed()
-    composeRule.onNodeWithContentDescription(nativeString("Providers")).assertIsDisplayed().assertHasClickAction()
+    composeRule.onNodeWithContentDescription(nativeString("Providers")).assertDoesNotExist()
     composeRule.runOnIdle { controllerFlow<List<ai.openclaw.app.GatewayModelSummary>>("_modelCatalog").value = emptyList() }
-    composeRule.onNodeWithContentDescription(nativeString("Providers")).assertIsDisplayed().assertHasClickAction()
+    composeRule.onNodeWithContentDescription(nativeString("Providers")).assertDoesNotExist()
     editor.assertTextEquals("Keep this draft")
   }
 
@@ -4869,7 +4886,7 @@ class ChatComposerLayoutTest {
       }
       model.assertTextEquals(label).assertIsEnabled().performClick()
       composeRule.onNodeWithText(nativeString("Model selection is locked for this session.")).assertIsDisplayed()
-      composeRule.onNodeWithContentDescription(nativeString("Providers")).assertIsDisplayed().assertHasClickAction()
+      composeRule.onNodeWithContentDescription(nativeString("Providers")).assertDoesNotExist()
       composeRule.onNode(defaultModel).assertDoesNotExist()
       composeRule.onNode(hasText("GPT-5.2") and hasClickAction()).assertDoesNotExist()
       composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).performSemanticsAction(SemanticsActions.Dismiss) { dismiss -> assertTrue(dismiss()) }
