@@ -3863,6 +3863,7 @@ class ChatComposerLayoutTest {
     provider.performScrollTo().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed"))).performClick()
     provider.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
     composeRule.onNode(hasText("GPT-5.2") and hasText(nativeString("Default")) and hasClickAction()).assertIsDisplayed()
+    composeRule.runOnIdle { controller.handleGatewayEvent("config.changed", "{}") }
     System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR")?.let { directory ->
       val folder = File(directory).apply { mkdirs() }
       val image =
@@ -3877,8 +3878,9 @@ class ChatComposerLayoutTest {
         assertEquals(image.height, root.height)
         root.draw(Canvas(image))
       }
-      File(folder, "model-picker.png").outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+      File(folder, "model-default-change.png").outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
     }
+    composeRule.onNodeWithText(nativeString("Default")).assertDoesNotExist()
     composeRule
       .onNodeWithText(nativeString("Default model"))
       .performScrollTo()

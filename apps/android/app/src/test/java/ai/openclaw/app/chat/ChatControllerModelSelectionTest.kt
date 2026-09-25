@@ -1896,7 +1896,31 @@ class ChatControllerModelSelectionTest {
       advanceUntilIdle()
       assertEquals("fixture/other-default", controller.defaultModelRef.value)
 
-      setup.respond("chat.history", """{"sessionId":"session-other","messages":[],"sessionInfo":{"key":"agent:other:main","modelProvider":"fixture","model":"selected"}}""")
+      val beforeConfig = CompletableDeferred<String>()
+      setup.respond("chat.history") { beforeConfig.await() }
+      controller.refresh()
+      runCurrent()
+      val patchReply = CompletableDeferred<String>()
+      setup.respond("sessions.patch") { patchReply.await() }
+      val pendingModel = async { controller.setSessionModelAwait("agent:other:main", "fixture/pinned") }
+      runCurrent()
+      val afterConfig = CompletableDeferred<String>()
+      setup.respond("chat.history") { afterConfig.await() }
+      controller.handleGatewayEvent("config.changed", "{}")
+      assertNull("Configuration changes must retire the old default immediately", controller.defaultModelRef.value)
+      runCurrent()
+      beforeConfig.complete("""{"sessionId":"session-other","messages":[],"defaults":{"modelProvider":"fixture","model":"other-default"}}""")
+      runCurrent()
+      assertNull("A history request started before config.changed must not restore the old badge", controller.defaultModelRef.value)
+      afterConfig.complete("""{"sessionId":"session-other","messages":[],"defaults":{"modelProvider":"fixture","model":"changed-default"},"sessionInfo":{"key":"agent:other:main","modelProvider":"fixture","model":"selected"}}""")
+      advanceUntilIdle()
+      assertEquals("fixture/changed-default", controller.defaultModelRef.value)
+      assertFalse("Refreshing defaults must not cancel an admitted model change", pendingModel.isCompleted)
+      patchReply.complete("""{"resolved":{"modelProvider":"fixture","model":"pinned"}}""")
+      assertTrue(pendingModel.await())
+      assertEquals("fixture/pinned", controller.selectedModelRef.value)
+
+      setup.respond("chat.history", """{"sessionId":"session-other","messages":[],"sessionInfo":{"key":"agent:other:main","modelProvider":"fixture","model":"pinned"}}""")
       controller.refresh()
       advanceUntilIdle()
       assertNull("Missing defaults must not reuse the selected model or the previous default", controller.defaultModelRef.value)

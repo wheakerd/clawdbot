@@ -2976,7 +2976,6 @@ class ChatController internal constructor(
             val current = _sessions.value.firstOrNull { it.key == settingsKey.sessionKey } ?: lane.confirmed
             val settings = mergeChatSessionSettings(current, entry, authoritativeSessionSettings = true)
             upsertSessionEntry(settings.copy(ownerAgentId = ownerAgentId), replace = true, authoritativeSessionSettings = true)
-            if (settingsKey.sessionKey == _sessionKey.value) _defaultModelRef.value = parseDefaultModelRef(root)
             lane.needsRefresh = false
             lane.reconciliation = null
             removeCompletedSessionSettingsLane(settingsKey, lane, completion.pending)
@@ -4025,6 +4024,10 @@ class ChatController internal constructor(
         refreshCommands()
       }
 
+      "config.changed" -> {
+        refreshHistoryForRecovery(invalidateDefaultModel = true)
+      }
+
       "sessions.changed" -> {
         if (payloadJson.isNullOrBlank()) {
           refreshSessionsForCurrentWindow()
@@ -4502,6 +4505,7 @@ class ChatController internal constructor(
   private fun refreshHistoryForRecovery(
     forceHealth: Boolean = false,
     cacheReady: CompletableDeferred<Unit>? = null,
+    invalidateDefaultModel: Boolean = false,
   ) {
     val (key, generation) =
       synchronized(gatewayScopeApplyLock) {
@@ -4509,6 +4513,7 @@ class ChatController internal constructor(
         if (historyLoadErrorGeneration != null) updateErrorText(null)
         val key = normalizeRequestedSessionKey(_sessionKey.value)
         val generation = historyLoadGeneration.incrementAndGet()
+        if (invalidateDefaultModel) _defaultModelRef.value = null
         _sessionKey.value = key
         _historyLoading.value = true
         // A newer history request replaces transcript ownership, not an outstanding forced poll.
@@ -4723,6 +4728,7 @@ class ChatController internal constructor(
                     pendingRuns.filterNotTo(mutableSetOf()) { it in runIdsOwnedAtRequest }
                   }
                 latestAppliedHistoryRequest = requestSequence
+                _defaultModelRef.value = history.defaultModelRef
                 if (mutationReconciliationState == null && branchSnapshot != null && historyBranchState != previousState) {
                   historyBranchState?.let { publishedHistoryBranch = PublishedHistoryBranch(branchSnapshot, generation, it) }
                 }
@@ -8198,7 +8204,6 @@ class ChatController internal constructor(
     includeSessionInfo: Boolean = true,
     preserveSessionSettings: Boolean = false,
   ): ChatSessionEntry? {
-    if (includeSessionInfo && !preserveSessionSettings) _defaultModelRef.value = history.defaultModelRef
     val thinkingLevel = history.thinkingLevel?.trim()?.takeIf(String::isNotEmpty)
     // Full sessionInfo is authoritative even when usage is absent after compaction.
     // Thinking-only refreshes and partial events must retain their existing usage.
