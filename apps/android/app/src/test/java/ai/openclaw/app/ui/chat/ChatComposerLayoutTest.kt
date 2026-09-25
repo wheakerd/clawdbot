@@ -3848,6 +3848,7 @@ class ChatComposerLayoutTest {
   @Config(qualifiers = "en-rUS-w390dp-h844dp-mdpi")
   fun modelSheetKeepsChatVisibleAndSearchesExpandableProviderGroups() {
     showChat(viewportWidth = 390.dp, viewportHeight = { 844.dp })
+    composeRule.runOnIdle { controllerFlow<String?>("_defaultModelRef").value = "openai/gpt-5.2" }
     val editor = composerEditor()
     editor.performTextReplacement("Keep this draft")
     composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
@@ -3858,7 +3859,10 @@ class ChatComposerLayoutTest {
     assertTrue("Model menu opens above the composer", sheet.bottom <= composer.top)
     composeRule.onNodeWithText(nativeString("Sign in")).assertDoesNotExist()
     composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
-    composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().assertHasClickAction()
+    val provider = composeRule.onNode(hasText("OpenAI") and SemanticsMatcher.keyIsDefined(SemanticsProperties.StateDescription))
+    provider.performScrollTo().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed"))).performClick()
+    provider.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    composeRule.onNode(hasText("GPT-5.2") and hasText(nativeString("Default")) and hasClickAction()).assertIsDisplayed()
     System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR")?.let { directory ->
       val folder = File(directory).apply { mkdirs() }
       val image =
@@ -3875,10 +3879,11 @@ class ChatComposerLayoutTest {
       }
       File(folder, "model-picker.png").outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
     }
-    val provider = composeRule.onNode(hasText("OpenAI") and SemanticsMatcher.keyIsDefined(SemanticsProperties.StateDescription))
-    provider.performScrollTo().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed"))).performClick()
-    provider.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
-    composeRule.onNode(hasText("GPT-5.2") and hasClickAction() and hasAnyAncestor(isDialog())).performScrollTo().assertIsDisplayed()
+    composeRule
+      .onNodeWithText(nativeString("Default model"))
+      .performScrollTo()
+      .assertIsDisplayed()
+      .assertHasClickAction()
     val search = composeRule.onNodeWithContentDescription(nativeString("Search models"))
     search.performScrollTo().performTextReplacement("no-such-model")
     composeRule.onNodeWithText(nativeString("No matching models")).performScrollTo().assertIsDisplayed()
@@ -4712,7 +4717,7 @@ class ChatComposerLayoutTest {
 
   @Test
   @Config(qualifiers = "w800dp-h800dp-mdpi")
-  fun modelOpeningDoesNotCancelOrRetargetAnAlreadyAdmittedModelEffect() {
+  fun modelSelectionPinsNamedDefaultAndKeepsAdmittedEffectOwned() {
     prefs.gatewayRegistry.upsert(
       GatewayRegistryEntry(stableId = AndroidScreenshotFixture.gatewayId, kind = GatewayRegistryEntryKind.MANUAL, name = "Test gateway"),
     )
@@ -4764,7 +4769,7 @@ class ChatComposerLayoutTest {
           composeRule.runOnIdle { assertEquals("An unavailable default must open Providers", beforeProviders + 1, providersOpened) }
         }
         composeRule.onNode(isDialog()).assertDoesNotExist()
-        assertTrue("An unavailable default must not clear the override", admitted.isEmpty())
+        assertTrue("An unavailable model must not change the override", admitted.isEmpty())
       }
 
       publishAvailability(null)
@@ -4774,7 +4779,7 @@ class ChatComposerLayoutTest {
       composeRule.runOnUiThread {
         assertTrue("The old row remains attached before recomposition", checkNotNull(ShadowDialog.getLatestDialog()).isShowing)
         staleSelect()
-        assertTrue("A rendered default must revalidate current availability before clearing the override", admitted.isEmpty())
+        assertTrue("A rendered model must revalidate current availability before selection", admitted.isEmpty())
       }
       composeRule.mainClock.autoAdvance = true
       composeRule.waitForIdle()
@@ -4804,10 +4809,15 @@ class ChatComposerLayoutTest {
       assertTrue("Business completion must not close the new selector", fresh.isShowing)
       assertEquals(1, admitted.size)
       val (gateway, payload) = admitted.single()
-      assertEquals("Choosing the configured default clears the override", kotlinx.serialization.json.JsonNull, payload["model"])
+      assertEquals("A named row pins that model independently of its default badge", JsonPrimitive("openai/gpt-5.2"), payload["model"])
       assertEquals(originalOwner.gatewayStableId, gateway)
       assertEquals(JsonPrimitive(originalSession), payload["key"])
       assertEquals(JsonPrimitive(originalOwner.agentId), payload["agentId"])
+      composeRule.onNode(hasText("OpenAI") and SemanticsMatcher.keyIsDefined(SemanticsProperties.StateDescription)).performClick()
+      composeRule.onNode(hasText("GPT-5.2") and hasText(nativeString("Default")) and hasClickAction()).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Default model")).performScrollTo().performClick()
+      composeRule.waitUntil { admitted.size == 2 }
+      assertEquals("Only the separate default action clears the override", kotlinx.serialization.json.JsonNull, admitted.last().second["model"])
     }
   }
 

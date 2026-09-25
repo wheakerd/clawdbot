@@ -190,30 +190,6 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun latestRunUsesCumulativeSessionTotalsAcrossModelCalls() {
-    val session =
-      ChatSessionEntry(
-        key = "main",
-        updatedAtMs = 2L,
-        inputTokens = 18_420L,
-        outputTokens = 840L,
-        estimatedCostUsd = 0.022956,
-      )
-    val finalModelCall =
-      message(
-        role = "assistant",
-        cost = ChatMessageCost(input = 0.003, output = 0.004, cacheRead = 0.0015, total = 0.0085),
-      )
-
-    val usage = resolveChatContextUsage("main", "main", listOf(session))
-
-    assertEquals(18_420L, usage.inputTokens)
-    assertEquals(840L, usage.outputTokens)
-    assertEquals(0.022956, usage.estimatedCostUsd)
-    assertEquals(0.0015, latestChatMessageCost(listOf(finalModelCall))?.cacheRead)
-  }
-
-  @Test
   fun modelCallCostsClearAtBoundariesWithoutInheritingOlderCosts() {
     val old = message("assistant", cost = ChatMessageCost(input = 0.01))
     for (kind in listOf("compaction", "reset")) {

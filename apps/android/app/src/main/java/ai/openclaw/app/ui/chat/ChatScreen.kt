@@ -1413,10 +1413,7 @@ internal fun ChatScreen(
                 (modelRef == null || model?.let(::chatModelPickerAction) == ChatModelPickerAction.Select)
               ) {
                 modelPicker.retire(opening)
-                viewModel.setChatSessionModel(
-                  sessionKey = opening.sessionKey,
-                  modelRef = modelRef.takeUnless { it == viewModel.chatDefaultModelRef.value },
-                )
+                viewModel.setChatSessionModel(sessionKey = opening.sessionKey, modelRef = modelRef)
               }
             },
             onOpenProviders = { ref ->
@@ -4078,11 +4075,9 @@ private fun ChatModelPickerContent(
     if (query.isNotBlank() && matchingModels.isEmpty()) {
       item { Text(nativeString("No matching models"), modifier = Modifier.padding(12.dp), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) }
     }
-    if (defaultModel == null) {
-      item {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
-          TextButton(onClick = { if (admit()) onSelect(null) }) { Text(nativeString("Default model")) }
-        }
+    item {
+      Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
+        TextButton(onClick = { if (admit()) onSelect(null) }) { Text(nativeString("Default model")) }
       }
     }
   }

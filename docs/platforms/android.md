@@ -430,8 +430,9 @@ permission to change session settings. A reported model-call total remains visib
 when no cost breakdown is available. Missing usage is shown as unknown.
 Tap the model name to open a compact menu above the composer, search by model or
 provider, and expand provider groups. The picker has no settings buttons. The Gateway's
-configured default is labeled on its model row; selecting it clears the session's
-model override. If that model is not known, **Default model** still resets the override.
+configured default is labeled on its model row. Selecting a named model pins that
+model to the session; **Default model** separately resets the override to follow the
+Gateway's current default.
 Pinned and recent models remain available. Long model names use a middle
 ellipsis, with the full name available in the picker. The effort dial opens its
 slider and Fast mode without expanding the composer. Dragging the slider previews
