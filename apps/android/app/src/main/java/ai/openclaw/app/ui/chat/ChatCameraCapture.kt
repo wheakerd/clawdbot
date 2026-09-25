@@ -8,7 +8,6 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.net.toUri
 import java.io.File
 import java.util.UUID
 
@@ -113,7 +113,7 @@ internal fun rememberChatCameraCapture(
       confirmButton = {
         TextButton(onClick = {
           failure = null
-          context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.packageName}")))
+          context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${app.packageName}".toUri()))
         }) { Text(nativeString("Open settings")) }
       },
       dismissButton = { TextButton(onClick = { failure = null }) { Text(nativeString("Cancel")) } },
