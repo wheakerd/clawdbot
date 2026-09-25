@@ -166,6 +166,7 @@ async function runDoctorHealthFlowWithResult(
       root,
       runtime: repairRuntime,
       assertCurrent: writeAuthority?.assertCurrent,
+      databaseGenerations: writeAuthority?.databaseGenerations,
     });
     const runChecks = async () => {
       const doctorRuntime = maintenance ? repairRuntime : effectiveRuntime;
@@ -526,12 +527,16 @@ async function runDoctorHealthFlowWithResult(
         const warnings = normalizeUpdatePostInstallDoctorWarnings([
           ...contributionWarnings.slice(0, deferredCount),
           ...(doctorResult.warnings ?? []),
+          ...(maintenance?.warnings ?? []).filter(
+            (warning) => !doctorResult.warnings?.includes(warning),
+          ),
           ...contributionWarnings.slice(deferredCount),
         ]);
         await writeUpdatePostInstallDoctorResult({
           resultPath: updateResult.resultPath,
           result: {
             ...doctorResult,
+            ...(maintenance?.databaseWrites ? { databaseWrites: maintenance.databaseWrites } : {}),
             ...(warnings.length ? { warnings } : {}),
             ...(updateResult.capture.configChanges.length
               ? { configChanges: updateResult.capture.configChanges }

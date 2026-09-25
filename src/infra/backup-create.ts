@@ -522,7 +522,7 @@ export async function createBackupArchive(
       const isDirectory = entryStat.isDirectory();
       if (
         !onlyConfig &&
-        !(isDirectory
+        !(isDirectory || entryStat.isSymbolicLink()
           ? inventory.isTraversable(resolvedEntryPath)
           : inventory.isIncluded(resolvedEntryPath))
       ) {

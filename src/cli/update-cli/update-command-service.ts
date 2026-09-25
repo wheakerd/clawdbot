@@ -194,6 +194,7 @@ export async function maybeRestartService(params: {
   onVerificationFailure?: (reason: string) => void;
   onPluginWarnings?: (warnings: readonly PluginUpdateWarning[]) => void;
   onVerified?: (verifiedAtMs: number) => void;
+  onGatewayStartAttempted?: () => void;
   definitionRecovery?: UpdateServiceDefinitionRecovery;
   expectedGatewayIdentity?: { version: string; buildId?: string };
 }): Promise<
@@ -342,6 +343,7 @@ export async function maybeRestartService(params: {
           health = await reinspect();
         }
         const recovery = await recoverLaunchAgentAndRecheckGatewayHealth({
+          onGatewayStartAttempted: params.onGatewayStartAttempted,
           updateRun: params.opts.run,
           assertCurrent,
           preserveDefinition,

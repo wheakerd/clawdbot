@@ -57,6 +57,7 @@ type PostUpdateGatewayHealthRecoveryDeps = {
 };
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
+  onGatewayStartAttempted?: () => void;
   updateRun?: UpdateCommandOptions["run"];
   assertCurrent?: () => void;
   preserveDefinition?: boolean;
@@ -95,6 +96,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
       };
       assertRecovery();
       const recovery = await recoverLaunchAgent({
+        onGatewayStartAttempted: params.onGatewayStartAttempted,
         service: params.service,
         env: params.env,
         assertCurrent: assertRecovery,
@@ -174,6 +176,7 @@ export function formatPostUpdateGatewayRecoveryInstructions(
 }
 
 export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
+  onGatewayStartAttempted?: () => void;
   updateRun?: UpdateCommandOptions["run"];
   preManagedServiceStop: PreManagedServiceStop | undefined;
   recovery?: UpdateRunResult["recovery"];
@@ -233,6 +236,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       await restoreOriginalManagedServiceDefinition({
         original,
         run,
+        onGatewayStartAttempted: params.onGatewayStartAttempted,
         assertCurrent: assertOriginal,
         stdout: params.jsonMode ? QUIET_SERVICE_STDOUT : process.stdout,
         timeoutMs: params.timeoutMs,
@@ -285,6 +289,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     // under its final native-operation lock while retaining both A/B authorities.
     if (original && run) {
       const restart = await restartRetainedUpdateGatewayService({
+        onGatewayStartAttempted: params.onGatewayStartAttempted,
         run,
         root: original.root,
         env: serviceEnv,
@@ -306,6 +311,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     } else {
       await runUpdatedInstallGatewayCommand(
         {
+          onGatewayStartAttempted: params.onGatewayStartAttempted,
           result: { root: original?.root ?? verdict.root },
           opts: { json: params.jsonMode, run },
           invocationEnv: serviceEnv,
@@ -392,6 +398,7 @@ export async function compensateOriginalManagedService(
     preManagedServiceStop?: PreManagedServiceStop;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
     allowGatewayRestart?: boolean;
+    onGatewayStartAttempted?: () => void;
     timeoutMs: number;
     invocationCwd?: string;
   },
@@ -413,6 +420,7 @@ export async function compensateOriginalManagedService(
     params.allowGatewayRestart === false
       ? undefined
       : await maybeRestartServiceAfterFailedMutableUpdate({
+          onGatewayStartAttempted: params.onGatewayStartAttempted,
           updateRun: run,
           preManagedServiceStop: before,
           originalManagedServiceRuntime: original,
