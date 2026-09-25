@@ -177,6 +177,47 @@ describe("secret store", () => {
     ]);
   });
 
+  it("drops a deleted entry's host grants when a chat secret reuses its name", () => {
+    const database = createDatabaseOptions();
+    writeSecretStoreEntry({
+      scope: team,
+      name: "GATEWAY_REMOTE_TOKEN",
+      value: "retired",
+      kind: "secret",
+      allowedHosts: ["api.example.com"],
+      updatedBy: "cli",
+      database,
+    });
+    deleteSecretStoreEntry({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database });
+
+    const write = writeSecretStoreEntryForConfigRefInDatabase(
+      { baseName: "GATEWAY_REMOTE_TOKEN", value: "from-chat", writer: "openclaw:1", now: 1 },
+      database,
+    );
+
+    expect(write.name).toBe("GATEWAY_REMOTE_TOKEN");
+    const [entry] = listSecretStoreEntries({ scope: team, database });
+    expect(entry?.allowedHosts ?? []).toEqual([]);
+  });
+
+  it("writes nothing when the requester loses authority before commit", () => {
+    const database = createDatabaseOptions();
+
+    expect(() =>
+      writeSecretStoreEntryForConfigRefInDatabase(
+        { baseName: "GATEWAY_REMOTE_TOKEN", value: "from-chat", writer: "openclaw:1", now: 1 },
+        database,
+        (stage) => {
+          if (stage === "commit") {
+            throw new Error("requesting run is no longer active");
+          }
+        },
+      ),
+    ).toThrow("no longer active");
+
+    expect(listSecretStoreEntries({ scope: team, includeDeleted: true, database })).toEqual([]);
+  });
+
   it("round-trips env and secret entries without disclosing secret list values", () => {
     const database = createDatabaseOptions();
     writeSecretStoreEntry({

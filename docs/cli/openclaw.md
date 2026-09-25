@@ -167,10 +167,12 @@ context. If you paste an API key or token in chat anyway, OpenClaw saves it in t
 [shared secret store](/gateway/secrets/secret-store-and-egress#shared-secret-store),
 points the config key at it with a `store` SecretRef, and does not echo it back.
 The pasted message itself already reached the model provider and the transcript;
-OpenClaw masks the value in later logs and output from that point on. A key that
-already references a store entry replaces that entry; otherwise OpenClaw names the
-entry after the config key (for example `GATEWAY_REMOTE_TOKEN`) and adds a `_2`,
-`_3`, ... suffix rather than overwrite an existing entry. If the running Gateway
+OpenClaw masks the value in later logs and output from that point on. When the
+config key already references a store entry that no other config key or auth
+profile in the running Gateway uses, OpenClaw replaces that entry. Otherwise it
+names a new entry after the config key (for example `GATEWAY_REMOTE_TOKEN`) and
+adds a `_2`, `_3`, ... suffix rather than change an entry something else uses. A
+reused name from a deleted entry starts without its old allowed hosts. If the running Gateway
 cannot reload the new value, the change still counts as saved and OpenClaw tells
 you to run `openclaw secrets reload`. For environment storage, use
 `config set-ref <path> env <ENV_VAR>`.

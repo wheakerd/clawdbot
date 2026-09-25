@@ -200,7 +200,7 @@ export function toolSearchOutputHasCandidate(output: unknown, targetTool: string
 }
 
 /** Stand-in for an API key an owner pastes into chat. */
-export const QA_OWNER_CHAT_SECRET = "qa-owner-remote-token-5c1e8f2a9b7d";
+const QA_OWNER_CHAT_SECRET = "qa-owner-remote-token-5c1e8f2a9b7d";
 export function buildQaToolSearchArgs(
   targetTool: string,
   failureMode: boolean,

@@ -337,14 +337,27 @@ export async function runConfigSetOperation(params: {
     resolveDefaultSecretProviderAlias(snapshot.config, "store", {
       preferFirstProviderForSource: true,
     });
-  // A key that already points at a store entry replaces that entry; any other
-  // entry under the preferred name belongs to someone else.
+  // Replace the key's current store entry only when nothing else uses it;
+  // otherwise take a fresh name so other consumers keep their credential.
+  const configPath = parseConfigSetPath(operation.path);
   const currentRef = coerceSecretRef(
-    getAtPath(snapshot.sourceConfig, parseConfigSetPath(operation.path)).value,
+    getAtPath(snapshot.sourceConfig, configPath).value,
     snapshot.config.secrets?.defaults,
   );
+  const [{ isOnlySecretStoreReference }, { getActiveSecretsRuntimeSnapshotState }] =
+    await Promise.all([
+      import("../secrets/located-secret-refs.js"),
+      import("../secrets/runtime-state.js"),
+    ]);
   const replaceableName =
-    currentRef?.source === "store" && currentRef.provider === refProvider
+    currentRef?.source === "store" &&
+    currentRef.provider === refProvider &&
+    isOnlySecretStoreReference({
+      sourceConfig: snapshot.sourceConfig,
+      authStores: getActiveSecretsRuntimeSnapshotState()?.authStores,
+      path: configPath,
+      name: currentRef.id,
+    })
       ? currentRef.id
       : undefined;
   // The SQLite store stays off the load path of every other config write.
@@ -355,6 +368,8 @@ export async function runConfigSetOperation(params: {
       value: secret,
       ...(replaceableName ? { replaceableName } : {}),
       updatedBy: "openclaw",
+      // The worker re-checks the requester at transaction and commit admission.
+      ...(ctx.assertPersistentApply ? { assertCurrent: ctx.assertPersistentApply } : {}),
     }),
   );
   try {

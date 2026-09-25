@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
+import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
@@ -20,7 +21,10 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
+import {
+  executeOpenClawStateWorker,
+  runOpenClawStateWorkerOperation,
+} from "../../state/openclaw-state-worker-store.js";
 import { normalizeExactAllowedHost } from "../exact-hostname.js";
 import { sealSecretSentinel } from "../sentinel.js";
 import {
@@ -550,6 +554,8 @@ export function writeSecretStoreEntryWithRollback(params: SecretStoreWriteParams
 
 /**
  * Saves a secret for one config key in the team store through the state worker.
+ * `assertCurrent` is the requester's live authority; the worker checks it again
+ * at transaction and commit admission, so a revoked request writes nothing.
  * Returns the entry name the key should reference and owner-checked compensation.
  */
 export async function writeSecretStoreEntryForConfigRef(params: {
@@ -557,22 +563,37 @@ export async function writeSecretStoreEntryForConfigRef(params: {
   value: string;
   replaceableName?: string;
   updatedBy: string;
+  assertCurrent?: () => void;
   database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
 }): Promise<{ name: string; rollback: () => Promise<boolean> }> {
   registerSecretValueForRedaction(params.value);
   assertSecretStoreValue(params.value, "secret", params.baseName);
   const writer = `${params.updatedBy}:${randomUUID()}`;
   const context = captureOpenClawStateWorkerContext(params.database);
-  const { name, previous } = await executeOpenClawStateWorker(context, {
-    type: "secrets.writeForConfigRef",
-    input: {
-      baseName: params.baseName,
-      value: params.value,
-      ...(params.replaceableName ? { replaceableName: params.replaceableName } : {}),
-      writer,
-      now: Date.now(),
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    params.assertCurrent?.();
+  };
+  const { name, previous } = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        type: "secrets.writeForConfigRef",
+        input: {
+          baseName: params.baseName,
+          value: params.value,
+          ...(params.replaceableName ? { replaceableName: params.replaceableName } : {}),
+          writer,
+          now: Date.now(),
+        },
+      }),
+    {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+        context.admission.databasePath,
+      ]),
     },
-  });
+  );
   let rollbackResult: Promise<boolean> | undefined;
   return {
     name,

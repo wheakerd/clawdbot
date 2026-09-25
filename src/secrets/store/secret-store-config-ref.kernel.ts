@@ -50,14 +50,17 @@ export type SecretStoreRollbackWrite = {
 };
 
 /**
- * Saves a chat-provided secret for one config key. A key that already points at
- * a store entry replaces that entry. Otherwise a live entry under the preferred
- * name belongs to someone else, so the write takes the first free `NAME`,
- * `NAME_2`, ... instead of replacing it.
+ * Saves a chat-provided secret for one config key. `replaceableName` is the
+ * key's own store entry and is replaced in place, keeping its host grants.
+ * Otherwise a live entry under the preferred name belongs to someone else, so
+ * the write takes the first free `NAME`, `NAME_2`, ... A recycled soft-deleted
+ * name starts without the old entry's host grants. `admit` fences the write
+ * with the requester's live authority at transaction and commit.
  */
 export function writeSecretStoreEntryForConfigRefInDatabase(
   input: SecretStoreConfigRefWrite,
   databaseOptions?: OpenClawStateDatabaseOptions,
+  admit?: (stage: "transaction" | "commit") => void,
 ): SecretStoreConfigRefWriteResult {
   const base = input.baseName.slice(0, CONFIG_REF_NAME_BASE_MAX);
   const candidates = input.replaceableName
@@ -70,6 +73,7 @@ export function writeSecretStoreEntryForConfigRefInDatabase(
   }
   return runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
+      admit?.("transaction");
       ensureSecretStoreSchema(sqlite);
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
       for (const name of candidates) {
@@ -109,9 +113,11 @@ export function writeSecretStoreEntryForConfigRefInDatabase(
                 updated_at_ms: input.now,
                 updated_by: input.writer,
                 deleted_at_ms: null,
+                allowed_hosts: existing?.allowed_hosts ?? null,
               }),
             ),
         );
+        admit?.("commit");
         return existing
           ? {
               name,

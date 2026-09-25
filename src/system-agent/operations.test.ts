@@ -183,22 +183,41 @@ const mockScheduleGatewayRestart = vi.hoisted(() =>
     emitHooksQueued: false,
   })),
 );
-// Unit threads have no host broker; run the secret-store worker commands inline.
+// Unit threads have no host broker; run the secret-store worker commands inline,
+// admitting their transaction and commit through the requester's guard.
 vi.mock("../state/openclaw-state-worker-store.js", async (importOriginal) => {
   const kernel = await import("../secrets/store/secret-store-config-ref.kernel.js");
+  const execute = async (
+    command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
+    assertCurrent?: () => void,
+  ) => {
+    if (command.type === "secrets.writeForConfigRef") {
+      return kernel.writeSecretStoreEntryForConfigRefInDatabase(command.input, undefined, () =>
+        assertCurrent?.(),
+      );
+    }
+    if (command.type === "secrets.rollbackWrite") {
+      return kernel.rollbackSecretStoreEntryWriteInDatabase(command.input);
+    }
+    throw new Error(`unexpected state worker command ${command.type}`);
+  };
   return {
     ...(await importOriginal<typeof import("../state/openclaw-state-worker-store.js")>()),
     executeOpenClawStateWorker: async (
       _context: unknown,
       command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
+    ) => await execute(command),
+    runOpenClawStateWorkerOperation: async (
+      _context: unknown,
+      operation: (scope: {
+        execute: (command: SqliteWorkerCommand<OpenClawStateWorkerOperations>) => unknown;
+      }) => Promise<unknown>,
+      options?: { assertCurrent?: () => void },
     ) => {
-      if (command.type === "secrets.writeForConfigRef") {
-        return kernel.writeSecretStoreEntryForConfigRefInDatabase(command.input);
-      }
-      if (command.type === "secrets.rollbackWrite") {
-        return kernel.rollbackSecretStoreEntryWriteInDatabase(command.input);
-      }
-      throw new Error(`unexpected state worker command ${command.type}`);
+      options?.assertCurrent?.();
+      return await operation({
+        execute: (command) => execute(command, options?.assertCurrent),
+      });
     },
   };
 });
@@ -842,8 +861,11 @@ describe("system agent operations", () => {
     it("removes the stored key when authority is revoked at the config write", async () => {
       useOperationStateDir("openclaw-chat-secret-rollback-");
       const { runtime } = createSystemAgentTestRuntime();
-      let authorityChecks = 0;
+      let revoked = false;
       const runConfigSet = vi.fn(async (setOpts: { beforePersistentApply?: () => void }) => {
+        // The run is stopped after the key is stored, before the config write lands.
+        expect(readStored()).toMatchObject({ ok: true, value: operation.secret });
+        revoked = true;
         setOpts.beforePersistentApply?.();
       });
 
@@ -851,8 +873,7 @@ describe("system agent operations", () => {
         executeSystemAgentOperation(operation, runtime, {
           approved: true,
           beforePersistentApply: () => {
-            authorityChecks += 1;
-            if (authorityChecks > 1) {
+            if (revoked) {
               throw new Error("requesting run is no longer active");
             }
           },

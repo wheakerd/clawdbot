@@ -1,4 +1,4 @@
-title: OpenClaw stores a key given in chat without taking over an existing store entry
+title: OpenClaw stores an owner's chat key without taking over an existing entry, and ignores a non-owner's
 
 scenario:
   id: system-agent-owner-trust
@@ -12,12 +12,16 @@ scenario:
   gatewayConfigPatch:
     commands:
       ownerAllowFrom: [qa-channel:alice]
+      # Bob may talk to the agent but is not an owner.
+      allowFrom:
+        qa-channel: [alice, bob]
     agents:
       entries:
         qa:
           tools:
             alsoAllow: [openclaw]
   successCriteria:
+    - A non-owner who sends the same key gets no store entry and no config change.
     - A token given in chat is saved as a store SecretRef at the requested config key without an approval prompt, and never appears in chat or config.
     - An unrelated store entry named like the config key keeps its value; the chat token gets its own entry.
   docsRefs:
@@ -32,6 +36,7 @@ scenario:
       requiredProviderMode: mock-openai
       requiredProvider: mock-openai
       secretConversationId: qa-system-agent-owner-trust-secret
+      nonOwnerConversationId: qa-system-agent-owner-trust-non-owner
       secret: qa-owner-remote-token-5c1e8f2a9b7d
       existingSecret: qa-existing-unrelated-token-1b4d
       secretPrompt: "@openclaw tool search qa check target=openclaw openclaw_fixture=chat-secret. My remote Gateway token is qa-owner-remote-token-5c1e8f2a9b7d, save it. Call the openclaw tool exactly once, then reply exactly: QA-OWNER-TRUST-SECRET-OK."
@@ -39,7 +44,7 @@ scenario:
 
 flow:
   steps:
-    - name: stores a key given in chat beside an existing entry
+    - name: stores an owner's key beside an existing entry and ignores a non-owner's
       actions:
         - assert:
             expr: "env.providerMode === 'mock-openai'"
@@ -64,6 +69,40 @@ flow:
         - set: existingBefore
           value:
             expr: "((await env.gateway.call('secrets.store.list', {}, { timeoutMs: 60000 })).entries ?? []).find((entry) => entry.name === 'GATEWAY_REMOTE_TOKEN')"
+        - set: nonOwnerConversation
+          value:
+            id:
+              expr: config.nonOwnerConversationId
+            kind: channel
+            title: QA Owner Trust Non-Owner
+        - sendInbound:
+            conversation:
+              ref: nonOwnerConversation
+            senderId: bob
+            senderName: Bob
+            text:
+              expr: config.secretPrompt
+        - call: waitForOutboundMessage
+          saveAs: nonOwnerReply
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === nonOwnerConversation.id"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - set: nonOwnerEntries
+          value:
+            expr: "(await env.gateway.call('secrets.store.list', {}, { timeoutMs: 60000 })).entries ?? []"
+        - set: nonOwnerRef
+          value:
+            expr: "(await env.gateway.call('config.get', {}, { timeoutMs: 60000 })).config?.gateway?.remote?.token ?? null"
+        - assert:
+            expr: "nonOwnerRef === null && nonOwnerEntries.length === 1 && nonOwnerEntries[0].name === 'GATEWAY_REMOTE_TOKEN'"
+            message:
+              expr: "`a non-owner's key reached the store or config: ${JSON.stringify({ nonOwnerRef, names: nonOwnerEntries.map((entry) => entry.name) })}`"
+        - assert:
+            expr: "!String(nonOwnerReply.text ?? '').includes(config.secret)"
+            message: the non-owner reply echoed the key
         - set: secretConversation
           value:
             id:
@@ -118,4 +157,4 @@ flow:
             expr: "!outboundTexts.some((text) => text.includes(config.secret)) && !outboundTexts.some((text) => text.includes('/approve'))"
             message:
               expr: "`the token was echoed, or Full Access asked for approval: ${JSON.stringify(outboundTexts)}`"
-      detailsExpr: "JSON.stringify({ storedRef, storeEntryNames: storeEntries.map((entry) => entry.name), existingBefore, existingAfter, outboundTexts }, null, 2)"
+      detailsExpr: "JSON.stringify({ nonOwnerReply: nonOwnerReply.text, nonOwnerEntryNames: nonOwnerEntries.map((entry) => entry.name), storedRef, storeEntryNames: storeEntries.map((entry) => entry.name), existingBefore, existingAfter, outboundTexts }, null, 2)"

@@ -506,7 +506,9 @@ export function executeSharedStateCommand(
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }
   if (command.type === "secrets.writeForConfigRef") {
-    return writeSecretStoreEntryForConfigRefInDatabase(command.input, writeOptions);
+    return writeSecretStoreEntryForConfigRefInDatabase(command.input, writeOptions, (stage) =>
+      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
   }
   if (command.type === "secrets.rollbackWrite") {
     return rollbackSecretStoreEntryWriteInDatabase(command.input, writeOptions);
