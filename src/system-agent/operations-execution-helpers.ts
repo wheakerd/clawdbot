@@ -332,18 +332,24 @@ export async function runConfigSetOperation(params: {
   }
   const secret = operation.secret;
   const snapshot = await (await loadConfigModule()).readConfigFileSnapshot();
-  const refProvider =
-    operation.provider ??
-    resolveDefaultSecretProviderAlias(snapshot.config, "store", {
-      preferFirstProviderForSource: true,
-    });
-  // Replace the key's current store entry only when nothing else uses it;
-  // otherwise take a fresh name so other consumers keep their credential.
   const configPath = parseConfigSetPath(operation.path);
   const currentRef = coerceSecretRef(
     getAtPath(snapshot.sourceConfig, configPath).value,
     snapshot.config.secrets?.defaults,
   );
+  const defaultStoreProvider = resolveDefaultSecretProviderAlias(snapshot.config, "store", {
+    preferFirstProviderForSource: true,
+  });
+  // Rotating a key keeps the store provider it already uses.
+  const refProvider =
+    operation.provider ??
+    (currentRef?.source === "store" &&
+    (currentRef.provider === defaultStoreProvider ||
+      snapshot.config.secrets?.providers?.[currentRef.provider]?.source === "store")
+      ? currentRef.provider
+      : defaultStoreProvider);
+  // Replace the key's current store entry only when nothing else uses it;
+  // otherwise take a fresh name so other consumers keep their credential.
   const [{ isOnlySecretStoreReference }, { getActiveSecretsRuntimeSnapshotState }] =
     await Promise.all([
       import("../secrets/located-secret-refs.js"),

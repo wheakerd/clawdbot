@@ -885,6 +885,32 @@ describe("system agent operations", () => {
       expect(readStored()).toMatchObject({ ok: false });
     });
 
+    it("keeps the key's configured store provider when rotating it", async () => {
+      useOperationStateDir("openclaw-chat-secret-provider-");
+      mockConfig.setConfig({
+        secrets: { providers: { vault: { source: "store" }, team: { source: "store" } } },
+        memory: {
+          search: {
+            remote: {
+              apiKey: { source: "store", provider: "team", id: "MEMORY_SEARCH_REMOTE_API_KEY" },
+            },
+          },
+        },
+      });
+      const runConfigSet = vi.fn(async () => {});
+
+      await executeSystemAgentOperation(operation, createSystemAgentTestRuntime().runtime, {
+        approved: true,
+        deps: { runConfigSet },
+      });
+
+      expect(runConfigSet).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cliOptions: expect.objectContaining({ refProvider: "team", refSource: "store" }),
+        }),
+      );
+    });
+
     it("reports a saved key whose runtime refresh failed as applied", async () => {
       useOperationStateDir("openclaw-chat-secret-refresh-");
       const { runtime, lines } = createSystemAgentTestRuntime();
