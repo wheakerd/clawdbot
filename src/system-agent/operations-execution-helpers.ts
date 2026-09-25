@@ -331,7 +331,7 @@ export async function runConfigSetOperation(params: {
     return {};
   }
   const secret = operation.secret;
-  const snapshot = await (await loadConfigModule()).readConfigFileSnapshot();
+  const snapshot = await readConfigFileSnapshotLazy();
   const configPath = parseConfigSetPath(operation.path);
   const currentRef = coerceSecretRef(
     getAtPath(snapshot.sourceConfig, configPath).value,
