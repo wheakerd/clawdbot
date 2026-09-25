@@ -38,7 +38,7 @@ it("saves a chat secret beside an existing entry without touching it", async () 
     assertCurrent: () => {},
   });
 
-  expect(name).toBe("GATEWAY_REMOTE_TOKEN_2");
+  expect(name).toMatch(/^GATEWAY_REMOTE_TOKEN_[0-9A-F]{16}$/);
   expect(readSecretStoreValue({ scope: team, name })).toEqual({ ok: true, value: "from-chat" });
   expect(readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN" })).toEqual({
     ok: true,

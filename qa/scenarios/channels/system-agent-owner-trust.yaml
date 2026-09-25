@@ -141,7 +141,7 @@ flow:
             message:
               expr: "`the existing GATEWAY_REMOTE_TOKEN entry was replaced: ${JSON.stringify({ existingBefore, existingAfter })}`"
         - assert:
-            expr: "storeEntries.some((entry) => entry.name === 'GATEWAY_REMOTE_TOKEN_2' && entry.kind === 'secret')"
+            expr: "storeEntries.some((entry) => /^GATEWAY_REMOTE_TOKEN_[0-9A-F]{16}$/.test(entry.name) && entry.kind === 'secret')"
             message:
               expr: "`the chat token has no entry of its own: ${JSON.stringify(storeEntries.map((entry) => entry.name))}`"
         - set: configRaw

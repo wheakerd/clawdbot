@@ -168,12 +168,12 @@ context. If you paste an API key or token in chat anyway, OpenClaw saves it in t
 points the config key at it with a `store` SecretRef, and does not echo it back.
 The pasted message itself already reached the model provider and the transcript;
 OpenClaw masks the value in later logs and output from that point on. Each save
-goes to a new entry named after the config key (for example
-`GATEWAY_REMOTE_TOKEN`), with a `_2`, `_3`, ... suffix when that name is taken.
-OpenClaw never overwrites or deletes an existing entry, since another config key
-or auth profile may use it: replacing a key leaves its previous entry in the
-store, and if the config write fails after the key was saved, the error names the
-saved entry. Remove unused entries with `openclaw secrets store rm <NAME>`. For environment storage, use
+creates a new entry named after the config key plus a random suffix (for example
+`GATEWAY_REMOTE_TOKEN_3F9A0C1B7D2E4A68`), so it can never take over a name that
+another config key, an auth profile, or a stale reference to a removed entry
+still uses. OpenClaw never overwrites or deletes an existing entry: replacing a
+key leaves its previous entry in the store, and if the config write fails after
+the key was saved, the error names the saved entry. Remove unused entries with `openclaw secrets store rm <NAME>`. For environment storage, use
 `config set-ref <path> env <ENV_VAR>`.
 `set default model <provider/model>` still live-tests the route before saving it.
 

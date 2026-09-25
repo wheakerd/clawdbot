@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
 import {
   executeSqliteQuerySync,
@@ -14,9 +15,9 @@ import {
 type SecretStoreDatabase = Pick<DB, "secret_store_entries">;
 
 const TEAM_SCOPE = { scopeKind: "team", scopeId: "" } as const;
-/** `_999` must still fit the 128-character entry-name limit. */
-const CONFIG_REF_NAME_BASE_MAX = 124;
-const CONFIG_REF_NAME_MAX_SUFFIX = 999;
+/** 16 hex characters (64 random bits) after `_` still fit the 128-character name limit. */
+const CONFIG_REF_NAME_BASE_MAX = 111;
+const CONFIG_REF_NAME_MINT_ATTEMPTS = 4;
 
 export type SecretStoreConfigRefWrite = {
   /** Preferred entry name derived from the config path. */
@@ -27,11 +28,12 @@ export type SecretStoreConfigRefWrite = {
 };
 
 /**
- * Saves a chat-provided secret for one config key in a brand-new entry: the
- * first unused `NAME`, `NAME_2`, ... No existing row is touched, live or
- * soft-deleted, because a config key or auth profile may still point at it.
- * `admit` fences the write with the requester's live authority at transaction
- * and commit.
+ * Saves a chat-provided secret for one config key under a freshly minted name,
+ * `NAME_<16 random hex>`. A predictable name could match a stale SecretRef
+ * whose entry was removed and purged, handing that consumer this key; a random
+ * suffix never names an entry anything already points at. No existing row is
+ * touched. `admit` fences the write with the requester's live authority at
+ * transaction and commit.
  */
 export function writeSecretStoreEntryForConfigRefInDatabase(
   input: SecretStoreConfigRefWrite,
@@ -47,8 +49,8 @@ export function writeSecretStoreEntryForConfigRefInDatabase(
       admit?.("transaction");
       ensureSecretStoreSchema(sqlite);
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-      for (let suffix = 1; suffix <= CONFIG_REF_NAME_MAX_SUFFIX; suffix += 1) {
-        const name = suffix === 1 ? base : `${base}_${suffix}`;
+      for (let attempt = 0; attempt < CONFIG_REF_NAME_MINT_ATTEMPTS; attempt += 1) {
+        const name = `${base}_${randomBytes(8).toString("hex").toUpperCase()}`;
         const taken = executeSqliteQueryTakeFirstSync(
           sqlite,
           db
@@ -79,9 +81,7 @@ export function writeSecretStoreEntryForConfigRefInDatabase(
         admit?.("commit");
         return { name };
       }
-      throw new Error(
-        `Secret store entries ${base} through ${base}_${CONFIG_REF_NAME_MAX_SUFFIX} are all taken; remove unused entries with openclaw secrets store rm and try again.`,
-      );
+      throw new Error("Could not mint an unused secret store name; try again.");
     },
     databaseOptions,
     { operationLabel: "secrets.store.write-config-ref" },

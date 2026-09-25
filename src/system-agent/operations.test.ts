@@ -11,7 +11,7 @@ import {
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { readSecretStoreValue } from "../secrets/store/secret-store.js";
+import { listSecretStoreEntries, readSecretStoreValue } from "../secrets/store/secret-store.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runGatewayLifecycle } from "./operations-execution-helpers.js";
@@ -808,7 +808,10 @@ describe("system agent operations", () => {
       id: "MEMORY_SEARCH_REMOTE_API_KEY",
       secret: "embed-owner-key-7f3c9a1d",
     };
-    const readStored = () => readSecretStoreValue({ scope: { kind: "team" }, name: operation.id });
+    const storedEntries = () =>
+      listSecretStoreEntries({ scope: { kind: "team" } }).map((entry) => entry.name);
+    const readStored = (name: string) => readSecretStoreValue({ scope: { kind: "team" }, name });
+    const mintedName = expect.stringMatching(/^MEMORY_SEARCH_REMOTE_API_KEY_[0-9A-F]{16}$/);
 
     it("stores the key and points config at it without repeating it", async () => {
       useOperationStateDir("openclaw-chat-secret-");
@@ -821,11 +824,13 @@ describe("system agent operations", () => {
       });
 
       expect(result.applied).toBe(true);
-      expect(readStored()).toMatchObject({ ok: true, value: operation.secret });
+      const [name] = storedEntries();
+      expect(name).toEqual(mintedName);
       expect(runConfigSet).toHaveBeenCalledWith({
         path: operation.path,
-        cliOptions: { refProvider: "default", refSource: "store", refId: operation.id },
+        cliOptions: { refProvider: "default", refSource: "store", refId: name },
       });
+      expect(readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
       expect(lines.join("\n")).not.toContain(operation.secret);
       expect(JSON.stringify(readLastAuditEntry())).not.toContain(operation.secret);
     });
@@ -845,7 +850,7 @@ describe("system agent operations", () => {
         }),
       ).rejects.toThrow("no longer active");
 
-      expect(readStored()).toMatchObject({ ok: false });
+      expect(storedEntries()).toEqual([]);
       expect(runConfigSet).not.toHaveBeenCalled();
     });
 
@@ -855,16 +860,19 @@ describe("system agent operations", () => {
         throw new Error("Config validation failed: fixture rejected");
       });
 
-      await expect(
-        executeSystemAgentOperation(operation, createSystemAgentTestRuntime().runtime, {
-          approved: true,
-          deps: { runConfigSet },
-        }),
-      ).rejects.toThrow(
-        `Saved the secret as ${operation.id}, but could not point ${operation.path} at it: Config validation failed: fixture rejected. Retry, or remove the entry with \`openclaw secrets store rm ${operation.id}\`.`,
+      const failure = executeSystemAgentOperation(
+        operation,
+        createSystemAgentTestRuntime().runtime,
+        { approved: true, deps: { runConfigSet } },
       );
+
+      await expect(failure).rejects.toThrow("Config validation failed: fixture rejected");
       // Another consumer may already use the fresh entry, so it is never deleted here.
-      expect(readStored()).toMatchObject({ ok: true, value: operation.secret });
+      const [name] = storedEntries();
+      expect(readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
+      await expect(failure).rejects.toThrow(
+        `Saved the secret as ${name}, but could not point ${operation.path} at it: Config validation failed: fixture rejected. Retry, or remove the entry with \`openclaw secrets store rm ${name}\`.`,
+      );
     });
 
     it("keeps the key's configured store provider when rotating it", async () => {
