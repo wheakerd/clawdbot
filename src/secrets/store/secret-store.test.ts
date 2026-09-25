@@ -132,49 +132,36 @@ describe("secret store", () => {
     ]);
   });
 
-  it("replaces the entry a config key already references and rolls it back exactly", () => {
+  it("rotates a key into a fresh entry and leaves its previous entry for other users", () => {
     const database = createDatabaseOptions();
-    writeSecretStoreEntry({
-      scope: team,
-      name: "OPENAI_KEY",
-      value: "old-key",
-      kind: "secret",
-      updatedBy: "cli",
-      database,
-    });
-
-    const write = writeSecretStoreEntryForConfigRefInDatabase(
+    const first = writeSecretStoreEntryForConfigRefInDatabase(
       {
         baseName: "MODELS_PROVIDERS_OPENAI_API_KEY",
-        value: "new-key",
-        replaceableName: "OPENAI_KEY",
+        value: "old-key",
         writer: "openclaw:1",
         now: 1,
       },
       database,
     );
 
-    expect(write.name).toBe("OPENAI_KEY");
-    expect(readSecretStoreValue({ scope: team, name: "OPENAI_KEY", database })).toEqual({
-      ok: true,
-      value: "new-key",
-    });
-    rollbackSecretStoreEntryWriteInDatabase(
+    const second = writeSecretStoreEntryForConfigRefInDatabase(
       {
-        name: write.name,
-        expectedUpdatedBy: "openclaw:1",
-        ...(write.previous ? { previous: write.previous } : {}),
+        baseName: "MODELS_PROVIDERS_OPENAI_API_KEY",
+        value: "new-key",
+        writer: "openclaw:2",
         now: 2,
       },
       database,
     );
-    expect(readSecretStoreValue({ scope: team, name: "OPENAI_KEY", database })).toEqual({
+
+    expect([first.name, second.name]).toEqual([
+      "MODELS_PROVIDERS_OPENAI_API_KEY",
+      "MODELS_PROVIDERS_OPENAI_API_KEY_2",
+    ]);
+    expect(readSecretStoreValue({ scope: team, name: first.name, database })).toEqual({
       ok: true,
       value: "old-key",
     });
-    expect(listSecretStoreEntries({ scope: team, database })).toEqual([
-      expect.objectContaining({ name: "OPENAI_KEY", updatedBy: "cli" }),
-    ]);
   });
 
   it("drops a deleted entry's host grants when a chat secret reuses its name", () => {

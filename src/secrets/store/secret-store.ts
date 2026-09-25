@@ -561,7 +561,6 @@ export function writeSecretStoreEntryWithRollback(params: SecretStoreWriteParams
 export async function writeSecretStoreEntryForConfigRef(params: {
   baseName: string;
   value: string;
-  replaceableName?: string;
   updatedBy: string;
   assertCurrent?: () => void;
   database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
@@ -574,7 +573,7 @@ export async function writeSecretStoreEntryForConfigRef(params: {
     context.admission.assertCurrent();
     params.assertCurrent?.();
   };
-  const { name, previous } = await runOpenClawStateWorkerOperation(
+  const { name } = await runOpenClawStateWorkerOperation(
     context,
     (scope) =>
       scope.execute({
@@ -582,7 +581,6 @@ export async function writeSecretStoreEntryForConfigRef(params: {
         input: {
           baseName: params.baseName,
           value: params.value,
-          ...(params.replaceableName ? { replaceableName: params.replaceableName } : {}),
           writer,
           now: Date.now(),
         },
@@ -603,7 +601,6 @@ export async function writeSecretStoreEntryForConfigRef(params: {
         input: {
           name,
           expectedUpdatedBy: writer,
-          ...(previous ? { previous } : {}),
           now: Date.now(),
         },
       })),

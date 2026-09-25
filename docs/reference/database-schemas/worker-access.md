@@ -437,10 +437,10 @@ yielding; the worker retains the existing SQL and expiry rules and returns only
 the deleted count. Scheduled sweeps coalesce while one is active, and Gateway
 shutdown stops scheduling and joins accepted cleanup. An OpenClaw chat that saves
 a key for a config path writes its store entry in the same worker: one
-transaction chooses the entry name (the key's exclusive current store entry, or
-the first free name), admits the write through the requester's live authority at
-transaction and commit, and returns the prior row for owner-tagged rollback,
-which also runs in the worker. Other secret-store set/delete operations
+transaction takes the first free entry name (never overwriting a live entry),
+admits the write through the requester's live authority at transaction and
+commit, and returns the name for owner-tagged rollback, which also runs in the
+worker. Other secret-store set/delete operations
 remain separate synchronous migration debt.
 
 Placement change reporting reads its before/after snapshots in the shared-state

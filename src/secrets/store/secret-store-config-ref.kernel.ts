@@ -16,9 +16,9 @@ type SecretStoreDatabase = Pick<DB, "secret_store_entries">;
 type SecretStoreKind = "secret" | "env";
 
 const TEAM_SCOPE = { scopeKind: "team", scopeId: "" } as const;
-/** `_99` must still fit the 128-character entry-name limit. */
-const CONFIG_REF_NAME_BASE_MAX = 125;
-const CONFIG_REF_NAME_MAX_SUFFIX = 99;
+/** `_999` must still fit the 128-character entry-name limit. */
+const CONFIG_REF_NAME_BASE_MAX = 124;
+const CONFIG_REF_NAME_MAX_SUFFIX = 999;
 
 export type SecretStoreWriteSnapshot = {
   value: string;
@@ -31,15 +31,8 @@ export type SecretStoreConfigRefWrite = {
   /** Preferred entry name derived from the config path. */
   baseName: string;
   value: string;
-  /** Store entry the config key already references; it is replaced in place. */
-  replaceableName?: string;
   writer: string;
   now: number;
-};
-
-export type SecretStoreConfigRefWriteResult = {
-  name: string;
-  previous?: SecretStoreWriteSnapshot;
 };
 
 export type SecretStoreRollbackWrite = {
@@ -50,10 +43,9 @@ export type SecretStoreRollbackWrite = {
 };
 
 /**
- * Saves a chat-provided secret for one config key. `replaceableName` is the
- * key's own store entry and is replaced in place, keeping its host grants.
- * Otherwise a live entry under the preferred name belongs to someone else, so
- * the write takes the first free `NAME`, `NAME_2`, ... A recycled soft-deleted
+ * Saves a chat-provided secret for one config key in a fresh entry: the first
+ * free `NAME`, `NAME_2`, ... Live entries are never overwritten, because
+ * another config key or auth profile may use them. A recycled soft-deleted
  * name starts without the old entry's host grants. `admit` fences the write
  * with the requester's live authority at transaction and commit.
  */
@@ -61,33 +53,29 @@ export function writeSecretStoreEntryForConfigRefInDatabase(
   input: SecretStoreConfigRefWrite,
   databaseOptions?: OpenClawStateDatabaseOptions,
   admit?: (stage: "transaction" | "commit") => void,
-): SecretStoreConfigRefWriteResult {
+): { name: string } {
   const base = input.baseName.slice(0, CONFIG_REF_NAME_BASE_MAX);
-  const candidates = input.replaceableName
-    ? [input.replaceableName]
-    : Array.from({ length: CONFIG_REF_NAME_MAX_SUFFIX }, (_, index) =>
-        index === 0 ? base : `${base}_${index + 1}`,
-      );
-  if (!ENV_SECRET_REF_ID_RE.test(candidates[0] ?? "")) {
-    throw new Error(`Secret store name "${candidates[0]}" is invalid.`);
+  if (!ENV_SECRET_REF_ID_RE.test(base)) {
+    throw new Error(`Secret store name "${base}" is invalid.`);
   }
   return runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
       admit?.("transaction");
       ensureSecretStoreSchema(sqlite);
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-      for (const name of candidates) {
-        const existing = executeSqliteQueryTakeFirstSync(
+      for (let suffix = 1; suffix <= CONFIG_REF_NAME_MAX_SUFFIX; suffix += 1) {
+        const name = suffix === 1 ? base : `${base}_${suffix}`;
+        const live = executeSqliteQueryTakeFirstSync(
           sqlite,
           db
             .selectFrom("secret_store_entries")
-            .select(["value", "kind", "allowed_hosts", "updated_by"])
+            .select("name")
             .where("scope_kind", "=", TEAM_SCOPE.scopeKind)
             .where("scope_id", "=", TEAM_SCOPE.scopeId)
             .where("name", "=", name)
             .where("deleted_at_ms", "is", null),
         );
-        if (existing && name !== input.replaceableName) {
+        if (live) {
           continue;
         }
         executeSqliteQuerySync(
@@ -110,26 +98,16 @@ export function writeSecretStoreEntryForConfigRefInDatabase(
               conflict.columns(["scope_kind", "scope_id", "name"]).doUpdateSet({
                 value: input.value,
                 kind: "secret",
+                created_at_ms: input.now,
                 updated_at_ms: input.now,
                 updated_by: input.writer,
                 deleted_at_ms: null,
-                allowed_hosts: existing?.allowed_hosts ?? null,
+                allowed_hosts: null,
               }),
             ),
         );
         admit?.("commit");
-        return existing
-          ? {
-              name,
-              previous: {
-                value: existing.value,
-                // SAFETY: The canonical secret_store schema and write validation restrict kind to secret|env.
-                kind: existing.kind as SecretStoreKind,
-                allowedHosts: existing.allowed_hosts,
-                updatedBy: existing.updated_by,
-              },
-            }
-          : { name };
+        return { name };
       }
       throw new Error(
         `Secret store entries ${base} through ${base}_${CONFIG_REF_NAME_MAX_SUFFIX} are all in use; remove unused entries and try again.`,

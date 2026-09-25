@@ -68,7 +68,6 @@ import type { HostedCatalogSnapshotWorkerOperations } from "../plugins/official-
 import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
 import type {
   SecretStoreConfigRefWrite,
-  SecretStoreConfigRefWriteResult,
   SecretStoreRollbackWrite,
 } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
@@ -196,7 +195,7 @@ export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
     "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
     "secrets.writeForConfigRef": {
       input: SecretStoreConfigRefWrite;
-      output: SecretStoreConfigRefWriteResult;
+      output: { name: string };
     };
     "secrets.rollbackWrite": { input: SecretStoreRollbackWrite; output: boolean };
     "promotions.markNotified": { input: { slugs: string[]; now: number }; output: true };

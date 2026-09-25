@@ -41,7 +41,6 @@ import { coerceSecretRef, isSecretRef, type SecretRef } from "../config/types.se
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
-import { listLocatedSecretRefs } from "./located-secret-refs.js";
 import { secretRefKey } from "./ref-contract.js";
 import {
   clearActiveCredentialDegradedOwners,
@@ -68,6 +67,38 @@ export type PreparedSecretsRuntimeSnapshot = {
   secretOwners?: SecretOwnerRefState[];
   webTools: RuntimeWebToolsMetadata;
 };
+
+type LocatedSecretRef = {
+  path: Array<string | number>;
+  ref: SecretRef;
+};
+
+type SecretDefaults = Parameters<typeof coerceSecretRef>[1];
+
+function listLocatedSecretRefs(
+  value: unknown,
+  defaults: SecretDefaults | undefined,
+  path: Array<string | number> = [],
+  refs: LocatedSecretRef[] = [],
+): LocatedSecretRef[] {
+  const ref = coerceSecretRef(value, defaults);
+  if (ref) {
+    refs.push({ path, ref });
+    return refs;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      listLocatedSecretRefs(entry, defaults, [...path, index], refs);
+    }
+    return refs;
+  }
+  if (isRecord(value)) {
+    for (const key of Object.keys(value).toSorted()) {
+      listLocatedSecretRefs(value[key], defaults, [...path, key], refs);
+    }
+  }
+  return refs;
+}
 
 /** Canonical store refs across config and auth profiles for one mutated team entry. */
 export function collectSecretStoreRefKeysInSnapshot(

@@ -348,31 +348,15 @@ export async function runConfigSetOperation(params: {
       snapshot.config.secrets?.providers?.[currentRef.provider]?.source === "store")
       ? currentRef.provider
       : defaultStoreProvider);
-  // Replace the key's current store entry only when nothing else uses it;
-  // otherwise take a fresh name so other consumers keep their credential.
-  const [{ isOnlySecretStoreReference }, { getActiveSecretsRuntimeSnapshotState }] =
-    await Promise.all([
-      import("../secrets/located-secret-refs.js"),
-      import("../secrets/runtime-state.js"),
-    ]);
-  const replaceableName =
-    currentRef?.source === "store" &&
-    currentRef.provider === refProvider &&
-    isOnlySecretStoreReference({
-      sourceConfig: snapshot.sourceConfig,
-      authStores: getActiveSecretsRuntimeSnapshotState()?.authStores,
-      path: configPath,
-      name: currentRef.id,
-    })
-      ? currentRef.id
-      : undefined;
   // The SQLite store stays off the load path of every other config write.
   const { writeSecretStoreEntryForConfigRef } = await import("../secrets/store/secret-store.js");
+  // Every save gets a fresh entry: an existing entry may be shared with, or
+  // become shared with, another consumer before this write lands, so it is
+  // never overwritten. The key's previous entry stays for any other users.
   const storeWrite = await ctx.commit(() =>
     writeSecretStoreEntryForConfigRef({
       baseName: operation.id,
       value: secret,
-      ...(replaceableName ? { replaceableName } : {}),
       updatedBy: "openclaw",
       // The worker re-checks the requester at transaction and commit admission.
       ...(ctx.assertPersistentApply ? { assertCurrent: ctx.assertPersistentApply } : {}),
