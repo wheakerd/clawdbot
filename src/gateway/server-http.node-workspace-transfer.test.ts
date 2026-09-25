@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
@@ -261,7 +261,7 @@ describe("node workspace transfer HTTP routing", () => {
   });
 
   it("rate-limits invalid transfer auth before invoking the callback again", async () => {
-    const limiter = createAuthRateLimiter({
+    const limiter = createGatewayAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,
       lockoutMs: 60_000,
