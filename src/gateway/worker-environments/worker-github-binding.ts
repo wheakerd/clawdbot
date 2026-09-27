@@ -2,7 +2,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
-import { resolveGitHubHost } from "../../agents/github-host.js";
+import { GITHUB_PUBLIC_HOST, resolveGitHubHost } from "../../agents/github-host.js";
 import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
@@ -184,7 +184,7 @@ export async function prepareWorkerGitHubBinding(params: {
     if (!token) {
       return undefined;
     }
-    const githubHost = resolveGitHubHost();
+    const githubHost = GITHUB_PUBLIC_HOST;
     const remote = parseGitHubRemoteUrl(originUrl, githubHost);
     const remoteUrl =
       remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo)

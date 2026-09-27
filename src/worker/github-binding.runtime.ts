@@ -1,5 +1,6 @@
 import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
+import { isGitHubCloudHost } from "../agents/github-host.js";
 import {
   managedGitHubIdentityEnvironment,
   removeManagedGitHubProfile,
@@ -155,7 +156,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
     {
       ...process.env,
       ...hostIdentityEnv,
-      ...(githubHost === "github.com"
+      ...(isGitHubCloudHost(githubHost)
         ? { GH_TOKEN: binding.token, GH_ENTERPRISE_TOKEN: "" }
         : { GH_TOKEN: "", GH_ENTERPRISE_TOKEN: binding.token }),
       GITHUB_TOKEN: "",

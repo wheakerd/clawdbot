@@ -149,10 +149,10 @@ describe("worker GitHub launch binding", () => {
     expect(mocks.nativeToken).not.toHaveBeenCalled();
   });
 
-  it("binds the configured enterprise host and canonical HTTPS remote", async () => {
+  it("keeps an existing public managed identity on its host when App host settings change", async () => {
     vi.stubEnv("GITHUB_HOST", "microsoft.ghe.com");
     vi.stubEnv("GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
-    await installProfile("system", "microsoft.ghe.com");
+    await installProfile();
     mocks.repository.mockResolvedValue({
       originUrl: "microsoft@microsoft.ghe.com:bic/lobster.git",
     });
@@ -161,12 +161,10 @@ describe("worker GitHub launch binding", () => {
       token,
       login: "shared-bot",
       branch: worktree.branch,
-      host: "microsoft.ghe.com",
-      remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
       gitAuthor: { name: "Shared Bot" },
     });
     expect(mocks.verify).toHaveBeenCalledWith(token, {
-      apiBaseUrl: "https://api.microsoft.ghe.com",
+      apiBaseUrl: "https://api.github.com",
     });
   });
 

@@ -499,7 +499,8 @@ describe("Codex node exec-server", () => {
           const script = `const fs = require('node:fs'); const path = require('node:path');
 process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.env.CODEX_HOME,
   githubProfile: process.env.GH_CONFIG_DIR, githubHost: process.env.GH_HOST,
-  githubToken: process.env.GH_ENTERPRISE_TOKEN ? 'present' : null,
+  githubToken: process.env.GH_TOKEN === 'synthetic-node-installation-token',
+  enterpriseTokenEmpty: !process.env.GH_ENTERPRISE_TOKEN,
   cached: fs.existsSync(path.join(process.env.HOME ?? '.', 'prepared-cache'))}) + '\\n');`;
           await frames.send({
             id: 2,
@@ -536,7 +537,8 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
             home: homeDir,
             cached: true,
             githubHost: "microsoft.ghe.com",
-            githubToken: "present",
+            githubToken: true,
+            enterpriseTokenEmpty: true,
           });
           if (!isRecord(observed) || typeof observed.codexHome !== "string") {
             throw new Error("Pinned exec-server omitted its private Codex home");

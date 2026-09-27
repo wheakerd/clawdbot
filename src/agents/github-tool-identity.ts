@@ -24,7 +24,7 @@ import {
   resolveGitHubHost,
   withGitHubToken,
 } from "./github-host-runtime.js";
-import { resolveConfiguredGitHubApiBaseUrl } from "./github-host.js";
+import { GITHUB_PUBLIC_API_BASE_URL, GITHUB_PUBLIC_HOST } from "./github-host.js";
 import { verifyGitHubCredential } from "./github-oauth-client.js";
 import { inspectGitHubOAuthRecord } from "./github-oauth-records.js";
 import {
@@ -267,7 +267,7 @@ async function readManagedGitHubToken(profileDir: string): Promise<string | unde
         hosts = value;
       }
     }
-    const host = isRecord(hosts) ? hosts[resolveGitHubHost()] : undefined;
+    const host = isRecord(hosts) ? hosts[GITHUB_PUBLIC_HOST] : undefined;
     // gh reads the active host token before considering the global keyring.
     // User-keyed entries alone cannot prove isolation from native auth.
     return isRecord(host) && typeof host.oauth_token === "string"
@@ -523,7 +523,7 @@ async function prepareSharedGitHubIdentity(
     GH_PROMPT_DISABLED: "1",
   });
   const env = currentEnvironment();
-  if (managed && (host !== GITHUB_HOST || apiBaseUrl !== resolveConfiguredGitHubApiBaseUrl())) {
+  if (managed && (host !== GITHUB_PUBLIC_HOST || apiBaseUrl !== GITHUB_PUBLIC_API_BASE_URL)) {
     const error = new GitHubIdentityError("unavailable");
     error.message =
       "Use a credential issued by the repository's GitHub host; managed profiles are issued by github.com.";
@@ -616,7 +616,7 @@ export async function prepareGitHubReadIdentity(
     { ...params, ...caller },
     readCachedNativeGitHubToken,
     params.issuer,
-    params.issuer ? resolveConfiguredGitHubApiBaseUrl() : undefined,
+    params.issuer ? GITHUB_PUBLIC_API_BASE_URL : undefined,
   );
   assertSelected();
   return createGitHubReadIdentity({

@@ -361,6 +361,8 @@ describe("prepareWorkerGitHubEnvironment", () => {
       host: "microsoft.ghe.com",
       remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
     };
+    await git(root, "config", "--global", `url.${origin}.insteadOf`, enterprise.remoteUrl);
+    const runner = vi.spyOn(exec, "runCommandWithTimeout");
     const prepared = await prepareWorkerGitHubEnvironment({
       binding: enterprise,
       stateDir: path.join(root, "enterprise-state"),
@@ -373,6 +375,11 @@ describe("prepareWorkerGitHubEnvironment", () => {
     );
 
     expect(prepared?.localIdentityEnv.GH_HOST).toBe("microsoft.ghe.com");
+    const fetchCall = runner.mock.calls.find(([args]) => args[3] === "fetch");
+    expect(fetchCall?.[1]?.baseEnv).toMatchObject({
+      GH_TOKEN: enterprise.token,
+      GH_ENTERPRISE_TOKEN: "",
+    });
     expect(hosts).toContain("microsoft.ghe.com");
     expect(hosts).toContain(binding.token);
     expect(JSON.stringify(prepared)).not.toContain(binding.token);
