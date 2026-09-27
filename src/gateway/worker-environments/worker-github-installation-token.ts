@@ -1,4 +1,5 @@
 import { createPrivateKey, createSign } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGitHubApiBaseUrl } from "../../agents/github-host.js";
 
 type AppConfig = {
@@ -8,11 +9,9 @@ type AppConfig = {
 };
 
 export function hasWorkerGitHubAppConfiguration(env: NodeJS.ProcessEnv = process.env): boolean {
-  return [
-    "OPENCLAW_GITHUB_APP_ID",
-    "OPENCLAW_GITHUB_INSTALLATION_ID",
-    "OPENCLAW_GITHUB_APP_PRIVATE_KEY",
-  ].some((name) => Boolean(env[name]));
+  return ["GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY"].some((name) =>
+    Boolean(env[name]),
+  );
 }
 
 function positiveInteger(value: string | undefined): number | undefined {
@@ -22,24 +21,20 @@ function positiveInteger(value: string | undefined): number | undefined {
 }
 
 function resolveAppConfig(env: NodeJS.ProcessEnv): AppConfig | undefined {
-  const names = [
-    "OPENCLAW_GITHUB_APP_ID",
-    "OPENCLAW_GITHUB_INSTALLATION_ID",
-    "OPENCLAW_GITHUB_APP_PRIVATE_KEY",
-  ] as const;
+  const names = ["GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY"] as const;
   const configured = names.filter((name) => Boolean(env[name]));
   if (configured.length === 0) return undefined;
   if (configured.length !== names.length)
     throw new Error("Worker GitHub App issuer configuration is incomplete");
-  const appId = positiveInteger(env.OPENCLAW_GITHUB_APP_ID);
-  const installationId = positiveInteger(env.OPENCLAW_GITHUB_INSTALLATION_ID);
-  if (!appId || !installationId || !env.OPENCLAW_GITHUB_APP_PRIVATE_KEY) {
+  const appId = positiveInteger(env.GITHUB_APP_ID);
+  const installationId = positiveInteger(env.GITHUB_INSTALLATION_ID);
+  if (!appId || !installationId || !env.GITHUB_APP_PRIVATE_KEY) {
     throw new Error("Worker GitHub App issuer configuration is invalid");
   }
   return {
     appId,
     installationId,
-    privateKey: createPrivateKey(env.OPENCLAW_GITHUB_APP_PRIVATE_KEY),
+    privateKey: createPrivateKey(env.GITHUB_APP_PRIVATE_KEY),
   };
 }
 
@@ -89,7 +84,7 @@ export async function issueWorkerGitHubInstallationToken(params: {
   );
   if (!response.ok) throw new Error("GitHub installation-token issuance failed");
   const issued: unknown = await response.json();
-  const record = issued && typeof issued === "object" ? (issued as Record<string, unknown>) : {};
+  const record = isRecord(issued) ? issued : {};
   const token = typeof record.token === "string" ? record.token : "";
   const expiresAtMs = typeof record.expires_at === "string" ? Date.parse(record.expires_at) : 0;
   const revokeToken = async () =>

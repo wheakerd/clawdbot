@@ -441,7 +441,9 @@ function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
     throw new Error("Codex node execution requires its exact placement workspace identity.");
   }
   return {
-    ...("placementAgentId" in sandbox ? { agentId: sandbox.placementAgentId as string } : {}),
+    ...("placementAgentId" in sandbox && typeof sandbox.placementAgentId === "string"
+      ? { agentId: sandbox.placementAgentId }
+      : {}),
     environmentId: sandbox.placementEnvironmentId,
     sessionId: sandbox.placementSessionId,
     ownerEpoch: sandbox.placementOwnerEpoch,

@@ -152,8 +152,8 @@ describe("worker GitHub launch binding", () => {
   });
 
   it("binds the configured enterprise host and canonical HTTPS remote", async () => {
-    vi.stubEnv("OPENCLAW_GITHUB_HOST", "microsoft.ghe.com");
-    vi.stubEnv("OPENCLAW_GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
+    vi.stubEnv("GITHUB_HOST", "microsoft.ghe.com");
+    vi.stubEnv("GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
     await installProfile("system", "microsoft.ghe.com");
     mocks.repository.mockResolvedValue({
       originUrl: "microsoft@microsoft.ghe.com:bic/lobster.git",
@@ -173,11 +173,11 @@ describe("worker GitHub launch binding", () => {
   });
 
   it("issues one process-scoped enterprise App token and revokes it", async () => {
-    vi.stubEnv("OPENCLAW_GITHUB_HOST", "microsoft.ghe.com");
-    vi.stubEnv("OPENCLAW_GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
-    vi.stubEnv("OPENCLAW_GITHUB_APP_ID", "13361");
-    vi.stubEnv("OPENCLAW_GITHUB_INSTALLATION_ID", "119386");
-    vi.stubEnv("OPENCLAW_GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+    vi.stubEnv("GITHUB_HOST", "microsoft.ghe.com");
+    vi.stubEnv("GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
+    vi.stubEnv("GITHUB_APP_ID", "13361");
+    vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
+    vi.stubEnv("GITHUB_APP_PRIVATE_KEY", appPrivateKey);
     mocks.repository.mockResolvedValue({
       originUrl: "microsoft@microsoft.ghe.com:bic/lobster.git",
     });
@@ -212,6 +212,20 @@ describe("worker GitHub launch binding", () => {
     await grant?.revoke();
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
+
+    const codexGrant = await prepareWorkerGitHubBindingGrant(session);
+    expect(codexGrant?.binding).toEqual({
+      token: "synthetic-installation-token",
+      login: "x-access-token",
+      branch: worktree.branch,
+      host: "microsoft.ghe.com",
+      remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+    });
+    await codexGrant?.revoke();
+    await expect(
+      prepareWorkerGitHubBindingGrant({ ...session, requireOperatorAuthority: true }),
+    ).rejects.toThrow("signed-in operator authority");
+    expect(fetch.mock.calls.at(-1)?.[1]).toMatchObject({ method: "DELETE" });
   });
 
   it("retains selected identity on a non-GitHub workspace without App settings", async () => {
@@ -223,9 +237,9 @@ describe("worker GitHub launch binding", () => {
   });
 
   it("keeps an explicit agent override ahead of the App installation", async () => {
-    vi.stubEnv("OPENCLAW_GITHUB_APP_ID", "13361");
-    vi.stubEnv("OPENCLAW_GITHUB_INSTALLATION_ID", "119386");
-    vi.stubEnv("OPENCLAW_GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+    vi.stubEnv("GITHUB_APP_ID", "13361");
+    vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
+    vi.stubEnv("GITHUB_APP_PRIVATE_KEY", appPrivateKey);
     config.agents = { entries: { main: { tools: { github: { profileId } } } } };
     await installProfile("agent");
     const fetch = vi.fn();
@@ -237,9 +251,9 @@ describe("worker GitHub launch binding", () => {
   });
 
   it("revokes a minted App token if workspace revalidation throws", async () => {
-    vi.stubEnv("OPENCLAW_GITHUB_APP_ID", "13361");
-    vi.stubEnv("OPENCLAW_GITHUB_INSTALLATION_ID", "119386");
-    vi.stubEnv("OPENCLAW_GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+    vi.stubEnv("GITHUB_APP_ID", "13361");
+    vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
+    vi.stubEnv("GITHUB_APP_PRIVATE_KEY", appPrivateKey);
     const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) =>
       init.method === "DELETE"
         ? new Response(null, { status: 204 })

@@ -11,14 +11,36 @@ const pem = generateKeyPairSync("rsa", { modulusLength: 2048 })
 
 function env(): NodeJS.ProcessEnv {
   return {
-    OPENCLAW_GITHUB_API_BASE_URL: "https://api.microsoft.ghe.com",
-    OPENCLAW_GITHUB_APP_ID: "13361",
-    OPENCLAW_GITHUB_INSTALLATION_ID: "119386",
-    OPENCLAW_GITHUB_APP_PRIVATE_KEY: pem,
+    GITHUB_API_BASE_URL: "https://api.microsoft.ghe.com",
+    GITHUB_APP_ID: "13361",
+    GITHUB_INSTALLATION_ID: "119386",
+    GITHUB_APP_PRIVATE_KEY: pem,
   };
 }
 
 describe("worker GitHub App installation-token issuer", () => {
+  it("uses the public GitHub API when no enterprise endpoint is configured", async () => {
+    const publicEnv = env();
+    delete publicEnv.GITHUB_API_BASE_URL;
+    const calls: string[] = [];
+    const fetch = vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
+      calls.push(String(input));
+      return init.method === "DELETE"
+        ? new Response(null, { status: 204 })
+        : Response.json({
+            token: "synthetic-public-installation-token",
+            expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+          });
+    }) as typeof globalThis.fetch;
+
+    const grant = await issueWorkerGitHubInstallationToken({ env: publicEnv, fetch });
+    await grant?.revoke();
+    expect(calls).toEqual([
+      "https://api.github.com/app/installations/119386/access_tokens",
+      "https://api.github.com/installation/token",
+    ]);
+  });
+
   it("mints full existing installation authority and revokes it once", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetch = vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
@@ -35,7 +57,7 @@ describe("worker GitHub App installation-token issuer", () => {
 
     const serverEnv = {
       ...env(),
-      OPENCLAW_GITHUB_API_BASE_URL: "https://github.example.test/api/v3",
+      GITHUB_API_BASE_URL: "https://github.example.test/api/v3",
     };
     const grant = await issueWorkerGitHubInstallationToken({ env: serverEnv, fetch });
 
@@ -62,7 +84,7 @@ describe("worker GitHub App installation-token issuer", () => {
   it("fails closed on partial issuer configuration before network access", async () => {
     const fetch = vi.fn();
     const partial = env();
-    delete partial.OPENCLAW_GITHUB_INSTALLATION_ID;
+    delete partial.GITHUB_INSTALLATION_ID;
     await expect(issueWorkerGitHubInstallationToken({ env: partial, fetch })).rejects.toThrow(
       "configuration is incomplete",
     );

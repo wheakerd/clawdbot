@@ -311,6 +311,7 @@ export async function executeWorkerTurn(
     let skillWorkshop: AnyAgentTool | undefined;
     githubGrant = await prepareWorkerGitHubBindingGrant({
       operatorAuthority,
+      requireOperatorAuthority: true,
       sessionId: placement.sessionId,
       sessionKey: placement.sessionKey,
       agentId: placement.agentId,

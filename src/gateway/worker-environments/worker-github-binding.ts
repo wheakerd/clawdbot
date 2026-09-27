@@ -28,7 +28,7 @@ import {
   issueWorkerGitHubInstallationToken,
 } from "./worker-github-installation-token.js";
 
-export type WorkerGitHubBinding = WorkerGitHubLaunchBinding;
+type WorkerGitHubBinding = WorkerGitHubLaunchBinding;
 
 const log = createSubsystemLogger("gateway/worker-github");
 
@@ -44,6 +44,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   agentId: string;
   assertCurrent?: () => boolean;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  requireOperatorAuthority?: boolean;
 }): Promise<WorkerGitHubBindingGrant | undefined> {
   if (params.assertCurrent?.() === false) return undefined;
   const configuredAgent = resolveConfiguredGitHubToolIdentity({
@@ -80,15 +81,22 @@ export async function prepareWorkerGitHubBindingGrant(params: {
       : undefined);
   let profile: Awaited<ReturnType<typeof prepareUserProfileIdentity>> | undefined;
   try {
-    if (!operator) throw new Error("Worker GitHub commits require signed-in operator authority");
-    assertAdmittedRunOperatorAuthority(operator);
-    operator.assertCurrent();
-    profile = await prepareUserProfileIdentity(operator.profileId);
-    operator.assertCurrent();
-    const bindingIds = profile.emailBindingIds;
-    const email = profile.readCurrentFacts(bindingIds).profile.emails[0];
-    if (!email) throw new Error("The signed-in user needs a verified profile email");
-    const name = getUserProfileDisplay(operator.profileId).displayName?.trim() || email;
+    if (params.requireOperatorAuthority && !operator) {
+      throw new Error("Worker GitHub commits require signed-in operator authority");
+    }
+    let gitAuthor: { name: string; email: string } | undefined;
+    let bindingIds: readonly string[] = [];
+    if (operator) {
+      assertAdmittedRunOperatorAuthority(operator);
+      operator.assertCurrent();
+      profile = await prepareUserProfileIdentity(operator.profileId);
+      operator.assertCurrent();
+      bindingIds = profile.emailBindingIds;
+      const email = profile.readCurrentFacts(bindingIds).profile.emails[0];
+      if (!email) throw new Error("The signed-in user needs a verified profile email");
+      const name = getUserProfileDisplay(operator.profileId).displayName?.trim() || email;
+      gitAuthor = { name, email };
+    }
     if (
       params.assertCurrent?.() === false ||
       !sameGitHubPublicationWorkspace(workspace, resolveGitHubPublicationWorkspaceOwner(params))
@@ -96,8 +104,8 @@ export async function prepareWorkerGitHubBindingGrant(params: {
       await appGrant.revoke();
       return undefined;
     }
-    operator.assertCurrent();
-    profile.readCurrentFacts(bindingIds);
+    operator?.assertCurrent();
+    profile?.readCurrentFacts(bindingIds);
     const binding = parseWorkerGitHubLaunchBinding({
       token: appGrant.token,
       login: "x-access-token",
@@ -105,10 +113,9 @@ export async function prepareWorkerGitHubBindingGrant(params: {
       branch:
         workspace.kind === "repository" ? workspace.workspace.branch : workspace.worktree.branch,
       remoteUrl: `https://${githubHost}/${remote.owner}/${remote.repo}.git`,
-      gitAuthor: { name, email },
+      ...(gitAuthor ? { gitAuthor } : {}),
     });
-    if (!binding)
-      throw new Error("Signed-in Git identity does not meet the worker launch contract");
+    if (!binding) throw new Error("GitHub App identity does not meet the worker launch contract");
     return { binding, expiresAtMs: appGrant.expiresAtMs, revoke: appGrant.revoke };
   } catch (error) {
     await appGrant.revoke();
