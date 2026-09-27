@@ -232,6 +232,18 @@ describe("worker GitHub launch binding", () => {
     });
   });
 
+  it("keeps the selected identity when App settings are only partially present", async () => {
+    vi.stubEnv("GITHUB_APP_ID", "13361");
+    await installProfile();
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toMatchObject({
+      binding: { token, login: "shared-bot" },
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("keeps an explicit agent override ahead of the App installation", async () => {
     vi.stubEnv("GITHUB_APP_ID", "13361");
     vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");

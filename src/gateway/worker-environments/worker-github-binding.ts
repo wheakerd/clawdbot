@@ -24,8 +24,8 @@ import {
 } from "../github-publication-availability.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
 import {
-  hasWorkerGitHubAppConfiguration,
   issueWorkerGitHubInstallationToken,
+  workerGitHubAppConfigurationState,
 } from "./worker-github-installation-token.js";
 
 type WorkerGitHubBinding = WorkerGitHubLaunchBinding;
@@ -54,7 +54,11 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     agentId: params.agentId,
     scope: "agent",
   });
-  if (!hasWorkerGitHubAppConfiguration() || configuredAgent) {
+  const appState = workerGitHubAppConfigurationState();
+  if (appState === "partial") {
+    log.warn("Worker GitHub App settings are incomplete; using the selected GitHub identity.");
+  }
+  if (appState !== "complete" || configuredAgent) {
     const binding = await prepareWorkerGitHubBinding(params);
     return binding ? { binding, revoke: async () => {} } : undefined;
   }

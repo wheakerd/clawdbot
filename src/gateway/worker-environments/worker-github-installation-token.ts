@@ -8,10 +8,21 @@ type AppConfig = {
   privateKey: ReturnType<typeof createPrivateKey>;
 };
 
+const APP_ENV_NAMES = [
+  "GITHUB_APP_ID",
+  "GITHUB_INSTALLATION_ID",
+  "GITHUB_APP_PRIVATE_KEY",
+] as const;
+
+export function workerGitHubAppConfigurationState(
+  env: NodeJS.ProcessEnv = process.env,
+): "absent" | "partial" | "complete" {
+  const configured = APP_ENV_NAMES.filter((name) => Boolean(env[name])).length;
+  return configured === 0 ? "absent" : configured === APP_ENV_NAMES.length ? "complete" : "partial";
+}
+
 export function hasWorkerGitHubAppConfiguration(env: NodeJS.ProcessEnv = process.env): boolean {
-  return ["GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY"].some((name) =>
-    Boolean(env[name]),
-  );
+  return workerGitHubAppConfigurationState(env) === "complete";
 }
 
 function positiveInteger(value: string | undefined): number | undefined {
@@ -23,12 +34,11 @@ function positiveInteger(value: string | undefined): number | undefined {
 }
 
 function resolveAppConfig(env: NodeJS.ProcessEnv): AppConfig | undefined {
-  const names = ["GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY"] as const;
-  const configured = names.filter((name) => Boolean(env[name]));
-  if (configured.length === 0) {
+  const state = workerGitHubAppConfigurationState(env);
+  if (state === "absent") {
     return undefined;
   }
-  if (configured.length !== names.length) {
+  if (state === "partial") {
     throw new Error("Worker GitHub App issuer configuration is incomplete");
   }
   const appId = positiveInteger(env.GITHUB_APP_ID);

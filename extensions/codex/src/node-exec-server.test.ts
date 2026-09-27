@@ -499,7 +499,7 @@ describe("Codex node exec-server", () => {
           const script = `const fs = require('node:fs'); const path = require('node:path');
 process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.env.CODEX_HOME,
   githubProfile: process.env.GH_CONFIG_DIR, githubHost: process.env.GH_HOST,
-  githubToken: process.env.GH_TOKEN === 'synthetic-node-installation-token',
+  githubTokenEmpty: !process.env.GH_TOKEN,
   enterpriseTokenEmpty: !process.env.GH_ENTERPRISE_TOKEN,
   cached: fs.existsSync(path.join(process.env.HOME ?? '.', 'prepared-cache'))}) + '\\n');`;
           await frames.send({
@@ -537,7 +537,7 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
             home: homeDir,
             cached: true,
             githubHost: "fixture.ghe.com",
-            githubToken: true,
+            githubTokenEmpty: true,
             enterpriseTokenEmpty: true,
           });
           if (!isRecord(observed) || typeof observed.codexHome !== "string") {
@@ -547,6 +547,9 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
             throw new Error("Pinned exec-server omitted its private GitHub profile");
           }
           isolatedGitHubProfile = observed.githubProfile;
+          const hosts = await readFile(path.join(isolatedGitHubProfile, "hosts.yml"), "utf8");
+          expect(hosts).toContain("fixture.ghe.com");
+          expect(hosts).toContain(github.token);
           isolatedCodexHome = observed.codexHome;
           expect(isolatedCodexHome).not.toBe(path.join(homeDir, ".codex"));
         } finally {

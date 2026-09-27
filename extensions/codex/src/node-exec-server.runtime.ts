@@ -238,9 +238,10 @@ export async function runCodexNodeExecServer(params: {
           ],
         }),
         GH_HOST: host,
-        ...(isGitHubCloudHost(host)
-          ? { GH_TOKEN: params.github.token, GH_ENTERPRISE_TOKEN: "" }
-          : { GH_TOKEN: "", GH_ENTERPRISE_TOKEN: params.github.token }),
+        // Codex brokers GH_TOKEN across every GHE.com tenant. The host-keyed gh
+        // profile supplies those commands without giving the broker a cross-tenant token.
+        GH_TOKEN: host === "github.com" ? params.github.token : "",
+        GH_ENTERPRISE_TOKEN: isGitHubCloudHost(host) ? "" : params.github.token,
         GITHUB_TOKEN: "",
         GITHUB_ENTERPRISE_TOKEN: "",
       };
