@@ -2,12 +2,17 @@ import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { issueWorkerGitHubInstallationToken } from "./worker-github-installation-token.js";
 
-const pem = generateKeyPairSync("rsa", { modulusLength: 2048 })
-  .privateKey.export({
-    type: "pkcs8",
-    format: "pem",
-  })
-  .toString();
+const pem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
+  type: "pkcs8",
+  format: "pem",
+});
+
+function requestUrl(input: string | URL | Request): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  return input instanceof URL ? input.href : input.url;
+}
 
 function env(): NodeJS.ProcessEnv {
   return {
@@ -24,7 +29,7 @@ describe("worker GitHub App installation-token issuer", () => {
     delete publicEnv.GITHUB_API_BASE_URL;
     const calls: string[] = [];
     const fetch = vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
-      calls.push(String(input));
+      calls.push(requestUrl(input));
       return init.method === "DELETE"
         ? new Response(null, { status: 204 })
         : Response.json({
@@ -44,8 +49,10 @@ describe("worker GitHub App installation-token issuer", () => {
   it("mints full existing installation authority and revokes it once", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetch = vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
-      calls.push({ url: String(input), init });
-      if (init.method === "DELETE") return new Response(null, { status: 204 });
+      calls.push({ url: requestUrl(input), init });
+      if (init.method === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
       return new Response(
         JSON.stringify({
           token: "synthetic-full-installation-token",

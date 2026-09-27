@@ -59,12 +59,10 @@ vi.mock("../../process/exec.js", () => ({ runCommandBuffered: mocks.nativeToken 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const profileId = "ghp_11111111111111111111111111111111";
 const token = "synthetic-worker-github-binding-token";
-const appPrivateKey = generateKeyPairSync("rsa", { modulusLength: 2048 })
-  .privateKey.export({
-    type: "pkcs8",
-    format: "pem",
-  })
-  .toString();
+const appPrivateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
+  type: "pkcs8",
+  format: "pem",
+});
 const session = { sessionId: "worker-session", sessionKey: "agent:main:worker", agentId: "main" };
 const worktree = {
   id: "worker-worktree",

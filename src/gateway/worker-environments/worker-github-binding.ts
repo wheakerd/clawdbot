@@ -46,7 +46,9 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   requireOperatorAuthority?: boolean;
 }): Promise<WorkerGitHubBindingGrant | undefined> {
-  if (params.assertCurrent?.() === false) return undefined;
+  if (params.assertCurrent?.() === false) {
+    return undefined;
+  }
   const configuredAgent = resolveConfiguredGitHubToolIdentity({
     config: currentGitHubPublicationConfig(),
     agentId: params.agentId,
@@ -61,7 +63,9 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     workspace.kind === "repository"
       ? workspace.workspace.url
       : (await managedWorktrees.resolveRepositoryIdentity(workspace.worktree.path)).originUrl;
-  if (params.assertCurrent?.() === false) return undefined;
+  if (params.assertCurrent?.() === false) {
+    return undefined;
+  }
   const githubHost = resolveGitHubHost();
   const remote = parseGitHubRemoteUrl(originUrl, githubHost);
   if (
@@ -72,7 +76,9 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     return undefined;
   }
   const appGrant = await issueWorkerGitHubInstallationToken({});
-  if (!appGrant) throw new Error("Worker GitHub App configuration disappeared during issuance");
+  if (!appGrant) {
+    throw new Error("Worker GitHub App configuration disappeared during issuance");
+  }
   const caller = getGatewayToolCallerIdentity();
   const operator =
     params.operatorAuthority ??
@@ -93,7 +99,9 @@ export async function prepareWorkerGitHubBindingGrant(params: {
       operator.assertCurrent();
       bindingIds = profile.emailBindingIds;
       const email = profile.readCurrentFacts(bindingIds).profile.emails[0];
-      if (!email) throw new Error("The signed-in user needs a verified profile email");
+      if (!email) {
+        throw new Error("The signed-in user needs a verified profile email");
+      }
       const name = getUserProfileDisplay(operator.profileId).displayName?.trim() || email;
       gitAuthor = { name, email };
     }
@@ -115,7 +123,9 @@ export async function prepareWorkerGitHubBindingGrant(params: {
       remoteUrl: `https://${githubHost}/${remote.owner}/${remote.repo}.git`,
       ...(gitAuthor ? { gitAuthor } : {}),
     });
-    if (!binding) throw new Error("GitHub App identity does not meet the worker launch contract");
+    if (!binding) {
+      throw new Error("GitHub App identity does not meet the worker launch contract");
+    }
     return { binding, expiresAtMs: appGrant.expiresAtMs, revoke: appGrant.revoke };
   } catch (error) {
     await appGrant.revoke();

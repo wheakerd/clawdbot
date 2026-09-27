@@ -15,7 +15,9 @@ export function hasWorkerGitHubAppConfiguration(env: NodeJS.ProcessEnv = process
 }
 
 function positiveInteger(value: string | undefined): number | undefined {
-  if (!value || !/^[1-9][0-9]*$/u.test(value)) return undefined;
+  if (!value || !/^[1-9][0-9]*$/u.test(value)) {
+    return undefined;
+  }
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
@@ -23,9 +25,12 @@ function positiveInteger(value: string | undefined): number | undefined {
 function resolveAppConfig(env: NodeJS.ProcessEnv): AppConfig | undefined {
   const names = ["GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY"] as const;
   const configured = names.filter((name) => Boolean(env[name]));
-  if (configured.length === 0) return undefined;
-  if (configured.length !== names.length)
+  if (configured.length === 0) {
+    return undefined;
+  }
+  if (configured.length !== names.length) {
     throw new Error("Worker GitHub App issuer configuration is incomplete");
+  }
   const appId = positiveInteger(env.GITHUB_APP_ID);
   const installationId = positiveInteger(env.GITHUB_INSTALLATION_ID);
   if (!appId || !installationId || !env.GITHUB_APP_PRIVATE_KEY) {
@@ -64,7 +69,9 @@ export async function issueWorkerGitHubInstallationToken(params: {
   signal?: AbortSignal;
 }): Promise<WorkerGitHubInstallationTokenGrant | undefined> {
   const config = resolveAppConfig(params.env ?? process.env);
-  if (!config) return undefined;
+  if (!config) {
+    return undefined;
+  }
   const apiBase = resolveGitHubApiBaseUrl(params.env);
   const transport = params.fetch ?? fetch;
   const response = await transport(
@@ -82,7 +89,9 @@ export async function issueWorkerGitHubInstallationToken(params: {
       body: "{}",
     },
   );
-  if (!response.ok) throw new Error("GitHub installation-token issuance failed");
+  if (!response.ok) {
+    throw new Error("GitHub installation-token issuance failed");
+  }
   const issued: unknown = await response.json();
   const record = isRecord(issued) ? issued : {};
   const token = typeof record.token === "string" ? record.token : "";
@@ -100,7 +109,9 @@ export async function issueWorkerGitHubInstallationToken(params: {
     });
   const invalid = !token || !(expiresAtMs > Date.now());
   if (invalid) {
-    if (token) await revokeToken().catch(() => undefined);
+    if (token) {
+      await revokeToken().catch(() => undefined);
+    }
     throw new Error("GitHub returned an invalid installation token");
   }
   let active = true;
@@ -108,7 +119,9 @@ export async function issueWorkerGitHubInstallationToken(params: {
     token,
     expiresAtMs,
     revoke: async () => {
-      if (!active) return;
+      if (!active) {
+        return;
+      }
       active = false;
       const revoked = await revokeToken();
       if (!revoked.ok && revoked.status !== 404) {
