@@ -149,7 +149,7 @@ export function managedGitHubIdentityEnvironment(params: {
   profileDir: string;
   gitAuthor?: { name?: string; email?: string };
   gitConfig?: readonly (readonly [string, string])[];
-}): Readonly<Record<string, string>> {
+}): Readonly<Record<string, string> & { GH_CONFIG_DIR: string }> {
   const author = params.gitAuthor;
   const gitConfigEntries = [
     ...(params.gitConfig ?? []),
