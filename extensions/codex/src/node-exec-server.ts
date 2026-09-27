@@ -1,7 +1,4 @@
-import {
-  parseWorkerGitHubLaunchBinding,
-  type WorkerGitHubLaunchBinding,
-} from "openclaw/plugin-sdk/github-worker-runtime";
+import type { WorkerGitHubLaunchBinding } from "openclaw/plugin-sdk/github-worker-runtime";
 /** Declares the explicitly approved, lazily loaded node-backed Codex exec-server. */
 import type {
   OpenClawPluginNodeHostCommand,
@@ -12,6 +9,15 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
 
 const CODEX_NODE_EXEC_SERVER_CAPABILITY = "codex.exec-server";
+
+async function parseCodexNodeGitHubBinding(
+  value: unknown,
+): Promise<WorkerGitHubLaunchBinding | undefined> {
+  // Registration must not load Gateway credential and session runtime.
+  const { parseWorkerGitHubLaunchBinding } =
+    await import("openclaw/plugin-sdk/github-worker-runtime");
+  return parseWorkerGitHubLaunchBinding(value);
+}
 
 function parseCodexNodePlacementWorkspace(value: unknown) {
   if (
@@ -81,7 +87,7 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
       }
       const placement = parseCodexNodePlacementWorkspace(request.placement);
       const github: WorkerGitHubLaunchBinding | undefined = Object.hasOwn(request, "github")
-        ? parseWorkerGitHubLaunchBinding(request.github)
+        ? await parseCodexNodeGitHubBinding(request.github)
         : undefined;
       if (Object.hasOwn(request, "github") && !github) {
         throw new Error("Codex node exec-server received an invalid GitHub process binding.");
@@ -146,7 +152,7 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
       let placement: ReturnType<typeof parseCodexNodePlacementWorkspace>;
       const github =
         isRecord(context.params) && Object.hasOwn(context.params, "github")
-          ? parseWorkerGitHubLaunchBinding(context.params.github)
+          ? await parseCodexNodeGitHubBinding(context.params.github)
           : undefined;
       if (isRecord(context.params) && Object.hasOwn(context.params, "github") && !github) {
         return {
