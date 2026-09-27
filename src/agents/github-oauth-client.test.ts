@@ -265,20 +265,20 @@ describe("GitHub OAuth client", () => {
       .mockResolvedValue(jsonResponse({ id: 303, login: "enterprise-user", avatar_url: null }));
     await expect(
       verifyGitHubCredential("synthetic-enterprise-token", {
-        apiBaseUrl: "https://api.microsoft.ghe.com",
+        apiBaseUrl: "https://api.fixture.ghe.com",
       }),
     ).resolves.toMatchObject({
       status: "available",
       account: { accountId: 303, login: "enterprise-user" },
     });
     expect(probe).toHaveBeenCalledExactlyOnceWith(
-      "https://api.microsoft.ghe.com/user",
+      "https://api.fixture.ghe.com/user",
       expect.objectContaining({ method: "GET" }),
     );
   });
 
   it("keeps ordinary credential verification on public GitHub when an App API is configured", async () => {
-    vi.stubEnv("GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
+    vi.stubEnv("GITHUB_API_BASE_URL", "https://api.fixture.ghe.com");
     try {
       const probe = vi
         .spyOn(globalThis, "fetch")

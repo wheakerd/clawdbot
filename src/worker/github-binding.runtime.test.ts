@@ -358,8 +358,8 @@ describe("prepareWorkerGitHubEnvironment", () => {
   it("writes an isolated enterprise profile without exposing the token in the prepared env", async () => {
     const enterprise = {
       ...binding,
-      host: "microsoft.ghe.com",
-      remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+      host: "fixture.ghe.com",
+      remoteUrl: "https://fixture.ghe.com/example/repo.git",
     };
     await git(root, "config", "--global", `url.${origin}.insteadOf`, enterprise.remoteUrl);
     const runner = vi.spyOn(exec, "runCommandWithTimeout");
@@ -374,13 +374,13 @@ describe("prepareWorkerGitHubEnvironment", () => {
       "utf8",
     );
 
-    expect(prepared?.localIdentityEnv.GH_HOST).toBe("microsoft.ghe.com");
+    expect(prepared?.localIdentityEnv.GH_HOST).toBe("fixture.ghe.com");
     const fetchCall = runner.mock.calls.find(([args]) => args[3] === "fetch");
     expect(fetchCall?.[1]?.baseEnv).toMatchObject({
       GH_TOKEN: enterprise.token,
       GH_ENTERPRISE_TOKEN: "",
     });
-    expect(hosts).toContain("microsoft.ghe.com");
+    expect(hosts).toContain("fixture.ghe.com");
     expect(hosts).toContain(binding.token);
     expect(JSON.stringify(prepared)).not.toContain(binding.token);
     expect(prepared?.credentialScrubEnv).toEqual({

@@ -472,8 +472,8 @@ describe("Codex node exec-server", () => {
           token: "synthetic-node-installation-token",
           login: "worker-bot",
           branch: "openclaw/session-worker",
-          host: "microsoft.ghe.com",
-          remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+          host: "fixture.ghe.com",
+          remoteUrl: "https://fixture.ghe.com/example/repo.git",
         };
         const invocation = command.handle(
           JSON.stringify({
@@ -536,7 +536,7 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
           expect(observed).toMatchObject({
             home: homeDir,
             cached: true,
-            githubHost: "microsoft.ghe.com",
+            githubHost: "fixture.ghe.com",
             githubToken: true,
             enterpriseTokenEmpty: true,
           });

@@ -14,8 +14,8 @@ describe("Codex node GitHub launch binding", () => {
       token: "synthetic-node-installation-token",
       login: "worker-bot",
       branch: "openclaw/session-worker",
-      host: "microsoft.ghe.com",
-      remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+      host: "fixture.ghe.com",
+      remoteUrl: "https://fixture.ghe.com/example/repo.git",
     };
     const invokeNodeWithSessionFull = vi.fn(async ({ createParams }) => ({
       ok: true as const,
@@ -42,7 +42,7 @@ describe("Codex node GitHub launch binding", () => {
         command: "codex.exec-server.stdio.v1",
         params: {
           ...placement,
-          github: { ...github, remoteUrl: "https://outside.test/bic/lobster.git" },
+          github: { ...github, remoteUrl: "https://outside.test/example/repo.git" },
         },
         config: {},
         risk: { level: "high", family: "codex.exec-server" },

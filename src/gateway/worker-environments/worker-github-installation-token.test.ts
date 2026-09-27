@@ -16,7 +16,7 @@ function requestUrl(input: string | URL | Request): string {
 
 function env(): NodeJS.ProcessEnv {
   return {
-    GITHUB_API_BASE_URL: "https://api.microsoft.ghe.com",
+    GITHUB_API_BASE_URL: "https://api.fixture.ghe.com",
     GITHUB_APP_ID: "13361",
     GITHUB_INSTALLATION_ID: "119386",
     GITHUB_APP_PRIVATE_KEY: pem,
