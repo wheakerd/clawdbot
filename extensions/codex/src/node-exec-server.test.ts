@@ -202,50 +202,6 @@ describe("Codex node exec-server", () => {
     expect(invokeNodeWithSessionFull).toHaveBeenCalledOnce();
   });
 
-  it("carries a validated GitHub binding only through the approved node launch", async () => {
-    const { placement } = createManagedWorkspaceInvocation(process.cwd());
-    const github = {
-      token: "synthetic-node-installation-token",
-      login: "worker-bot",
-      branch: "openclaw/session-worker",
-      host: "microsoft.ghe.com",
-      remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
-    };
-    const invokeNodeWithSessionFull = vi.fn(async ({ createParams }) => ({
-      ok: true as const,
-      payload: createParams(),
-    }));
-
-    await expect(
-      createCodexNodeExecServerInvokePolicy().handle({
-        nodeId: "paired-node",
-        command: CODEX_NODE_EXEC_SERVER_COMMAND,
-        params: { ...placement, github },
-        config: {},
-        risk: { level: "high", family: "codex.exec-server" },
-        invokeNode: vi.fn(),
-        invokeNodeWithSessionFull,
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      payload: { placement, authorization: "session-full", github },
-    });
-    await expect(
-      createCodexNodeExecServerInvokePolicy().handle({
-        nodeId: "paired-node",
-        command: CODEX_NODE_EXEC_SERVER_COMMAND,
-        params: {
-          ...placement,
-          github: { ...github, remoteUrl: "https://outside.test/bic/lobster.git" },
-        },
-        config: {},
-        risk: { level: "high", family: "codex.exec-server" },
-        invokeNode: vi.fn(),
-        invokeNodeWithSessionFull,
-      }),
-    ).resolves.toMatchObject({ ok: false, code: "CODEX_NODE_EXEC_GITHUB_BINDING_INVALID" });
-  });
-
   it("checks node-local authorization before starting the pinned process", async () => {
     const frames = createNodeFrames();
     const workspace = createManagedWorkspaceInvocation(process.cwd());

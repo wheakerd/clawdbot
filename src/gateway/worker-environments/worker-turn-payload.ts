@@ -146,6 +146,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
+    operatorAuthority,
     assertActive: capability.receiptAuthority,
     takeFinishingOutcome,
   };

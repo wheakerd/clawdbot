@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   installManagedGitHubProfile,
   resolveManagedGitHubProfileDir,
@@ -22,6 +23,13 @@ const mocks = vi.hoisted(() => ({
   repositoryWorkspace: vi.fn(),
   session: vi.fn(),
   nativeToken: vi.fn(),
+  profileIdentity: vi.fn(),
+  profileDisplay: vi.fn(),
+}));
+
+vi.mock("../../state/user-profile-list.js", () => ({
+  prepareUserProfileIdentity: mocks.profileIdentity,
+  getUserProfileDisplay: mocks.profileDisplay,
 }));
 
 vi.mock("../../agents/github-oauth-client.js", () => ({ verifyGitHubCredential: mocks.verify }));
@@ -115,6 +123,12 @@ describe("worker GitHub launch binding", () => {
       stdout: Buffer.from(token),
       stderr: Buffer.alloc(0),
     });
+    mocks.profileIdentity.mockReset().mockResolvedValue({
+      emailBindingIds: ["verified-email-binding"],
+      readCurrentFacts: () => ({ profile: { emails: ["person@example.test"] } }),
+      release: vi.fn(),
+    });
+    mocks.profileDisplay.mockReset().mockReturnValue({ displayName: "Signed-in Person" });
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -141,7 +155,9 @@ describe("worker GitHub launch binding", () => {
     vi.stubEnv("OPENCLAW_GITHUB_HOST", "microsoft.ghe.com");
     vi.stubEnv("OPENCLAW_GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
     await installProfile("system", "microsoft.ghe.com");
-    mocks.repository.mockResolvedValue({ originUrl: "git@microsoft.ghe.com:bic/lobster.git" });
+    mocks.repository.mockResolvedValue({
+      originUrl: "microsoft@microsoft.ghe.com:bic/lobster.git",
+    });
 
     await expect(prepareWorkerGitHubBinding(session)).resolves.toEqual({
       token,
@@ -162,7 +178,9 @@ describe("worker GitHub launch binding", () => {
     vi.stubEnv("OPENCLAW_GITHUB_APP_ID", "13361");
     vi.stubEnv("OPENCLAW_GITHUB_INSTALLATION_ID", "119386");
     vi.stubEnv("OPENCLAW_GITHUB_APP_PRIVATE_KEY", appPrivateKey);
-    mocks.repository.mockResolvedValue({ originUrl: "git@microsoft.ghe.com:bic/lobster.git" });
+    mocks.repository.mockResolvedValue({
+      originUrl: "microsoft@microsoft.ghe.com:bic/lobster.git",
+    });
     const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) =>
       init.method === "DELETE"
         ? new Response(null, { status: 204 })
@@ -176,7 +194,12 @@ describe("worker GitHub launch binding", () => {
     );
     vi.stubGlobal("fetch", fetch);
 
-    const grant = await prepareWorkerGitHubBindingGrant(session);
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "signed-in-person",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+    });
+    const grant = await prepareWorkerGitHubBindingGrant({ ...session, operatorAuthority });
 
     expect(grant?.binding).toEqual({
       token: "synthetic-installation-token",
@@ -184,10 +207,65 @@ describe("worker GitHub launch binding", () => {
       branch: worktree.branch,
       host: "microsoft.ghe.com",
       remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+      gitAuthor: { name: "Signed-in Person", email: "person@example.test" },
     });
     await grant?.revoke();
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
+  });
+
+  it("retains selected identity on a non-GitHub workspace without App settings", async () => {
+    config = {};
+    mocks.repository.mockResolvedValue({ originUrl: "https://example.test/owner/repo.git" });
+    await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toMatchObject({
+      binding: { token, login: "shared-bot", branch: worktree.branch },
+    });
+  });
+
+  it("keeps an explicit agent override ahead of the App installation", async () => {
+    vi.stubEnv("OPENCLAW_GITHUB_APP_ID", "13361");
+    vi.stubEnv("OPENCLAW_GITHUB_INSTALLATION_ID", "119386");
+    vi.stubEnv("OPENCLAW_GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+    config.agents = { entries: { main: { tools: { github: { profileId } } } } };
+    await installProfile("agent");
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toMatchObject({
+      binding: { token, login: "shared-bot" },
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("revokes a minted App token if workspace revalidation throws", async () => {
+    vi.stubEnv("OPENCLAW_GITHUB_APP_ID", "13361");
+    vi.stubEnv("OPENCLAW_GITHUB_INSTALLATION_ID", "119386");
+    vi.stubEnv("OPENCLAW_GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+    const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) =>
+      init.method === "DELETE"
+        ? new Response(null, { status: 204 })
+        : new Response(
+            JSON.stringify({
+              token: "synthetic-installation-token",
+              expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+            }),
+            { status: 201, headers: { "content-type": "application/json" } },
+          ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "signed-in-person",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+    });
+    mocks.worktree
+      .mockImplementationOnce(() => worktree)
+      .mockImplementation(() => {
+        throw new Error("workspace changed");
+      });
+    await expect(
+      prepareWorkerGitHubBindingGrant({ ...session, operatorAuthority }),
+    ).rejects.toThrow("workspace changed");
+    expect(fetch.mock.calls.at(-1)?.[1]).toMatchObject({ method: "DELETE" });
   });
 
   it("uses the agent override author without inheriting system author fields", async () => {

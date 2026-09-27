@@ -33,11 +33,15 @@ describe("worker GitHub App installation-token issuer", () => {
       );
     }) as typeof globalThis.fetch;
 
-    const grant = await issueWorkerGitHubInstallationToken({ env: env(), fetch });
+    const serverEnv = {
+      ...env(),
+      OPENCLAW_GITHUB_API_BASE_URL: "https://github.example.test/api/v3",
+    };
+    const grant = await issueWorkerGitHubInstallationToken({ env: serverEnv, fetch });
 
     expect(grant?.token).toBe("synthetic-full-installation-token");
     expect(calls[0]?.url).toBe(
-      "https://api.microsoft.ghe.com/app/installations/119386/access_tokens",
+      "https://github.example.test/api/v3/app/installations/119386/access_tokens",
     );
     expect(calls[0]?.init.headers).toMatchObject({
       authorization: expect.stringMatching(/^Bearer [^.]+\.[^.]+\.[^.]+$/u),
@@ -47,7 +51,7 @@ describe("worker GitHub App installation-token issuer", () => {
     await grant?.revoke();
     expect(calls).toHaveLength(2);
     expect(calls[1]).toMatchObject({
-      url: "https://api.microsoft.ghe.com/installation/token",
+      url: "https://github.example.test/api/v3/installation/token",
       init: { method: "DELETE" },
     });
     expect(calls[1]?.init.headers).toMatchObject({

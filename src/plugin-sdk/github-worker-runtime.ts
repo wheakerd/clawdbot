@@ -8,6 +8,7 @@ export {
   prepareWorkerGitHubBindingGrant,
   type WorkerGitHubBindingGrant,
 } from "../gateway/worker-environments/worker-github-binding.js";
+export { hasWorkerGitHubAppConfiguration } from "../gateway/worker-environments/worker-github-installation-token.js";
 export {
   parseWorkerGitHubLaunchBinding,
   type WorkerGitHubLaunchBinding,

@@ -1,7 +1,16 @@
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
 import { resolveGitHubHost } from "../../agents/github-host.js";
 import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  getUserProfileDisplay,
+  prepareUserProfileIdentity,
+} from "../../state/user-profile-list.js";
 import {
   parseWorkerGitHubLaunchBinding,
   type WorkerGitHubLaunchBinding,
@@ -14,7 +23,12 @@ import {
   sameGitHubPublicationWorkspace,
 } from "../github-publication-availability.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
-import { issueWorkerGitHubInstallationToken } from "./worker-github-installation-token.js";
+import {
+  hasWorkerGitHubAppConfiguration,
+  issueWorkerGitHubInstallationToken,
+} from "./worker-github-installation-token.js";
+
+export type WorkerGitHubBinding = WorkerGitHubLaunchBinding;
 
 const log = createSubsystemLogger("gateway/worker-github");
 
@@ -29,8 +43,18 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   sessionKey: string;
   agentId: string;
   assertCurrent?: () => boolean;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<WorkerGitHubBindingGrant | undefined> {
   if (params.assertCurrent?.() === false) return undefined;
+  const configuredAgent = resolveConfiguredGitHubToolIdentity({
+    config: currentGitHubPublicationConfig(),
+    agentId: params.agentId,
+    scope: "agent",
+  });
+  if (!hasWorkerGitHubAppConfiguration() || configuredAgent) {
+    const binding = await prepareWorkerGitHubBinding(params);
+    return binding ? { binding, revoke: async () => {} } : undefined;
+  }
   const workspace = resolveGitHubPublicationWorkspaceOwner(params);
   const originUrl =
     workspace.kind === "repository"
@@ -47,30 +71,51 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     return undefined;
   }
   const appGrant = await issueWorkerGitHubInstallationToken({});
-  if (!appGrant) {
-    const binding = await prepareWorkerGitHubBinding(params);
-    return binding ? { binding, revoke: async () => {} } : undefined;
-  }
-  if (
-    params.assertCurrent?.() === false ||
-    !sameGitHubPublicationWorkspace(workspace, resolveGitHubPublicationWorkspaceOwner(params))
-  ) {
+  if (!appGrant) throw new Error("Worker GitHub App configuration disappeared during issuance");
+  const caller = getGatewayToolCallerIdentity();
+  const operator =
+    params.operatorAuthority ??
+    (caller?.agentId === params.agentId && caller.sessionKey === params.sessionKey
+      ? caller.operatorAuthority
+      : undefined);
+  let profile: Awaited<ReturnType<typeof prepareUserProfileIdentity>> | undefined;
+  try {
+    if (!operator) throw new Error("Worker GitHub commits require signed-in operator authority");
+    assertAdmittedRunOperatorAuthority(operator);
+    operator.assertCurrent();
+    profile = await prepareUserProfileIdentity(operator.profileId);
+    operator.assertCurrent();
+    const bindingIds = profile.emailBindingIds;
+    const email = profile.readCurrentFacts(bindingIds).profile.emails[0];
+    if (!email) throw new Error("The signed-in user needs a verified profile email");
+    const name = getUserProfileDisplay(operator.profileId).displayName?.trim() || email;
+    if (
+      params.assertCurrent?.() === false ||
+      !sameGitHubPublicationWorkspace(workspace, resolveGitHubPublicationWorkspaceOwner(params))
+    ) {
+      await appGrant.revoke();
+      return undefined;
+    }
+    operator.assertCurrent();
+    profile.readCurrentFacts(bindingIds);
+    const binding = parseWorkerGitHubLaunchBinding({
+      token: appGrant.token,
+      login: "x-access-token",
+      ...(githubHost === "github.com" ? {} : { host: githubHost }),
+      branch:
+        workspace.kind === "repository" ? workspace.workspace.branch : workspace.worktree.branch,
+      remoteUrl: `https://${githubHost}/${remote.owner}/${remote.repo}.git`,
+      gitAuthor: { name, email },
+    });
+    if (!binding)
+      throw new Error("Signed-in Git identity does not meet the worker launch contract");
+    return { binding, expiresAtMs: appGrant.expiresAtMs, revoke: appGrant.revoke };
+  } catch (error) {
     await appGrant.revoke();
-    return undefined;
+    throw error;
+  } finally {
+    profile?.release();
   }
-  const binding = parseWorkerGitHubLaunchBinding({
-    token: appGrant.token,
-    login: "x-access-token",
-    ...(githubHost === "github.com" ? {} : { host: githubHost }),
-    branch:
-      workspace.kind === "repository" ? workspace.workspace.branch : workspace.worktree.branch,
-    remoteUrl: `https://${githubHost}/${remote.owner}/${remote.repo}.git`,
-  });
-  if (!binding) {
-    await appGrant.revoke();
-    throw new Error("Worker GitHub App binding does not meet the launch contract");
-  }
-  return { binding, expiresAtMs: appGrant.expiresAtMs, revoke: appGrant.revoke };
 }
 
 export async function prepareWorkerGitHubBinding(params: {

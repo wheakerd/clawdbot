@@ -7,6 +7,14 @@ type AppConfig = {
   privateKey: ReturnType<typeof createPrivateKey>;
 };
 
+export function hasWorkerGitHubAppConfiguration(env: NodeJS.ProcessEnv = process.env): boolean {
+  return [
+    "OPENCLAW_GITHUB_APP_ID",
+    "OPENCLAW_GITHUB_INSTALLATION_ID",
+    "OPENCLAW_GITHUB_APP_PRIVATE_KEY",
+  ].some((name) => Boolean(env[name]));
+}
+
 function positiveInteger(value: string | undefined): number | undefined {
   if (!value || !/^[1-9][0-9]*$/u.test(value)) return undefined;
   const parsed = Number(value);

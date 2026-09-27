@@ -448,3 +448,7 @@ for provider selection, lifecycle, failure handling, limits, and diagnostics.
 <a id="api-runtime-tasks" />
 
 The former Tasks runtime is no longer available. See [removed Tasks and TaskFlow APIs](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed) for native-owner alternatives.
+
+## Managed worker GitHub runtime
+
+`openclaw/plugin-sdk/github-worker-runtime` is the narrow host composition seam used by bundled worker and Codex node execution. `prepareWorkerGitHubBindingGrant` returns a run-scoped launch binding and an asynchronous `revoke` operation. The caller owns revocation on every launch failure and at process or lease completion. `hasWorkerGitHubAppConfiguration` reports whether the Gateway has any App issuer setting; a partial setting still fails validation during issuance. `writeManagedGitHubProfileFiles` writes the private `gh` profile in the worker's owned state. These helpers do not authorize an arbitrary plugin to mint or retain worker credentials; callers must preserve their admitted run and placement authority at launch and cleanup.

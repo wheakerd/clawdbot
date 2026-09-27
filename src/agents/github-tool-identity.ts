@@ -48,7 +48,6 @@ import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types
 
 export { GitHubIdentityError } from "./github-read-identity.js";
 
-const GITHUB_HOST = "github.com";
 const MANAGED_GITHUB_ROOT_SEGMENTS = ["credentials", "github"] as const;
 
 export class GitHubAccountMismatchError extends Error {}
