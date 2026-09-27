@@ -376,7 +376,11 @@ describe("prepareWorkerGitHubEnvironment", () => {
 
     expect(prepared?.localIdentityEnv.GH_HOST).toBe("fixture.ghe.com");
     const fetchCall = runner.mock.calls.find(([args]) => args[3] === "fetch");
-    expect(fetchCall?.[1]?.baseEnv).toMatchObject({
+    const fetchOptions = fetchCall?.[1];
+    if (typeof fetchOptions !== "object") {
+      throw new Error("Expected options for enterprise Git fetch");
+    }
+    expect(fetchOptions.baseEnv).toMatchObject({
       GH_TOKEN: enterprise.token,
       GH_ENTERPRISE_TOKEN: "",
     });
