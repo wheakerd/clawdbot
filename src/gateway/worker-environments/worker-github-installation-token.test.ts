@@ -42,7 +42,6 @@ describe("worker GitHub App installation-token issuer", () => {
 
     const grant = await issueWorkerGitHubInstallationToken({
       host: "github.com",
-      repository: "project",
       env: publicEnv,
       fetch,
     });
@@ -53,7 +52,7 @@ describe("worker GitHub App installation-token issuer", () => {
     ]);
   });
 
-  it("limits the grant to the workspace repository and revokes it once", async () => {
+  it("uses the installation's configured scope and revokes the grant once", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetch = vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
       calls.push({ url: requestUrl(input), init });
@@ -76,7 +75,6 @@ describe("worker GitHub App installation-token issuer", () => {
     };
     const grant = await issueWorkerGitHubInstallationToken({
       host: "github.example.test",
-      repository: "project",
       env: serverEnv,
       fetch,
     });
@@ -88,7 +86,7 @@ describe("worker GitHub App installation-token issuer", () => {
     expect(calls[0]?.init.headers).toMatchObject({
       authorization: expect.stringMatching(/^Bearer [^.]+\.[^.]+\.[^.]+$/u),
     });
-    expect(calls[0]?.init.body).toBe('{"repositories":["project"]}');
+    expect(calls[0]?.init.body).toBe("{}");
     await grant?.revoke();
     await grant?.revoke();
     expect(calls).toHaveLength(2);
@@ -108,7 +106,6 @@ describe("worker GitHub App installation-token issuer", () => {
     await expect(
       issueWorkerGitHubInstallationToken({
         host: "fixture.ghe.com",
-        repository: "project",
         env: partial,
         fetch,
       }),
@@ -121,7 +118,6 @@ describe("worker GitHub App installation-token issuer", () => {
     await expect(
       issueWorkerGitHubInstallationToken({
         host: "fixture.ghe.com",
-        repository: "project",
         env: { ...env(), GITHUB_API_BASE_URL: "https://api.other.ghe.com" },
         fetch,
       }),
@@ -144,7 +140,6 @@ describe("worker GitHub App installation-token issuer", () => {
     await expect(
       issueWorkerGitHubInstallationToken({
         host: "fixture.ghe.com",
-        repository: "project",
         env: env(),
         fetch,
       }),
@@ -169,7 +164,6 @@ describe("worker GitHub App installation-token issuer", () => {
     }) as typeof globalThis.fetch;
     const grant = await issueWorkerGitHubInstallationToken({
       host: "fixture.ghe.com",
-      repository: "project",
       env: env(),
       fetch,
     });
