@@ -79,7 +79,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   ) {
     return undefined;
   }
-  const appGrant = await issueWorkerGitHubInstallationToken({});
+  const appGrant = await issueWorkerGitHubInstallationToken({ repository: remote.repo });
   if (!appGrant) {
     throw new Error("Worker GitHub App configuration disappeared during issuance");
   }

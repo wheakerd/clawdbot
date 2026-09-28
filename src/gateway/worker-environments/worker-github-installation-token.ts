@@ -74,6 +74,7 @@ export type WorkerGitHubInstallationTokenGrant = {
 };
 
 export async function issueWorkerGitHubInstallationToken(params: {
+  repository: string;
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
   signal?: AbortSignal;
@@ -96,7 +97,7 @@ export async function issueWorkerGitHubInstallationToken(params: {
         "content-type": "application/json",
         "x-github-api-version": "2022-11-28",
       },
-      body: "{}",
+      body: JSON.stringify({ repositories: [params.repository] }),
     },
   );
   if (!response.ok) {

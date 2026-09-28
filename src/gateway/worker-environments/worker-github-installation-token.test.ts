@@ -38,7 +38,11 @@ describe("worker GitHub App installation-token issuer", () => {
           });
     }) as typeof globalThis.fetch;
 
-    const grant = await issueWorkerGitHubInstallationToken({ env: publicEnv, fetch });
+    const grant = await issueWorkerGitHubInstallationToken({
+      repository: "project",
+      env: publicEnv,
+      fetch,
+    });
     await grant?.revoke();
     expect(calls).toEqual([
       "https://api.github.com/app/installations/119386/access_tokens",
@@ -46,7 +50,7 @@ describe("worker GitHub App installation-token issuer", () => {
     ]);
   });
 
-  it("mints full existing installation authority and revokes it once", async () => {
+  it("limits the grant to the workspace repository and revokes it once", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetch = vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
       calls.push({ url: requestUrl(input), init });
@@ -66,7 +70,11 @@ describe("worker GitHub App installation-token issuer", () => {
       ...env(),
       GITHUB_API_BASE_URL: "https://github.example.test/api/v3",
     };
-    const grant = await issueWorkerGitHubInstallationToken({ env: serverEnv, fetch });
+    const grant = await issueWorkerGitHubInstallationToken({
+      repository: "project",
+      env: serverEnv,
+      fetch,
+    });
 
     expect(grant?.token).toBe("synthetic-full-installation-token");
     expect(calls[0]?.url).toBe(
@@ -75,7 +83,7 @@ describe("worker GitHub App installation-token issuer", () => {
     expect(calls[0]?.init.headers).toMatchObject({
       authorization: expect.stringMatching(/^Bearer [^.]+\.[^.]+\.[^.]+$/u),
     });
-    expect(calls[0]?.init.body).toBe("{}");
+    expect(calls[0]?.init.body).toBe('{"repositories":["project"]}');
     await grant?.revoke();
     await grant?.revoke();
     expect(calls).toHaveLength(2);
@@ -92,9 +100,9 @@ describe("worker GitHub App installation-token issuer", () => {
     const fetch = vi.fn();
     const partial = env();
     delete partial.GITHUB_INSTALLATION_ID;
-    await expect(issueWorkerGitHubInstallationToken({ env: partial, fetch })).rejects.toThrow(
-      "configuration is incomplete",
-    );
+    await expect(
+      issueWorkerGitHubInstallationToken({ repository: "project", env: partial, fetch }),
+    ).rejects.toThrow("configuration is incomplete");
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -110,9 +118,9 @@ describe("worker GitHub App installation-token issuer", () => {
             { status: 201, headers: { "content-type": "application/json" } },
           ),
     ) as typeof globalThis.fetch;
-    await expect(issueWorkerGitHubInstallationToken({ env: env(), fetch })).rejects.toThrow(
-      "invalid installation token",
-    );
+    await expect(
+      issueWorkerGitHubInstallationToken({ repository: "project", env: env(), fetch }),
+    ).rejects.toThrow("invalid installation token");
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
@@ -131,7 +139,11 @@ describe("worker GitHub App installation-token issuer", () => {
         { status: 201, headers: { "content-type": "application/json" } },
       );
     }) as typeof globalThis.fetch;
-    const grant = await issueWorkerGitHubInstallationToken({ env: env(), fetch });
+    const grant = await issueWorkerGitHubInstallationToken({
+      repository: "project",
+      env: env(),
+      fetch,
+    });
 
     await expect(grant?.revoke()).rejects.toThrow("revocation failed");
     await expect(grant?.revoke()).resolves.toBeUndefined();
