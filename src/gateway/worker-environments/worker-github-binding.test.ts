@@ -178,15 +178,17 @@ describe("worker GitHub launch binding", () => {
       originUrl: "fixture@fixture.ghe.com:example/repo.git",
     });
     const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) =>
-      init.method === "DELETE"
-        ? new Response(null, { status: 204 })
-        : new Response(
-            JSON.stringify({
-              token: "synthetic-installation-token",
-              expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-            }),
-            { status: 201, headers: { "content-type": "application/json" } },
-          ),
+      init.method === "GET"
+        ? Response.json({ id: 119386 })
+        : init.method === "DELETE"
+          ? new Response(null, { status: 204 })
+          : new Response(
+              JSON.stringify({
+                token: "synthetic-installation-token",
+                expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+              }),
+              { status: 201, headers: { "content-type": "application/json" } },
+            ),
     );
     vi.stubGlobal("fetch", fetch);
 
@@ -206,22 +208,29 @@ describe("worker GitHub launch binding", () => {
       gitAuthor: { name: "Signed-in Person", email: "person@example.test" },
     });
     await grant?.revoke();
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(fetch.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: "GET" });
+    expect(fetch.mock.calls[2]?.[1]).toMatchObject({ method: "DELETE" });
 
-    const codexGrant = await prepareWorkerGitHubBindingGrant(session);
+    const codexGrant = await prepareWorkerGitHubBindingGrant({
+      ...session,
+      operatorAuthority,
+      requireOperatorAuthority: true,
+      appOnly: true,
+    });
     expect(codexGrant?.binding).toEqual({
       token: "synthetic-installation-token",
       login: "x-access-token",
       branch: worktree.branch,
       host: "fixture.ghe.com",
       remoteUrl: "https://fixture.ghe.com/example/repo.git",
+      gitAuthor: { name: "Signed-in Person", email: "person@example.test" },
     });
     await codexGrant?.revoke();
     await expect(
       prepareWorkerGitHubBindingGrant({ ...session, requireOperatorAuthority: true }),
     ).rejects.toThrow("signed-in operator authority");
-    expect(fetch.mock.calls.at(-1)?.[1]).toMatchObject({ method: "DELETE" });
+    expect(fetch).toHaveBeenCalledTimes(6);
   });
 
   it("retains selected identity on a non-GitHub workspace without App settings", async () => {
@@ -230,6 +239,45 @@ describe("worker GitHub launch binding", () => {
     await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toMatchObject({
       binding: { token, login: "shared-bot", branch: worktree.branch },
     });
+  });
+
+  it("retains the selected public identity outside the configured enterprise App host", async () => {
+    vi.stubEnv("GITHUB_HOST", "fixture.ghe.com");
+    vi.stubEnv("GITHUB_API_BASE_URL", "https://api.fixture.ghe.com");
+    vi.stubEnv("GITHUB_APP_ID", "13361");
+    vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
+    vi.stubEnv("GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+    await installProfile();
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toMatchObject({
+      binding: { token, login: "shared-bot", remoteUrl: "https://github.com/owner/repo.git" },
+    });
+    await expect(
+      prepareWorkerGitHubBindingGrant({ ...session, appOnly: true }),
+    ).resolves.toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("retains the selected identity when the App installation does not include the repository", async () => {
+    vi.stubEnv("GITHUB_HOST", "fixture.ghe.com");
+    vi.stubEnv("GITHUB_API_BASE_URL", "https://api.fixture.ghe.com");
+    vi.stubEnv("GITHUB_APP_ID", "13361");
+    vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
+    vi.stubEnv("GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+    await installProfile();
+    mocks.repository.mockResolvedValue({ originUrl: "fixture@fixture.ghe.com:example/repo.git" });
+    const fetch = vi.fn(async () => Response.json({ id: 119387 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toMatchObject({
+      binding: { token, login: "shared-bot" },
+    });
+    await expect(
+      prepareWorkerGitHubBindingGrant({ ...session, appOnly: true }),
+    ).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the selected identity when App settings are only partially present", async () => {
@@ -241,6 +289,9 @@ describe("worker GitHub launch binding", () => {
     await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toMatchObject({
       binding: { token, login: "shared-bot" },
     });
+    await expect(
+      prepareWorkerGitHubBindingGrant({ ...session, appOnly: true }),
+    ).resolves.toBeUndefined();
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -255,6 +306,9 @@ describe("worker GitHub launch binding", () => {
     await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toMatchObject({
       binding: { token, login: "shared-bot" },
     });
+    await expect(
+      prepareWorkerGitHubBindingGrant({ ...session, appOnly: true }),
+    ).resolves.toBeUndefined();
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -263,15 +317,17 @@ describe("worker GitHub launch binding", () => {
     vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
     vi.stubEnv("GITHUB_APP_PRIVATE_KEY", appPrivateKey);
     const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) =>
-      init.method === "DELETE"
-        ? new Response(null, { status: 204 })
-        : new Response(
-            JSON.stringify({
-              token: "synthetic-installation-token",
-              expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-            }),
-            { status: 201, headers: { "content-type": "application/json" } },
-          ),
+      init.method === "GET"
+        ? Response.json({ id: 119386 })
+        : init.method === "DELETE"
+          ? new Response(null, { status: 204 })
+          : new Response(
+              JSON.stringify({
+                token: "synthetic-installation-token",
+                expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+              }),
+              { status: 201, headers: { "content-type": "application/json" } },
+            ),
     );
     vi.stubGlobal("fetch", fetch);
     const operatorAuthority = createAdmittedRunOperatorAuthority({
@@ -288,6 +344,59 @@ describe("worker GitHub launch binding", () => {
       prepareWorkerGitHubBindingGrant({ ...session, operatorAuthority }),
     ).rejects.toThrow("workspace changed");
     expect(fetch.mock.calls.at(-1)?.[1]).toMatchObject({ method: "DELETE" });
+  });
+
+  it("keeps a retired workspace outcome when App revocation fails", async () => {
+    vi.stubEnv("GITHUB_APP_ID", "13361");
+    vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
+    vi.stubEnv("GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+    const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) => {
+      if (init.method === "GET") {
+        return Response.json({ id: 119386 });
+      }
+      if (init.method === "DELETE") {
+        throw new Error("synthetic revoke transport failure");
+      }
+      return Response.json({
+        token: "synthetic-installation-token",
+        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    let currentChecks = 0;
+
+    await expect(
+      prepareWorkerGitHubBindingGrant({
+        ...session,
+        assertCurrent: () => ++currentChecks < 3,
+      }),
+    ).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls[2]?.[1]).toMatchObject({ method: "DELETE" });
+  });
+
+  it("revokes the App grant if the managed worktree origin changes during issuance", async () => {
+    vi.stubEnv("GITHUB_APP_ID", "13361");
+    vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
+    vi.stubEnv("GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+    const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) =>
+      init.method === "GET"
+        ? Response.json({ id: 119386 })
+        : init.method === "DELETE"
+          ? new Response(null, { status: 204 })
+          : Response.json({
+              token: "synthetic-installation-token",
+              expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+            }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    mocks.repository
+      .mockResolvedValueOnce({ originUrl: "git@github.com:owner/repo.git" })
+      .mockResolvedValue({ originUrl: "git@github.com:other/repo.git" });
+
+    await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toBeUndefined();
+    expect(mocks.repository).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[2]?.[1]).toMatchObject({ method: "DELETE" });
   });
 
   it("uses the agent override author without inheriting system author fields", async () => {

@@ -17,8 +17,8 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import {
-  createOperationalRunInstanceRef,
   createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../admitted-run-context.js";
 import {
@@ -272,6 +272,26 @@ describe("host-prepared embedded tool authority", () => {
       }),
     );
     expect(closed.broadcastToConnIds).not.toHaveBeenCalled();
+  });
+
+  it("carries the admitted operator into the embedded run caller scope", async () => {
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "synthetic-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+    });
+    await admitted(
+      async ({ admittedRunContext }) =>
+        await withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext },
+          attempt,
+          undefined,
+          async () => {
+            expect(getGatewayToolCallerIdentity()?.operatorAuthority).toBe(operatorAuthority);
+          },
+        ),
+      operatorAuthority,
+    );
   });
 
   it.each([

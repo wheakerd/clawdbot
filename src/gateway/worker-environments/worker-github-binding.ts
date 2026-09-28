@@ -25,6 +25,7 @@ import {
 import { parseGitHubRemoteUrl } from "../github-remote.js";
 import {
   issueWorkerGitHubInstallationToken,
+  WorkerGitHubRepositoryUnavailableError,
   workerGitHubAppConfigurationState,
 } from "./worker-github-installation-token.js";
 
@@ -45,10 +46,18 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   assertCurrent?: () => boolean;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   requireOperatorAuthority?: boolean;
+  appOnly?: boolean;
 }): Promise<WorkerGitHubBindingGrant | undefined> {
   if (params.assertCurrent?.() === false) {
     return undefined;
   }
+  const selectedIdentityGrant = async () => {
+    if (params.appOnly) {
+      return undefined;
+    }
+    const binding = await prepareWorkerGitHubBinding(params);
+    return binding ? { binding, revoke: async () => {} } : undefined;
+  };
   const configuredAgent = resolveConfiguredGitHubToolIdentity({
     config: currentGitHubPublicationConfig(),
     agentId: params.agentId,
@@ -59,14 +68,19 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     log.warn("Worker GitHub App settings are incomplete; using the selected GitHub identity.");
   }
   if (appState !== "complete" || configuredAgent) {
-    const binding = await prepareWorkerGitHubBinding(params);
-    return binding ? { binding, revoke: async () => {} } : undefined;
+    return selectedIdentityGrant();
   }
-  const workspace = resolveGitHubPublicationWorkspaceOwner(params);
-  const originUrl =
-    workspace.kind === "repository"
-      ? workspace.workspace.url
-      : (await managedWorktrees.resolveRepositoryIdentity(workspace.worktree.path)).originUrl;
+  let workspace: ReturnType<typeof resolveGitHubPublicationWorkspaceOwner>;
+  let originUrl: string;
+  try {
+    workspace = resolveGitHubPublicationWorkspaceOwner(params);
+    originUrl =
+      workspace.kind === "repository"
+        ? workspace.workspace.url
+        : (await managedWorktrees.resolveRepositoryIdentity(workspace.worktree.path)).originUrl;
+  } catch {
+    return selectedIdentityGrant();
+  }
   if (params.assertCurrent?.() === false) {
     return undefined;
   }
@@ -77,13 +91,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     !/^[A-Za-z0-9_.-]+$/u.test(remote.owner) ||
     !/^[A-Za-z0-9_.-]+$/u.test(remote.repo)
   ) {
-    return undefined;
-  }
-  const appGrant = await issueWorkerGitHubInstallationToken({
-    host: githubHost,
-  });
-  if (!appGrant) {
-    throw new Error("Worker GitHub App configuration disappeared during issuance");
+    return selectedIdentityGrant();
   }
   const caller = getGatewayToolCallerIdentity();
   const operator =
@@ -91,11 +99,38 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     (caller?.agentId === params.agentId && caller.sessionKey === params.sessionKey
       ? caller.operatorAuthority
       : undefined);
+  if (params.requireOperatorAuthority && !operator) {
+    throw new Error("Worker GitHub commits require signed-in operator authority");
+  }
+  if (operator) {
+    assertAdmittedRunOperatorAuthority(operator);
+    operator.assertCurrent();
+  }
+  let appGrant: Awaited<ReturnType<typeof issueWorkerGitHubInstallationToken>>;
+  try {
+    appGrant = await issueWorkerGitHubInstallationToken({
+      host: githubHost,
+      repository: remote,
+    });
+  } catch (error) {
+    if (error instanceof WorkerGitHubRepositoryUnavailableError) {
+      log.warn("Worker GitHub App does not include this workspace; using selected identity.");
+      return selectedIdentityGrant();
+    }
+    throw error;
+  }
+  if (!appGrant) {
+    throw new Error("Worker GitHub App configuration disappeared during issuance");
+  }
+  const revokeAppGrant = async () => {
+    try {
+      await appGrant.revoke();
+    } catch {
+      log.warn("Worker GitHub token revocation failed; the installation token will expire.");
+    }
+  };
   let profile: Awaited<ReturnType<typeof prepareUserProfileIdentity>> | undefined;
   try {
-    if (params.requireOperatorAuthority && !operator) {
-      throw new Error("Worker GitHub commits require signed-in operator authority");
-    }
     let gitAuthor: { name: string; email: string } | undefined;
     let bindingIds: readonly string[] = [];
     if (operator) {
@@ -111,11 +146,19 @@ export async function prepareWorkerGitHubBindingGrant(params: {
       const name = getUserProfileDisplay(operator.profileId).displayName?.trim() || email;
       gitAuthor = { name, email };
     }
+    const currentOriginUrl =
+      workspace.kind === "repository"
+        ? originUrl
+        : (await managedWorktrees.resolveRepositoryIdentity(workspace.worktree.path)).originUrl;
+    const currentWorkspace = resolveGitHubPublicationWorkspaceOwner(params);
+    const currentRemote = parseGitHubRemoteUrl(currentOriginUrl, githubHost);
     if (
       params.assertCurrent?.() === false ||
-      !sameGitHubPublicationWorkspace(workspace, resolveGitHubPublicationWorkspaceOwner(params))
+      !sameGitHubPublicationWorkspace(workspace, currentWorkspace) ||
+      currentRemote?.owner.toLowerCase() !== remote.owner.toLowerCase() ||
+      currentRemote?.repo.toLowerCase() !== remote.repo.toLowerCase()
     ) {
-      await appGrant.revoke();
+      await revokeAppGrant();
       return undefined;
     }
     operator?.assertCurrent();
@@ -134,7 +177,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     }
     return { binding, expiresAtMs: appGrant.expiresAtMs, revoke: appGrant.revoke };
   } catch (error) {
-    await appGrant.revoke();
+    await revokeAppGrant();
     throw error;
   } finally {
     profile?.release();

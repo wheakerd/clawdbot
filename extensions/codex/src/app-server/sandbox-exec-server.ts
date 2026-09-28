@@ -202,8 +202,19 @@ async function acquireOpenClawExecServer(params: {
             sessionKey: placementIdentity.sessionKey,
             agentId,
             assertCurrent: () => !signal.aborted && !server.closed,
+            requireOperatorAuthority: true,
+            appOnly: true,
           });
         }
+        const revokeGitHubGrant = async () => {
+          try {
+            await githubGrant?.revoke();
+          } catch {
+            embeddedAgentLog.warn(
+              "Codex node GitHub token revocation failed; the installation token will expire.",
+            );
+          }
+        };
         let channel: Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>>;
         try {
           // Capture the admitted caller's exact async scope before a detached WebSocket event.
@@ -222,7 +233,7 @@ async function acquireOpenClawExecServer(params: {
             signal,
           });
         } catch (error) {
-          await githubGrant?.revoke();
+          await revokeGitHubGrant();
           throw error;
         }
         if (
@@ -231,7 +242,7 @@ async function acquireOpenClawExecServer(params: {
           sandboxExecServerRegistry.servers.get(key) !== promise
         ) {
           channel.close();
-          await githubGrant?.revoke();
+          await revokeGitHubGrant();
           throw new Error("Codex node execution retired before its channel was ready.");
         }
         const nodeLease = {
@@ -245,9 +256,9 @@ async function acquireOpenClawExecServer(params: {
         // The approved child can exit before app-server claims its loopback socket.
         // Observe that lifetime immediately instead of losing its terminal fact.
         const closedAndRevoked = channel.closed.then(
-          async () => await githubGrant?.revoke(),
+          async () => await revokeGitHubGrant(),
           async (error: unknown) => {
-            await githubGrant?.revoke();
+            await revokeGitHubGrant();
             throw error;
           },
         );

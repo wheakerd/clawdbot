@@ -125,6 +125,22 @@ describe("worker GitHub App installation-token issuer", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("rejects a repository owned by another installation before token issuance", async () => {
+    const fetch = vi.fn(async (_input: string | URL | Request) => Response.json({ id: 119387 }));
+    await expect(
+      issueWorkerGitHubInstallationToken({
+        host: "fixture.ghe.com",
+        repository: { owner: "example", repo: "project" },
+        env: env(),
+        fetch: fetch as typeof globalThis.fetch,
+      }),
+    ).rejects.toThrow("does not include the workspace repository");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(requestUrl(fetch.mock.calls[0]![0])).toBe(
+      "https://api.fixture.ghe.com/repos/example/project/installation",
+    );
+  });
+
   it("revokes a malformed issued token before rejecting it", async () => {
     const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) =>
       init.method === "DELETE"
@@ -147,29 +163,37 @@ describe("worker GitHub App installation-token issuer", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it("retains revocation ownership after a failed delete so cleanup can retry", async () => {
-    let deletes = 0;
-    const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) => {
-      if (init.method === "DELETE") {
-        deletes += 1;
-        return new Response(null, { status: deletes === 1 ? 503 : 204 });
-      }
-      return new Response(
-        JSON.stringify({
-          token: "synthetic-retry-token",
-          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-        }),
-        { status: 201, headers: { "content-type": "application/json" } },
-      );
-    }) as typeof globalThis.fetch;
-    const grant = await issueWorkerGitHubInstallationToken({
-      host: "fixture.ghe.com",
-      env: env(),
-      fetch,
-    });
+  it.for(["response", "network"] as const)(
+    "retains revocation ownership after a $0 failure so cleanup can retry",
+    async (failure) => {
+      let deletes = 0;
+      const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) => {
+        if (init.method === "DELETE") {
+          deletes += 1;
+          if (deletes === 1 && failure === "network") {
+            throw new Error("synthetic network unavailable");
+          }
+          return new Response(null, { status: deletes === 1 ? 503 : 204 });
+        }
+        return new Response(
+          JSON.stringify({
+            token: "synthetic-retry-token",
+            expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof globalThis.fetch;
+      const grant = await issueWorkerGitHubInstallationToken({
+        host: "fixture.ghe.com",
+        env: env(),
+        fetch,
+      });
 
-    await expect(grant?.revoke()).rejects.toThrow("revocation failed");
-    await expect(grant?.revoke()).resolves.toBeUndefined();
-    expect(deletes).toBe(2);
-  });
+      await expect(grant?.revoke()).rejects.toThrow(
+        failure === "network" ? "synthetic network unavailable" : "revocation failed",
+      );
+      await expect(grant?.revoke()).resolves.toBeUndefined();
+      expect(deletes).toBe(2);
+    },
+  );
 });

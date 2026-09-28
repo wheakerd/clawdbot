@@ -220,11 +220,8 @@ export async function runCodexNodeExecServer(params: {
     await mkdir(codexHome, { recursive: true, mode: 0o700 });
     let githubEnv: Record<string, string> = {};
     if (params.github) {
-      const {
-        isGitHubCloudHost,
-        managedGitHubIdentityEnvironment,
-        writeManagedGitHubProfileFiles,
-      } = await import("openclaw/plugin-sdk/github-worker-runtime");
+      const { managedGitHubIdentityEnvironment, writeManagedGitHubProfileFiles } =
+        await import("openclaw/plugin-sdk/github-worker-runtime");
       const profileDir = path.join(dir, "github");
       const host = params.github.host ?? "github.com";
       await writeManagedGitHubProfileFiles(profileDir, { ...params.github, host });
@@ -239,9 +236,9 @@ export async function runCodexNodeExecServer(params: {
         }),
         GH_HOST: host,
         // Codex brokers GH_TOKEN across every GHE.com tenant. The host-keyed gh
-        // profile supplies those commands without giving the broker a cross-tenant token.
-        GH_TOKEN: host === "github.com" ? params.github.token : "",
-        GH_ENTERPRISE_TOKEN: isGitHubCloudHost(host) ? "" : params.github.token,
+        // profile supplies stock commands without registering this token with the broker.
+        GH_TOKEN: "",
+        GH_ENTERPRISE_TOKEN: "",
         GITHUB_TOKEN: "",
         GITHUB_ENTERPRISE_TOKEN: "",
       };

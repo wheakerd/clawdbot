@@ -73,8 +73,11 @@ export type WorkerGitHubInstallationTokenGrant = {
   revoke: () => Promise<void>;
 };
 
+export class WorkerGitHubRepositoryUnavailableError extends Error {}
+
 export async function issueWorkerGitHubInstallationToken(params: {
   host: string;
+  repository?: { owner: string; repo: string };
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
   signal?: AbortSignal;
@@ -86,6 +89,43 @@ export async function issueWorkerGitHubInstallationToken(params: {
   }
   const apiBase = resolveGitHubAppApiBaseUrl(params.host, env);
   const transport = params.fetch ?? fetch;
+  const authorization = `Bearer ${appJwt(config)}`;
+  if (params.repository) {
+    const owner = await transport(
+      `${apiBase}/repos/${encodeURIComponent(params.repository.owner)}/${encodeURIComponent(params.repository.repo)}/installation`,
+      {
+        method: "GET",
+        redirect: "error",
+        signal: params.signal ?? AbortSignal.timeout(10_000),
+        headers: {
+          authorization,
+          accept: "application/vnd.github+json",
+          "x-github-api-version": "2022-11-28",
+        },
+      },
+    );
+    if (owner.status === 404) {
+      void owner.body?.cancel();
+      throw new WorkerGitHubRepositoryUnavailableError(
+        "GitHub App installation does not include the workspace repository",
+      );
+    }
+    if (!owner.ok) {
+      void owner.body?.cancel();
+      throw new Error("GitHub App repository ownership verification failed");
+    }
+    let installation: unknown;
+    try {
+      installation = await owner.json();
+    } catch {
+      throw new Error("GitHub App repository ownership verification failed");
+    }
+    if (!isRecord(installation) || installation.id !== config.installationId) {
+      throw new WorkerGitHubRepositoryUnavailableError(
+        "GitHub App installation does not include the workspace repository",
+      );
+    }
+  }
   const response = await transport(
     `${apiBase}/app/installations/${config.installationId}/access_tokens`,
     {
@@ -93,7 +133,7 @@ export async function issueWorkerGitHubInstallationToken(params: {
       redirect: "error",
       signal: params.signal ?? AbortSignal.timeout(10_000),
       headers: {
-        authorization: `Bearer ${appJwt(config)}`,
+        authorization,
         accept: "application/vnd.github+json",
         "content-type": "application/json",
         "x-github-api-version": "2022-11-28",
@@ -135,10 +175,14 @@ export async function issueWorkerGitHubInstallationToken(params: {
         return;
       }
       active = false;
-      const revoked = await revokeToken();
-      if (!revoked.ok && revoked.status !== 404) {
+      try {
+        const revoked = await revokeToken();
+        if (!revoked.ok && revoked.status !== 404) {
+          throw new Error("GitHub installation-token revocation failed");
+        }
+      } catch (error) {
         active = true;
-        throw new Error("GitHub installation-token revocation failed");
+        throw error;
       }
     },
   };

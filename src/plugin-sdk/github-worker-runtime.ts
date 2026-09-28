@@ -1,5 +1,4 @@
 /** Focused composition seam for process-scoped GitHub credentials on managed workers. */
-export { isGitHubCloudHost } from "../agents/github-host.js";
 export {
   managedGitHubIdentityEnvironment,
   writeManagedGitHubProfileFiles,

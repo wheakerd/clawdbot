@@ -16,6 +16,18 @@ import {
 } from "./sandbox-exec-server.test-helpers.js";
 
 const customLoggingPattern = vi.hoisted(() => ({ value: "" }));
+const githubAppGrant = vi.hoisted(() => ({
+  enabled: false,
+  prepare: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/github-worker-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/github-worker-runtime")>();
+  return {
+    ...actual,
+    hasWorkerGitHubAppConfiguration: () => githubAppGrant.enabled,
+    prepareWorkerGitHubBindingGrant: githubAppGrant.prepare,
+  };
+});
 vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>();
   return {
@@ -165,6 +177,8 @@ useIsolatedStateGuard();
 
 afterEach(async () => {
   customLoggingPattern.value = "";
+  githubAppGrant.enabled = false;
+  githubAppGrant.prepare.mockReset();
   await sandboxExecServerRegistry.closeAll();
 });
 
@@ -208,6 +222,50 @@ describe("Codex paired-device exec-server relay", () => {
       client.request.mock.invocationCallOrder[0] ?? Infinity,
     );
     expect(execServerUrlFromClient(client)).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/openclaw-/);
+  });
+
+  it("preserves a normally closed node lease when App token revocation fails", async () => {
+    const binding = {
+      token: "synthetic-node-installation-token",
+      login: "x-access-token",
+      branch: "openclaw/session-worker",
+      host: "fixture.ghe.com",
+      remoteUrl: "https://fixture.ghe.com/example/repo.git",
+    };
+    const revoke = vi.fn(async () => {
+      throw new Error("synthetic revoke transport failure");
+    });
+    githubAppGrant.enabled = true;
+    githubAppGrant.prepare.mockResolvedValue({ binding, revoke });
+    const transport = createNodeChannel();
+    const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
+    const sandbox = { ...createNodeSandbox(), placementAgentId: "main" };
+    const client = createClient();
+    const onExecutionDisconnect = vi.fn<(error: Error) => void>();
+    const environment = await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+      runtime: createNodeRuntime(openDuplex),
+      signal: new AbortController().signal,
+      onExecutionDisconnect,
+    });
+
+    expect(githubAppGrant.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", appOnly: true, requireOperatorAuthority: true }),
+    );
+    expect(openDuplex).toHaveBeenCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ github: binding }) }),
+    );
+    transport.channel.close();
+    await vi.waitFor(() => expect(onExecutionDisconnect).toHaveBeenCalledOnce());
+    expect(onExecutionDisconnect.mock.calls[0]?.[0].message).toContain(
+      "(execution node disconnected)",
+    );
+    expect(onExecutionDisconnect.mock.calls[0]?.[0].message).not.toContain(
+      "synthetic revoke transport failure",
+    );
+    expect(revoke).toHaveBeenCalledOnce();
+    await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
   });
 
   it.each([
