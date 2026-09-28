@@ -1,6 +1,6 @@
 import { createPrivateKey, createSign } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveGitHubApiBaseUrl } from "../../agents/github-host.js";
+import { resolveGitHubAppApiBaseUrl } from "../../agents/github-host.js";
 
 type AppConfig = {
   appId: number;
@@ -74,16 +74,18 @@ export type WorkerGitHubInstallationTokenGrant = {
 };
 
 export async function issueWorkerGitHubInstallationToken(params: {
+  host: string;
   repository: string;
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
   signal?: AbortSignal;
 }): Promise<WorkerGitHubInstallationTokenGrant | undefined> {
-  const config = resolveAppConfig(params.env ?? process.env);
+  const env = params.env ?? process.env;
+  const config = resolveAppConfig(env);
   if (!config) {
     return undefined;
   }
-  const apiBase = resolveGitHubApiBaseUrl(params.env);
+  const apiBase = resolveGitHubAppApiBaseUrl(params.host, env);
   const transport = params.fetch ?? fetch;
   const response = await transport(
     `${apiBase}/app/installations/${config.installationId}/access_tokens`,

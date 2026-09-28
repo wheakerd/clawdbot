@@ -16,6 +16,7 @@ function requestUrl(input: string | URL | Request): string {
 
 function env(): NodeJS.ProcessEnv {
   return {
+    GITHUB_HOST: "fixture.ghe.com",
     GITHUB_API_BASE_URL: "https://api.fixture.ghe.com",
     GITHUB_APP_ID: "13361",
     GITHUB_INSTALLATION_ID: "119386",
@@ -26,6 +27,7 @@ function env(): NodeJS.ProcessEnv {
 describe("worker GitHub App installation-token issuer", () => {
   it("uses the public GitHub API when no enterprise endpoint is configured", async () => {
     const publicEnv = env();
+    delete publicEnv.GITHUB_HOST;
     delete publicEnv.GITHUB_API_BASE_URL;
     const calls: string[] = [];
     const fetch = vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
@@ -39,6 +41,7 @@ describe("worker GitHub App installation-token issuer", () => {
     }) as typeof globalThis.fetch;
 
     const grant = await issueWorkerGitHubInstallationToken({
+      host: "github.com",
       repository: "project",
       env: publicEnv,
       fetch,
@@ -68,9 +71,11 @@ describe("worker GitHub App installation-token issuer", () => {
 
     const serverEnv = {
       ...env(),
+      GITHUB_HOST: "github.example.test",
       GITHUB_API_BASE_URL: "https://github.example.test/api/v3",
     };
     const grant = await issueWorkerGitHubInstallationToken({
+      host: "github.example.test",
       repository: "project",
       env: serverEnv,
       fetch,
@@ -101,8 +106,26 @@ describe("worker GitHub App installation-token issuer", () => {
     const partial = env();
     delete partial.GITHUB_INSTALLATION_ID;
     await expect(
-      issueWorkerGitHubInstallationToken({ repository: "project", env: partial, fetch }),
+      issueWorkerGitHubInstallationToken({
+        host: "fixture.ghe.com",
+        repository: "project",
+        env: partial,
+        fetch,
+      }),
     ).rejects.toThrow("configuration is incomplete");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a different API tenant before issuing a worker credential", async () => {
+    const fetch = vi.fn();
+    await expect(
+      issueWorkerGitHubInstallationToken({
+        host: "fixture.ghe.com",
+        repository: "project",
+        env: { ...env(), GITHUB_API_BASE_URL: "https://api.other.ghe.com" },
+        fetch,
+      }),
+    ).rejects.toThrow("must match GITHUB_HOST");
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -119,7 +142,12 @@ describe("worker GitHub App installation-token issuer", () => {
           ),
     ) as typeof globalThis.fetch;
     await expect(
-      issueWorkerGitHubInstallationToken({ repository: "project", env: env(), fetch }),
+      issueWorkerGitHubInstallationToken({
+        host: "fixture.ghe.com",
+        repository: "project",
+        env: env(),
+        fetch,
+      }),
     ).rejects.toThrow("invalid installation token");
     expect(fetch).toHaveBeenCalledTimes(2);
   });
@@ -140,6 +168,7 @@ describe("worker GitHub App installation-token issuer", () => {
       );
     }) as typeof globalThis.fetch;
     const grant = await issueWorkerGitHubInstallationToken({
+      host: "fixture.ghe.com",
       repository: "project",
       env: env(),
       fetch,
