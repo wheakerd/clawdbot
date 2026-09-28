@@ -312,6 +312,39 @@ describe("worker GitHub launch binding", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "revokes an App token when an agent override takes effect during issuance (appOnly=%s)",
+    async (appOnly) => {
+      vi.stubEnv("GITHUB_APP_ID", "13361");
+      vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
+      vi.stubEnv("GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+      await installProfile("agent");
+      const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) => {
+        if (init.method === "GET") {
+          return Response.json({ id: 119386 });
+        }
+        if (init.method === "DELETE") {
+          return new Response(null, { status: 204 });
+        }
+        config.agents = { entries: { main: { tools: { github: { profileId } } } } };
+        return Response.json({
+          token: "synthetic-installation-token",
+          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        });
+      });
+      vi.stubGlobal("fetch", fetch);
+
+      const grant = await prepareWorkerGitHubBindingGrant({ ...session, appOnly });
+
+      if (appOnly) {
+        expect(grant).toBeUndefined();
+      } else {
+        expect(grant?.binding).toMatchObject({ token, login: "shared-bot" });
+      }
+      expect(fetch.mock.calls.at(-1)?.[1]).toMatchObject({ method: "DELETE" });
+    },
+  );
+
   it("revokes a minted App token if workspace revalidation throws", async () => {
     vi.stubEnv("GITHUB_APP_ID", "13361");
     vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");

@@ -163,6 +163,16 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     }
     operator?.assertCurrent();
     profile?.readCurrentFacts(bindingIds);
+    if (
+      resolveConfiguredGitHubToolIdentity({
+        config: currentGitHubPublicationConfig(),
+        agentId: params.agentId,
+        scope: "agent",
+      })
+    ) {
+      await revokeAppGrant();
+      return selectedIdentityGrant();
+    }
     const binding = parseWorkerGitHubLaunchBinding({
       token: appGrant.token,
       login: "x-access-token",
