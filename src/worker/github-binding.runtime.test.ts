@@ -366,7 +366,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
     const prepared = await prepareWorkerGitHubEnvironment({
       binding: enterprise,
       stateDir: path.join(root, "enterprise-state"),
-      runId: "enterprise-turn",
+      turnId: "enterprise-turn",
       cwd,
     });
     const hosts = await fs.readFile(
