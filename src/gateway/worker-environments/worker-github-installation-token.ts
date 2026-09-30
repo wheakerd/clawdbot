@@ -171,23 +171,45 @@ export async function issueWorkerGitHubInstallationToken(params: {
     throw new Error("GitHub returned an invalid installation token");
   }
   let active = true;
-  return {
-    token,
-    expiresAtMs,
-    revoke: async () => {
-      if (!active) {
-        return;
+  let revoking: Promise<void> | undefined;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  const revoke = (): Promise<void> => {
+    if (revoking) {
+      return revoking;
+    }
+    clearTimeout(retry);
+    retry = undefined;
+    if (!active || Date.now() >= expiresAtMs) {
+      active = false;
+      return Promise.resolve();
+    }
+    revoking = (async () => {
+      const revoked = await revokeToken();
+      if (!revoked.ok && revoked.status !== 404 && revoked.status !== 401) {
+        throw new Error("GitHub installation-token revocation failed");
       }
       active = false;
-      try {
-        const revoked = await revokeToken();
-        if (!revoked.ok && revoked.status !== 404) {
-          throw new Error("GitHub installation-token revocation failed");
+    })()
+      .catch((error: unknown) => {
+        // The issuer retains cleanup after the run drops its profile and grant handle.
+        const remaining = expiresAtMs - Date.now();
+        if (remaining > 0) {
+          retry = setTimeout(
+            () => {
+              void revoke().catch(() => {});
+            },
+            Math.min(60_000, remaining),
+          );
+          retry.unref?.();
+        } else {
+          active = false;
         }
-      } catch (error) {
-        active = true;
         throw error;
-      }
-    },
+      })
+      .finally(() => {
+        revoking = undefined;
+      });
+    return revoking;
   };
+  return { token, expiresAtMs, revoke };
 }

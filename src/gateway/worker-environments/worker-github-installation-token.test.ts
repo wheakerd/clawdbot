@@ -207,6 +207,93 @@ describe("worker GitHub App installation-token issuer", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("joins concurrent cleanup and stops retries at the issued token expiry", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    let deletes = 0;
+    let complete: () => void = () => {};
+    const completion = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) => {
+      if (init.method !== "DELETE") {
+        return Response.json({
+          token: "synthetic-short-cleanup",
+          expires_at: new Date(Date.now() + 20_000).toISOString(),
+        });
+      }
+      deletes += 1;
+      await completion;
+      return new Response(null, { status: 503 });
+    }) as typeof globalThis.fetch;
+    try {
+      const grant = await issueWorkerGitHubInstallationToken({
+        host: "fixture.ghe.com",
+        env: env(),
+        fetch,
+      });
+      const first = grant?.revoke();
+      let secondSettled = false;
+      const second = grant?.revoke().finally(() => {
+        secondSettled = true;
+      });
+      const rejected = Promise.allSettled([first, second]);
+      await Promise.resolve();
+      expect(secondSettled).toBe(false);
+      expect(deletes).toBe(1);
+      complete();
+      expect(await rejected).toEqual([
+        expect.objectContaining({ status: "rejected" }),
+        expect.objectContaining({ status: "rejected" }),
+      ]);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(deletes).toBe(1);
+      await expect(grant?.revoke()).resolves.toBeUndefined();
+    } finally {
+      complete();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["response", "network", "already-revoked"] as const)(
+    "retains final cleanup after %s failure without a caller-held retry",
+    async (failure) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      let deletes = 0;
+      const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) => {
+        if (init.method !== "DELETE") {
+          return Response.json({
+            token: "synthetic-retained-cleanup",
+            expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+          });
+        }
+        deletes += 1;
+        if (deletes === 1) {
+          if (failure === "network" || failure === "already-revoked") {
+            throw new Error("synthetic response lost");
+          }
+          return new Response(null, { status: 503 });
+        }
+        return new Response(null, { status: failure === "already-revoked" ? 401 : 204 });
+      }) as typeof globalThis.fetch;
+      try {
+        const grant = await issueWorkerGitHubInstallationToken({
+          host: "fixture.ghe.com",
+          env: env(),
+          fetch,
+        });
+        await expect(grant?.revoke()).rejects.toThrow();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(deletes).toBe(2);
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(deletes).toBe(2);
+        await expect(grant?.revoke()).resolves.toBeUndefined();
+        expect(deletes).toBe(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.for(["response", "network"] as const)(
     "retains revocation ownership after a $0 failure so cleanup can retry",
     async (failure) => {
