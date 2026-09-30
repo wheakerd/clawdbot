@@ -204,6 +204,7 @@ async function acquireOpenClawExecServer(params: {
             assertCurrent: () => !signal.aborted && !server.closed,
             requireOperatorAuthority: true,
             appOnly: true,
+            signal,
           });
         }
         const revokeGitHubGrant = async () => {
@@ -230,7 +231,7 @@ async function acquireOpenClawExecServer(params: {
             timeoutMs: 0,
             maxMessageBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES,
             maxOutstandingDeliveryBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES + 2 * 1024 * 1024,
-            signal,
+            signal: githubGrant?.signal ? AbortSignal.any([signal, githubGrant.signal]) : signal,
           });
         } catch (error) {
           await revokeGitHubGrant();
@@ -238,6 +239,7 @@ async function acquireOpenClawExecServer(params: {
         }
         if (
           signal.aborted ||
+          githubGrant?.signal?.aborted ||
           server.closed ||
           sandboxExecServerRegistry.servers.get(key) !== promise
         ) {

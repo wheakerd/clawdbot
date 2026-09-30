@@ -192,7 +192,9 @@ describe("worker GitHub launch binding", () => {
     );
     vi.stubGlobal("fetch", fetch);
 
+    const authorityAbort = new AbortController();
     const operatorAuthority = createAdmittedRunOperatorAuthority({
+      signal: authorityAbort.signal,
       profileId: "signed-in-person",
       scopes: ["operator.write"],
       assertCurrent: () => {},
@@ -207,6 +209,9 @@ describe("worker GitHub launch binding", () => {
       remoteUrl: "https://fixture.ghe.com/example/repo.git",
       gitAuthor: { name: "Signed-in Person", email: "person@example.test" },
     });
+    authorityAbort.abort();
+    await Promise.resolve();
+    expect(fetch.mock.calls.at(-1)?.[1]).toMatchObject({ method: "DELETE" });
     await grant?.revoke();
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: "GET" });
@@ -214,7 +219,11 @@ describe("worker GitHub launch binding", () => {
 
     const codexGrant = await prepareWorkerGitHubBindingGrant({
       ...session,
-      operatorAuthority,
+      operatorAuthority: createAdmittedRunOperatorAuthority({
+        profileId: "signed-in-person",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+      }),
       requireOperatorAuthority: true,
       appOnly: true,
     });
@@ -349,8 +358,12 @@ describe("worker GitHub launch binding", () => {
     vi.stubEnv("GITHUB_APP_ID", "13361");
     vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
     vi.stubEnv("GITHUB_APP_PRIVATE_KEY", appPrivateKey);
-    const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) =>
-      init.method === "GET"
+    let issued = false;
+    const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) => {
+      if (init.method === "POST") {
+        issued = true;
+      }
+      return init.method === "GET"
         ? Response.json({ id: 119386 })
         : init.method === "DELETE"
           ? new Response(null, { status: 204 })
@@ -360,19 +373,20 @@ describe("worker GitHub launch binding", () => {
                 expires_at: new Date(Date.now() + 3_600_000).toISOString(),
               }),
               { status: 201, headers: { "content-type": "application/json" } },
-            ),
-    );
+            );
+    });
     vi.stubGlobal("fetch", fetch);
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "signed-in-person",
       scopes: ["operator.write"],
       assertCurrent: () => {},
     });
-    mocks.worktree
-      .mockImplementationOnce(() => worktree)
-      .mockImplementation(() => {
+    mocks.worktree.mockImplementation(() => {
+      if (issued) {
         throw new Error("workspace changed");
-      });
+      }
+      return worktree;
+    });
     await expect(
       prepareWorkerGitHubBindingGrant({ ...session, operatorAuthority }),
     ).rejects.toThrow("workspace changed");

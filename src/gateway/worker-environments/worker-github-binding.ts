@@ -8,6 +8,10 @@ import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  onUserProfileEmailBindingChanged,
+  onUserProfilesChanged,
+} from "../../state/user-profile-events.js";
+import {
   getUserProfileDisplay,
   prepareUserProfileIdentity,
 } from "../../state/user-profile-list.js";
@@ -36,6 +40,7 @@ const log = createSubsystemLogger("gateway/worker-github");
 export type WorkerGitHubBindingGrant = {
   binding: WorkerGitHubBinding;
   expiresAtMs?: number;
+  signal?: AbortSignal;
   revoke: () => Promise<void>;
 };
 
@@ -47,8 +52,9 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   requireOperatorAuthority?: boolean;
   appOnly?: boolean;
+  signal?: AbortSignal;
 }): Promise<WorkerGitHubBindingGrant | undefined> {
-  if (params.assertCurrent?.() === false) {
+  if (params.signal?.aborted || params.assertCurrent?.() === false) {
     return undefined;
   }
   const selectedIdentityGrant = async () => {
@@ -70,10 +76,12 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   if (appState !== "complete" || configuredAgent) {
     return selectedIdentityGrant();
   }
-  let workspace: ReturnType<typeof resolveGitHubPublicationWorkspaceOwner>;
+  let readWorkspace: Awaited<ReturnType<typeof prepareGitHubPublicationWorkspaceOwner>>;
+  let workspace: ReturnType<typeof readWorkspace>;
   let originUrl: string;
   try {
-    workspace = resolveGitHubPublicationWorkspaceOwner(params);
+    readWorkspace = await prepareGitHubPublicationWorkspaceOwner(params);
+    workspace = readWorkspace();
     originUrl =
       workspace.kind === "repository"
         ? workspace.workspace.url
@@ -106,11 +114,19 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     assertAdmittedRunOperatorAuthority(operator);
     operator.assertCurrent();
   }
+  const sourceAbort = new AbortController();
+  const signal = AbortSignal.any(
+    [params.signal, operator?.signal, sourceAbort.signal].filter(
+      (source): source is AbortSignal => source !== undefined,
+    ),
+  );
+  signal.throwIfAborted();
   let appGrant: Awaited<ReturnType<typeof issueWorkerGitHubInstallationToken>>;
   try {
     appGrant = await issueWorkerGitHubInstallationToken({
       host: githubHost,
       repository: remote,
+      signal,
     });
   } catch (error) {
     if (error instanceof WorkerGitHubRepositoryUnavailableError) {
@@ -129,6 +145,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
       log.warn("Worker GitHub token revocation failed; the installation token will expire.");
     }
   };
+  let retainedProfile = false;
   let profile: Awaited<ReturnType<typeof prepareUserProfileIdentity>> | undefined;
   try {
     let gitAuthor: { name: string; email: string } | undefined;
@@ -150,7 +167,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
       workspace.kind === "repository"
         ? originUrl
         : (await managedWorktrees.resolveRepositoryIdentity(workspace.worktree.path)).originUrl;
-    const currentWorkspace = resolveGitHubPublicationWorkspaceOwner(params);
+    const currentWorkspace = readWorkspace();
     const currentRemote = parseGitHubRemoteUrl(currentOriginUrl, githubHost);
     if (
       params.assertCurrent?.() === false ||
@@ -185,12 +202,54 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     if (!binding) {
       throw new Error("GitHub App identity does not meet the worker launch contract");
     }
-    return { binding, expiresAtMs: appGrant.expiresAtMs, revoke: appGrant.revoke };
+    signal.throwIfAborted();
+    const subscriptions: (() => void)[] = [];
+    let revoked = false;
+    let revocation: Promise<void> | undefined;
+    const revoke = (): Promise<void> => {
+      if (!revocation) {
+        revoked = true;
+        signal.removeEventListener("abort", onAbort);
+        subscriptions.splice(0).forEach((stop) => stop());
+        sourceAbort.abort(new Error("Worker GitHub credential authority closed"));
+        revocation = Promise.resolve()
+          .then(revokeAppGrant)
+          .finally(() => {
+            profile?.release();
+            profile = undefined;
+            revocation = undefined;
+          });
+      }
+      return revocation;
+    };
+    const onAbort = () => {
+      void revoke();
+    };
+    const recheck = () => {
+      if (revoked) {
+        return;
+      }
+      try {
+        operator?.assertCurrent();
+        profile?.readCurrentFacts(bindingIds);
+        if (params.assertCurrent?.() === false) {
+          throw new Error("Worker GitHub credential authority closed");
+        }
+      } catch (error) {
+        sourceAbort.abort(error);
+      }
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    subscriptions.push(onUserProfilesChanged(recheck), onUserProfileEmailBindingChanged(recheck));
+    retainedProfile = true;
+    return { binding, expiresAtMs: appGrant.expiresAtMs, signal, revoke };
   } catch (error) {
     await revokeAppGrant();
     throw error;
   } finally {
-    profile?.release();
+    if (!retainedProfile) {
+      profile?.release();
+    }
   }
 }
 

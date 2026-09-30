@@ -224,7 +224,7 @@ describe("Codex paired-device exec-server relay", () => {
     expect(execServerUrlFromClient(client)).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/openclaw-/);
   });
 
-  it("preserves a normally closed node lease when App token revocation fails", async () => {
+  it("fences grant authority and preserves a closed node lease when token revocation fails", async () => {
     const binding = {
       token: "synthetic-node-installation-token",
       login: "x-access-token",
@@ -235,18 +235,24 @@ describe("Codex paired-device exec-server relay", () => {
     const revoke = vi.fn(async () => {
       throw new Error("synthetic revoke transport failure");
     });
+    const grantAuthority = new AbortController();
+    const attempt = new AbortController();
     githubAppGrant.enabled = true;
-    githubAppGrant.prepare.mockResolvedValue({ binding, revoke });
+    githubAppGrant.prepare.mockResolvedValue({ binding, revoke, signal: grantAuthority.signal });
     const transport = createNodeChannel();
     const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
     const sandbox = { ...createNodeSandbox(), placementAgentId: "main" };
     const client = createClient();
-    const onExecutionDisconnect = vi.fn<(error: Error) => void>();
+    let observeDisconnect: () => void = () => {};
+    const disconnected = new Promise<void>((resolve) => {
+      observeDisconnect = resolve;
+    });
+    const onExecutionDisconnect = vi.fn<(error: Error) => void>(observeDisconnect);
     const environment = await ensureCodexSandboxExecServerEnvironment({
       client: client as never,
       sandbox,
       runtime: createNodeRuntime(openDuplex),
-      signal: new AbortController().signal,
+      signal: attempt.signal,
       onExecutionDisconnect,
     });
 
@@ -256,8 +262,13 @@ describe("Codex paired-device exec-server relay", () => {
     expect(openDuplex).toHaveBeenCalledWith(
       expect.objectContaining({ params: expect.objectContaining({ github: binding }) }),
     );
+    const channelSignal = openDuplex.mock.calls[0]![0].signal;
+    grantAuthority.abort();
+    expect(channelSignal?.aborted).toBe(true);
+    expect(attempt.signal.aborted).toBe(false);
     transport.channel.close();
-    await vi.waitFor(() => expect(onExecutionDisconnect).toHaveBeenCalledOnce());
+    await disconnected;
+    expect(onExecutionDisconnect).toHaveBeenCalledOnce();
     expect(onExecutionDisconnect.mock.calls[0]?.[0].message).toContain(
       "(execution node disconnected)",
     );

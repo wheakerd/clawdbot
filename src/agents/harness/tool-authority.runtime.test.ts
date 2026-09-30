@@ -175,6 +175,7 @@ describe("host-prepared embedded tool authority", () => {
     const dispatch = await createPersonalToolScreenDispatcher(["alice", "bob"]);
     const retained = await published(
       async ({ handle }) => {
+        expect(getGatewayToolCallerIdentity()?.operatorAuthority?.profileId).toBe("alice");
         const releaseQueue = createDeferred();
         let queueReturned = false;
         handle.supportsTranscriptCommitWait = true;
@@ -272,26 +273,6 @@ describe("host-prepared embedded tool authority", () => {
       }),
     );
     expect(closed.broadcastToConnIds).not.toHaveBeenCalled();
-  });
-
-  it("carries the admitted operator into the embedded run caller scope", async () => {
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "synthetic-operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-    });
-    await admitted(
-      async ({ admittedRunContext }) =>
-        await withPreparedEmbeddedRunToolAuthority(
-          { admittedRunContext },
-          attempt,
-          undefined,
-          async () => {
-            expect(getGatewayToolCallerIdentity()?.operatorAuthority).toBe(operatorAuthority);
-          },
-        ),
-      operatorAuthority,
-    );
   });
 
   it.each([

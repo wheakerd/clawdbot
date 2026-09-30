@@ -16,6 +16,7 @@ import {
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agents/agent-runtime-id.js";
+import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { bindActiveOperatorTurnAuthority } from "../../agents/cron-creator-authority-context.js";
 import {
   buildUsageAgentMetaFields,
@@ -27,10 +28,12 @@ import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
 } from "../../agents/embedded-agent-runner/usage-accumulator.js";
+import { recordModelFallbackStop } from "../../agents/failover-error.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-authority.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
@@ -60,6 +63,8 @@ import {
   bindWorkerTurnOwner,
   type WorkerTurnPromptCacheContext,
 } from "./placement-turn-claim-events.js";
+import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
+import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -285,6 +290,59 @@ export function parseWorkerTurnProcessResult(processResult: SpawnResult) {
     throw new Error(`Cloud worker turn was fenced: ${result.reason}`);
   }
   return result;
+}
+
+export async function readWorkerTurnTerminalResult(params: {
+  transcriptTarget: BoundAgentRunSessionTarget;
+  placements: WorkerSessionPlacementStore;
+  turnClaim: WorkerSessionTurnClaim;
+  runtimeResult: ReturnType<typeof parseWorkerTurnProcessResult>;
+  baseLeafId: string | null;
+  takeFinishingOutcome: Awaited<
+    ReturnType<typeof prepareWorkerAgentRuntimeIdentity>
+  >["takeFinishingOutcome"];
+  deliveryId: string;
+}) {
+  const { transcriptTarget, placements, turnClaim, runtimeResult, baseLeafId } = params;
+  // A terminal result settles under its pending-result owner, even after execution ends.
+  const completed = await SessionManager.openAsync(transcriptTarget);
+  if (!placements.validateWorkspaceResultClaim(turnClaim)) {
+    throw new Error("Cloud worker result lost its placement owner during transcript hydration");
+  }
+  resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
+  const currentPlacement = placements.get(turnClaim.sessionId);
+  if (
+    runtimeResult.transcriptLeafId !== completed.getLeafId() ||
+    runtimeResult.transcriptNextSeq !== (currentPlacement?.lastTranscriptAckCursor ?? 0) + 1
+  ) {
+    throw new Error(
+      `Cloud worker result does not match its committed transcript acknowledgement ` +
+        `(leaf=${runtimeResult.transcriptLeafId ?? "none"}/${completed.getLeafId() ?? "none"}, ` +
+        `nextSeq=${runtimeResult.transcriptNextSeq}/${(currentPlacement?.lastTranscriptAckCursor ?? 0) + 1})`,
+    );
+  }
+  const terminal = runtimeResult.transcriptLeafId
+    ? completed.getEntry(runtimeResult.transcriptLeafId)
+    : undefined;
+  if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
+    throw new Error("Cloud worker completed without a terminal assistant transcript message");
+  }
+  const text = collectTextContentBlocks(terminal.message.content).join("");
+  const baseIndex = completed.getBranch().findIndex((entry) => entry.id === baseLeafId);
+  const workerMessages = completed
+    .getBranch()
+    .slice(baseIndex + 1)
+    .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+  const workerTurnFailed = runtimeResult.status === "failed";
+  // Consume and mark before reconciliation releases the exact finishing-ACK owner.
+  const finishing = workerTurnFailed ? params.takeFinishingOutcome(params.deliveryId) : undefined;
+  const workerFailure = workerTurnFailed
+    ? new WorkerTurnExecutionError(finishing?.error ?? "Cloud worker turn failed")
+    : undefined;
+  if (workerFailure && finishing?.replayInvalid) {
+    recordModelFallbackStop(workerFailure);
+  }
+  return { terminal: terminal.message, text, workerMessages, workerFailure };
 }
 
 export function buildWorkerTurnResult(params: {
