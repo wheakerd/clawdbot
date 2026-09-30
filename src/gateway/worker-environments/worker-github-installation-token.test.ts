@@ -52,6 +52,50 @@ describe("worker GitHub App installation-token issuer", () => {
     ]);
   });
 
+  it.each(["caller", "deadline"] as const)(
+    "settles issuance when the %s signal closes",
+    async (source) => {
+      const caller = new AbortController();
+      const deadline = new AbortController();
+      const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+      const timeout = vi
+        .spyOn(AbortSignal, "timeout")
+        .mockImplementation((ms) => (ms === 10_000 ? deadline.signal : nativeTimeout(ms)));
+      let issuedSignal: AbortSignal | null | undefined;
+      let rejected: Promise<void> | undefined;
+      let started: () => void = () => {};
+      const ready = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) => {
+        issuedSignal = init.signal;
+        started();
+        return await new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(new Error("issuance cancelled")), {
+            once: true,
+          });
+        });
+      }) as typeof globalThis.fetch;
+      try {
+        const pending = issueWorkerGitHubInstallationToken({
+          host: "fixture.ghe.com",
+          env: env(),
+          fetch,
+          signal: caller.signal,
+        });
+        rejected = expect(pending).rejects.toThrow("issuance cancelled");
+        await ready;
+        (source === "caller" ? caller : deadline).abort();
+        expect(issuedSignal?.aborted).toBe(true);
+        await rejected;
+      } finally {
+        caller.abort();
+        await rejected;
+        timeout.mockRestore();
+      }
+    },
+  );
+
   it("uses the installation's configured scope and revokes the grant once", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetch = vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {

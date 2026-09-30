@@ -96,7 +96,9 @@ export async function issueWorkerGitHubInstallationToken(params: {
       {
         method: "GET",
         redirect: "error",
-        signal: params.signal ?? AbortSignal.timeout(10_000),
+        signal: params.signal
+          ? AbortSignal.any([params.signal, AbortSignal.timeout(10_000)])
+          : AbortSignal.timeout(10_000),
         headers: {
           authorization,
           accept: "application/vnd.github+json",
@@ -131,7 +133,9 @@ export async function issueWorkerGitHubInstallationToken(params: {
     {
       method: "POST",
       redirect: "error",
-      signal: params.signal ?? AbortSignal.timeout(10_000),
+      signal: params.signal
+        ? AbortSignal.any([params.signal, AbortSignal.timeout(10_000)])
+        : AbortSignal.timeout(10_000),
       headers: {
         authorization,
         accept: "application/vnd.github+json",
