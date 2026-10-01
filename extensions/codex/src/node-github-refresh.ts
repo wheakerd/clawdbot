@@ -5,7 +5,7 @@ export type CodexNodeGitHubRefresh = {
   type: "openclaw.github.profile";
   generation: number;
   token: string;
-  expiresAtMs: number;
+  expiresAtMs?: number;
 };
 export type CodexNodeGitHubRefreshAck = {
   type: "openclaw.github.profile.ack";
@@ -37,13 +37,14 @@ export function parseCodexNodeGitHubControl(
   }
   if (
     value.type === "openclaw.github.profile" &&
-    Object.keys(value).length === 4 &&
+    Object.keys(value).length === (value.expiresAtMs === undefined ? 3 : 4) &&
     typeof value.token === "string" &&
     value.token.length > 0 &&
     value.token.length <= 4096 &&
-    typeof value.expiresAtMs === "number" &&
-    Number.isSafeInteger(value.expiresAtMs) &&
-    value.expiresAtMs > 0
+    (value.expiresAtMs === undefined ||
+      (typeof value.expiresAtMs === "number" &&
+        Number.isSafeInteger(value.expiresAtMs) &&
+        value.expiresAtMs > 0))
   ) {
     return {
       type: value.type,

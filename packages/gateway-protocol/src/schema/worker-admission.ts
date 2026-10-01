@@ -184,7 +184,7 @@ export const WorkerHeartbeatParamsSchema = closedObject({
 const WorkerGitHubRefreshSchema = closedObject({
   generation: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
   token: Type.String({ minLength: 1, maxLength: 4_096 }),
-  expiresAtMs: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  expiresAtMs: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 });
 
 const WorkerHeartbeatResultSchema = closedObject({

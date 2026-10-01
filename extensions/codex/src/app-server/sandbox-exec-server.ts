@@ -7,7 +7,6 @@ import { once } from "node:events";
 import { isIP } from "node:net";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  hasWorkerGitHubAppConfiguration,
   prepareWorkerGitHubBindingGrant,
   type WorkerGitHubBindingGrant,
 } from "openclaw/plugin-sdk/github-worker-runtime";
@@ -198,14 +197,12 @@ async function acquireOpenClawExecServer(params: {
         const placementIdentity = readCodexPlacementWorkspaceIdentity(sandbox);
         const { agentId, ...nodePlacementIdentity } = placementIdentity;
         let githubGrant: WorkerGitHubBindingGrant | undefined;
-        if (agentId && hasWorkerGitHubAppConfiguration()) {
+        if (agentId) {
           githubGrant = await prepareWorkerGitHubBindingGrant({
             sessionId: placementIdentity.sessionId,
             sessionKey: placementIdentity.sessionKey,
             agentId,
             assertCurrent: () => !signal.aborted && !server.closed,
-            requireOperatorAuthority: true,
-            appOnly: true,
             signal,
           });
         }
@@ -214,7 +211,7 @@ async function acquireOpenClawExecServer(params: {
             await githubGrant?.revoke();
           } catch {
             embeddedAgentLog.warn(
-              "Codex node GitHub token revocation failed; the installation token will expire.",
+              "Codex node GitHub execution cleanup failed; its existing process cleanup remains active.",
             );
           }
         };
@@ -230,7 +227,7 @@ async function acquireOpenClawExecServer(params: {
             ) === true;
           if (githubGrant?.startRenewal && !canRenew) {
             throw new Error(
-              "This node does not advertise GitHub profile refresh. Update and reconnect the node before starting an App-backed Codex turn.",
+              "This node does not advertise GitHub profile refresh. Update and reconnect the node before starting a GitHub-backed Codex turn.",
             );
           }
           // Capture the admitted caller's exact async scope before a detached WebSocket event.

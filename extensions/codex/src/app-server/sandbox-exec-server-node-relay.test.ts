@@ -21,18 +21,12 @@ import {
 } from "./sandbox-exec-server.test-helpers.js";
 
 const customLoggingPattern = vi.hoisted(() => ({ value: "" }));
-const githubAppGrant = vi.hoisted(() => ({
-  enabled: false,
+const githubGrant = vi.hoisted(() => ({
   prepare: vi.fn(),
 }));
-vi.mock("openclaw/plugin-sdk/github-worker-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/github-worker-runtime")>();
-  return {
-    ...actual,
-    hasWorkerGitHubAppConfiguration: () => githubAppGrant.enabled,
-    prepareWorkerGitHubBindingGrant: githubAppGrant.prepare,
-  };
-});
+vi.mock("openclaw/plugin-sdk/github-worker-runtime", () => ({
+  prepareWorkerGitHubBindingGrant: githubGrant.prepare,
+}));
 vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>();
   return {
@@ -189,18 +183,17 @@ async function expectPairedNodeHttpCredentialRejection(params: {
 useIsolatedStateGuard();
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   customLoggingPattern.value = "";
-  githubAppGrant.enabled = false;
-  githubAppGrant.prepare.mockReset();
+  githubGrant.prepare.mockReset();
   await sandboxExecServerRegistry.closeAll();
 });
 
 describe("Codex paired-device exec-server relay", () => {
-  it("revokes the newly issued App grant when feature discovery rejects before launch", async () => {
+  it("releases the new GitHub grant when feature discovery rejects before launch", async () => {
     const revoke = vi.fn(async () => {});
-    githubAppGrant.enabled = true;
-    githubAppGrant.prepare.mockResolvedValue({
-      binding: { token: "synthetic-unclaimed", login: "x-access-token", branch: "fixture" },
+    githubGrant.prepare.mockResolvedValue({
+      binding: { token: "synthetic-unclaimed", login: "personal-alice", branch: "fixture" },
       revoke,
       startRenewal: () => () => {},
     });
@@ -222,9 +215,17 @@ describe("Codex paired-device exec-server relay", () => {
     expect(openDuplex).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "starts GitHub delivery only after an advertised node feature: %s",
-    async (supported) => {
+  it.each([
+    { supported: false, login: "personal-alice" },
+    { supported: true, login: "personal-alice" },
+  ])(
+    "starts $login GitHub delivery only after node refresh support: $supported",
+    async ({ supported, login }) => {
+      if (login === "personal-alice") {
+        vi.stubEnv("GITHUB_APP_ID", "");
+        vi.stubEnv("GITHUB_INSTALLATION_ID", "");
+        vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
+      }
       const transport = createNodeChannel();
       let install: ((snapshot: WorkerGitHubBindingRefresh) => Promise<void>) | undefined;
       const stop = vi.fn();
@@ -235,9 +236,8 @@ describe("Codex paired-device exec-server relay", () => {
         },
       );
       const revoke = vi.fn(async () => {});
-      githubAppGrant.enabled = true;
-      githubAppGrant.prepare.mockResolvedValue({
-        binding: { token: "synthetic-initial", login: "x-access-token", branch: "fixture" },
+      githubGrant.prepare.mockResolvedValue({
+        binding: { token: "synthetic-initial", login, branch: "fixture" },
         revoke,
         startRenewal,
         assertCurrent: () => {},
@@ -262,6 +262,9 @@ describe("Codex paired-device exec-server relay", () => {
         return;
       }
       await prepared;
+      expect(openDuplex.mock.calls[0]![0].params).toMatchObject({
+        github: { token: "synthetic-initial", login },
+      });
       const socket = await openSocket(execServerUrlFromClient(client));
       try {
         await Promise.resolve();
@@ -345,10 +348,10 @@ describe("Codex paired-device exec-server relay", () => {
     expect(execServerUrlFromClient(client)).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/openclaw-/);
   });
 
-  it("fences grant authority and preserves a closed node lease when token revocation fails", async () => {
+  it("fences grant authority and preserves a closed node lease when credential cleanup fails", async () => {
     const binding = {
-      token: "synthetic-node-installation-token",
-      login: "x-access-token",
+      token: "synthetic-node-personal-token",
+      login: "personal-alice",
       branch: "openclaw/session-worker",
       host: "fixture.ghe.com",
       remoteUrl: "https://fixture.ghe.com/example/repo.git",
@@ -358,8 +361,7 @@ describe("Codex paired-device exec-server relay", () => {
     });
     const grantAuthority = new AbortController();
     const attempt = new AbortController();
-    githubAppGrant.enabled = true;
-    githubAppGrant.prepare.mockResolvedValue({ binding, revoke, signal: grantAuthority.signal });
+    githubGrant.prepare.mockResolvedValue({ binding, revoke, signal: grantAuthority.signal });
     const transport = createNodeChannel();
     const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
     const sandbox = { ...createNodeSandbox(), placementAgentId: "main" };
@@ -377,9 +379,7 @@ describe("Codex paired-device exec-server relay", () => {
       onExecutionDisconnect,
     });
 
-    expect(githubAppGrant.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main", appOnly: true, requireOperatorAuthority: true }),
-    );
+    expect(githubGrant.prepare).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
     expect(openDuplex).toHaveBeenCalledWith(
       expect.objectContaining({ params: expect.objectContaining({ github: binding }) }),
     );

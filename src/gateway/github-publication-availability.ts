@@ -182,9 +182,26 @@ function resolveGitHubPublicationWorkspaceOwner(
   return { kind: "repository" as const, loaded, workspace };
 }
 
-export async function prepareGitHubPublicationWorkspaceOwner(params: PublicationSessionIdentity) {
+type GitHubPublicationWorkspaceOwner = () => ReturnType<
+  typeof resolveGitHubPublicationWorkspaceOwner
+>;
+
+export function prepareGitHubPublicationWorkspaceOwner(
+  params: PublicationSessionIdentity,
+): Promise<GitHubPublicationWorkspaceOwner>;
+export function prepareGitHubPublicationWorkspaceOwner(
+  params: PublicationSessionIdentity,
+  options: { allowMissingWorkspace: true },
+): Promise<GitHubPublicationWorkspaceOwner | undefined>;
+export async function prepareGitHubPublicationWorkspaceOwner(
+  params: PublicationSessionIdentity,
+  options?: { allowMissingWorkspace: true },
+) {
   const loaded = readPublicationSessionOwner(params);
   const workspaceId = loaded.entry.repositoryWorkspaceId;
+  if (options?.allowMissingWorkspace && !workspaceId && !loaded.entry.worktree) {
+    return undefined;
+  }
   const identity = { ...params, lifecycleRevision: loaded.entry.lifecycleRevision ?? null };
   const prepared = workspaceId
     ? await getSessionRepositoryWorkspaceStore().prepare(workspaceId)

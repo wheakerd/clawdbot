@@ -3,7 +3,7 @@ import type { WorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.j
 export type WorkerGitHubBindingRefresh = {
   generation: number;
   token: string;
-  expiresAtMs: number;
+  expiresAtMs?: number;
 };
 
 export type WorkerGitHubBindingGrant = {

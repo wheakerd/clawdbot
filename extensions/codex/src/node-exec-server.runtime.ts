@@ -225,11 +225,12 @@ export async function runCodexNodeExecServer(params: {
     await mkdir(codexHome, { recursive: true, mode: 0o700 });
     let githubEnv: Record<string, string> = {};
     let refreshGitHub:
-      | ((snapshot: { token: string; expiresAtMs: number }) => Promise<void>)
+      | ((snapshot: { token: string; expiresAtMs?: number }) => Promise<void>)
       | undefined;
     let githubGeneration = 0;
-    let installedGitHub: { token: string; expiresAtMs: number } | undefined;
+    let installedGitHub: { token: string; expiresAtMs?: number } | undefined;
     if (params.github) {
+      const login = params.github.login;
       const { managedGitHubIdentityEnvironment, writeManagedGitHubProfileFiles } =
         await import("openclaw/plugin-sdk/github-worker-runtime");
       const profileDir = path.join(dir, "github");
@@ -238,12 +239,12 @@ export async function runCodexNodeExecServer(params: {
       refreshGitHub = async (snapshot) => {
         params.assertExecAuthorized();
         io.signal.throwIfAborted();
-        if (snapshot.expiresAtMs <= Date.now()) {
+        if (snapshot.expiresAtMs !== undefined && snapshot.expiresAtMs <= Date.now()) {
           throw new Error("Node GitHub refresh expired");
         }
         await writeManagedGitHubProfileFiles(
           profileDir,
-          { host, login: "x-access-token", token: snapshot.token },
+          { host, login, token: snapshot.token },
           {
             assertCurrent: () => {
               params.assertExecAuthorized();

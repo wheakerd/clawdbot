@@ -181,7 +181,10 @@ export async function prepareWorkerGitHubEnvironment(params: {
       assertCurrent();
       signal?.throwIfAborted();
       const replacement = parseWorkerGitHubLaunchBinding({ ...binding, token: snapshot.token });
-      if (!replacement || snapshot.expiresAtMs <= Date.now()) {
+      if (
+        !replacement ||
+        (snapshot.expiresAtMs !== undefined && snapshot.expiresAtMs <= Date.now())
+      ) {
         throw new Error("Worker GitHub refresh is invalid or expired");
       }
       registerSecretValueForRedaction(replacement.token);
