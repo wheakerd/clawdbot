@@ -215,6 +215,57 @@ describe("Codex paired-device exec-server relay", () => {
     expect(openDuplex).not.toHaveBeenCalled();
   });
 
+  it("rejects a GitHub selection retired during discovery and forwards its assertion to final dispatch", async () => {
+    const transport = createNodeChannel();
+    const revoke = vi.fn(async () => {});
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("selected account changed");
+      }
+    };
+    githubGrant.prepare.mockResolvedValue({
+      binding: { token: "synthetic-selected", login: "system-bot" },
+      revoke,
+      startRenewal: () => () => {},
+      assertCurrent,
+    });
+    const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
+    const runtime = createNodeRuntime(openDuplex, {
+      "codex.exec-server.stdio.v1": ["github-profile-refresh"],
+    });
+    vi.spyOn(runtime.nodes, "list").mockImplementationOnce(async () => {
+      current = false;
+      return {
+        nodes: [
+          {
+            nodeId: "paired-device-1",
+            commandFeatures: { "codex.exec-server.stdio.v1": ["github-profile-refresh"] },
+          },
+        ],
+      };
+    });
+    const prepare = () =>
+      ensureCodexSandboxExecServerEnvironment({
+        client: createClient() as never,
+        sandbox: { ...createNodeSandbox(), placementAgentId: "main" },
+        runtime,
+        signal: new AbortController().signal,
+      });
+    await expect(prepare()).rejects.toThrow("selected account changed");
+    expect(openDuplex).not.toHaveBeenCalled();
+    expect(revoke).toHaveBeenCalledOnce();
+    current = true;
+    const environment = await prepare();
+    expect(openDuplex.mock.calls[0]![0].assertCurrent).toBe(assertCurrent);
+    current = false;
+    expect(() => openDuplex.mock.calls[0]![0].assertCurrent?.()).toThrow(
+      "selected account changed",
+    );
+    transport.channel.close();
+    await releaseCodexSandboxExecServerEnvironment(environment);
+  });
+
   it.each([
     { supported: false, login: "personal-alice" },
     { supported: true, login: "personal-alice" },

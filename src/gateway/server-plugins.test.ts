@@ -35,6 +35,7 @@ import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gatewa
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
@@ -1804,6 +1805,75 @@ describe("loadGatewayPlugins", () => {
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
+    },
+  );
+
+  test.each([false, true])(
+    "revalidates caller-prepared facts after pending node approval: stale=%s",
+    async (stale) => {
+      const registry = createDuplexPluginRegistry();
+      loadOpenClawPlugins.mockReturnValue(registry);
+      loadStartupPluginFixture();
+      const sendInvokeInput = vi.fn();
+      serverPluginsModule.setFallbackGatewayContext({
+        nodeRegistry: { sendInvokeInput },
+      } as unknown as GatewayRequestContext);
+      const waiting = createDeferredCore();
+      const approve = createDeferredCore();
+      const finish = createDeferredCore();
+      const delivered = vi.fn();
+      let current = true;
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        const stream = opts.client!.internal!.nodeInvokeStream!;
+        waiting.resolve();
+        await approve.promise;
+        if (!stream.isRuntimeCurrent()) {
+          opts.respond(false, undefined, {
+            code: "ABORTED",
+            message: "prepared selection retired",
+          });
+          return;
+        }
+        delivered();
+        stream.onDispatchReady("prepared-selection");
+        stream.onProgress(JSON.stringify({ v: 1, kind: "ready" }));
+        await finish.promise;
+        opts.respond(true, { ok: true });
+      });
+      const runtime = createRuntimeFromLastGatewayLoad();
+      const opening = gatewayRequestScopeModule.withPluginRuntimeRegistryScope(registry, () =>
+        gatewayRequestScopeModule.withPluginRuntimePluginScope(
+          { pluginId: "duplex-plugin", pluginOrigin: "bundled" },
+          () =>
+            runtime.nodes.openDuplex({
+              nodeId: "node-1",
+              command: "image.bridge",
+              assertCurrent() {
+                if (!current) {
+                  throw new Error("prepared selection retired");
+                }
+              },
+            }),
+        ),
+      );
+      void opening.catch(() => {});
+      await waiting.promise;
+      expect(getLastDispatchedParams()).not.toHaveProperty("assertCurrent");
+      current = !stale;
+      approve.resolve();
+      if (stale) {
+        await expect(opening).rejects.toThrow("prepared selection retired");
+        expect(delivered).not.toHaveBeenCalled();
+      } else {
+        const channel = await opening;
+        expect(delivered).toHaveBeenCalledOnce();
+        current = false;
+        await expect(channel.send(Uint8Array.of(1))).rejects.toThrow("prepared selection retired");
+        expect(sendInvokeInput).not.toHaveBeenCalled();
+        finish.resolve();
+        await expect(channel.closed).rejects.toThrow("prepared selection retired");
+      }
+      finish.resolve();
     },
   );
 

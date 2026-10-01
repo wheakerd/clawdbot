@@ -6,6 +6,7 @@ import {
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
 } from "../../agents/github-tool-identity.js";
+import { clearRuntimeConfigSnapshot, writeConfigFile } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -344,6 +345,20 @@ describe("worker GitHub launch binding", () => {
       "selected GitHub identity is unavailable",
     );
     expect(mocks.nativeToken).not.toHaveBeenCalled();
+  });
+
+  it("closes selected credentials when a committed configuration selects another profile", async () => {
+    await installProfile();
+    const grant = await prepareWorkerGitHubBindingGrant(session);
+    try {
+      config = { tools: { github: { profileId: "ghp_22222222222222222222222222222222" } } };
+      await writeConfigFile(config);
+      expect(grant?.signal?.aborted).toBe(true);
+      await expect(grant?.refresh?.()).rejects.toThrow();
+    } finally {
+      await grant?.revoke();
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it.each(["selection", "account", "turn"] as const)(

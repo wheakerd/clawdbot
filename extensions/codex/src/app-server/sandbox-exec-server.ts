@@ -225,6 +225,7 @@ async function acquireOpenClawExecServer(params: {
             advertisedNode?.commandFeatures?.["codex.exec-server.stdio.v1"]?.includes(
               CODEX_NODE_GITHUB_REFRESH_FEATURE,
             ) === true;
+          githubGrant?.assertCurrent?.();
           if (githubGrant?.startRenewal && !canRenew) {
             throw new Error(
               "This node does not advertise GitHub profile refresh. Update and reconnect the node before starting a GitHub-backed Codex turn.",
@@ -241,6 +242,7 @@ async function acquireOpenClawExecServer(params: {
             },
             sessionKey: sandbox.sessionKey,
             timeoutMs: 0,
+            ...(githubGrant?.assertCurrent ? { assertCurrent: githubGrant.assertCurrent } : {}),
             ...(canRenew ? { requiredCommandFeatures: [CODEX_NODE_GITHUB_REFRESH_FEATURE] } : {}),
             maxMessageBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES,
             maxOutstandingDeliveryBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES + 2 * 1024 * 1024,

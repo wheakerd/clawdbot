@@ -98,6 +98,7 @@ export async function openOwnedGatewayNodeDuplex(options: {
     try {
       signal.throwIfAborted();
       options.assertCurrent();
+      params.assertCurrent?.();
       if (params.requiredCommandFeatures?.length) {
         const current = context.nodeRegistry.get(params.nodeId);
         if (
@@ -146,7 +147,11 @@ export async function openOwnedGatewayNodeDuplex(options: {
   });
   const onAbort = () => endpoint.close();
   signal.addEventListener("abort", onAbort, { once: true });
-  const { requiredCommandFeatures: _features, ...invokeParams } = params;
+  const {
+    requiredCommandFeatures: _features,
+    assertCurrent: _assertCurrent,
+    ...invokeParams
+  } = params;
   const closed = invokeNode(
     invokeParams,
     {

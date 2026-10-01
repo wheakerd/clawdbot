@@ -9,6 +9,7 @@ import {
 } from "../../agents/github-tool-identity.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { registerConfigWriteListener } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   onUserProfileEmailBindingChanged,
@@ -195,6 +196,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     refreshCredential,
     refreshRequired: () => profileRevision !== preparedProfileRevision,
     subscribe: (changed) => [
+      registerConfigWriteListener(changed),
       onManagedGitHubProfileChanged((profileDir) => {
         if (identity.env.GH_CONFIG_DIR === profileDir) {
           profileRevision++;
