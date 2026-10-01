@@ -79,13 +79,14 @@ function createNodeChannel() {
   };
 }
 
-function createNodeSandbox() {
+function createNodeSandbox(agentId?: string) {
   return {
     ...createSandboxContext({}),
     backendId: "node",
     backend: undefined,
     fsBridge: undefined,
     placementExecutionMode: "remote-exec" as const,
+    ...(agentId !== undefined ? { placementAgentId: agentId } : {}),
     placementNodeId: "paired-device-1",
     placementEnvironmentId: "environment-paired-device-1",
     placementSessionId: "session-paired-device-1",
@@ -202,7 +203,7 @@ describe("Codex paired-device exec-server relay", () => {
     vi.spyOn(runtime.nodes, "list").mockRejectedValueOnce(
       new Error("synthetic metadata lookup failed"),
     );
-    const sandbox = { ...createNodeSandbox(), placementAgentId: "main" };
+    const sandbox = createNodeSandbox("main");
     await expect(
       ensureCodexSandboxExecServerEnvironment({
         client: createClient() as never,
@@ -245,10 +246,11 @@ describe("Codex paired-device exec-server relay", () => {
         ],
       };
     });
+    const sandbox = createNodeSandbox("main");
     const prepare = () =>
       ensureCodexSandboxExecServerEnvironment({
         client: createClient() as never,
-        sandbox: { ...createNodeSandbox(), placementAgentId: "main" },
+        sandbox,
         runtime,
         signal: new AbortController().signal,
       });
@@ -263,7 +265,7 @@ describe("Codex paired-device exec-server relay", () => {
       "selected account changed",
     );
     transport.channel.close();
-    await releaseCodexSandboxExecServerEnvironment(environment);
+    await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
   });
 
   it.each([
@@ -295,7 +297,7 @@ describe("Codex paired-device exec-server relay", () => {
       });
       const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
       const client = createClient();
-      const sandbox = { ...createNodeSandbox(), placementAgentId: "main" };
+      const sandbox = createNodeSandbox("main");
       const prepared = ensureCodexSandboxExecServerEnvironment({
         client: client as never,
         sandbox,
@@ -415,7 +417,7 @@ describe("Codex paired-device exec-server relay", () => {
     githubGrant.prepare.mockResolvedValue({ binding, revoke, signal: grantAuthority.signal });
     const transport = createNodeChannel();
     const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
-    const sandbox = { ...createNodeSandbox(), placementAgentId: "main" };
+    const sandbox = createNodeSandbox("main");
     const client = createClient();
     let observeDisconnect: () => void = () => {};
     const disconnected = new Promise<void>((resolve) => {
