@@ -27,8 +27,8 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
+import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
-import type { WorkerGitHubBindingGrant } from "./worker-github-binding.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
 

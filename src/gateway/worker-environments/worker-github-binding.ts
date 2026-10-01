@@ -31,6 +31,10 @@ import {
   sameGitHubPublicationWorkspace,
 } from "../github-publication-availability.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
+import type {
+  WorkerGitHubBindingGrant,
+  WorkerGitHubBindingRefresh,
+} from "./worker-github-binding-contract.js";
 import {
   issueWorkerGitHubInstallationToken,
   WorkerGitHubRepositoryUnavailableError,
@@ -41,21 +45,10 @@ type WorkerGitHubBinding = WorkerGitHubLaunchBinding;
 
 const log = createSubsystemLogger("gateway/worker-github");
 
-export type WorkerGitHubBindingRefresh = {
-  generation: number;
-  token: string;
-  expiresAtMs: number;
-};
-
-export type WorkerGitHubBindingGrant = {
-  binding: WorkerGitHubBinding;
-  expiresAtMs?: number;
-  signal?: AbortSignal;
-  assertCurrent?: () => void;
-  refresh?: (installedGeneration?: number) => Promise<WorkerGitHubBindingRefresh | undefined>;
-  startRenewal?: (install: (snapshot: WorkerGitHubBindingRefresh) => Promise<void>) => () => void;
-  revoke: () => Promise<void>;
-};
+export type {
+  WorkerGitHubBindingGrant,
+  WorkerGitHubBindingRefresh,
+} from "./worker-github-binding-contract.js";
 
 /** Credential cleanup cannot erase work already accepted by its execution owner. */
 export async function revokeWorkerGitHubBindingGrant(
