@@ -41,8 +41,6 @@ import {
   workerGitHubAppConfigurationState,
 } from "./worker-github-installation-token.js";
 
-type WorkerGitHubBinding = WorkerGitHubLaunchBinding;
-
 const log = createSubsystemLogger("gateway/worker-github");
 
 export type {
