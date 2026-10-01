@@ -40,6 +40,82 @@ afterEach(() => {
 
 describe("Gateway self-profile ownership", () => {
   it.each([
+    { firstPublishes: false, secondPublishes: false },
+    { firstPublishes: false, secondPublishes: true },
+    { firstPublishes: true, secondPublishes: false },
+  ])(
+    "shares self reads with publication intents $firstPublishes then $secondPublishes",
+    async ({ firstPublishes, secondPublishes }) => {
+      const { gateway, current } = createStore();
+      gateway.start();
+      const pending = createDeferred<{ profile: UserProfile }>();
+      current().request.mockReturnValue(pending.promise);
+      const presence = { id: profile.id, name: "Presence Person" };
+      current().opts.onHello?.({
+        ...hello(["operator.read"]),
+        snapshot: { presence: [{ instanceId: current().instanceId, user: presence }] },
+      });
+      const first = gateway.loadSelfProfile({ publish: firstPublishes });
+      const second = gateway.loadSelfProfile({ publish: secondPublishes });
+      expect(current().request).toHaveBeenCalledTimes(1);
+      pending.resolve({ profile });
+      expect(await first).toEqual(profile);
+      expect(await second).toEqual(profile);
+      if (firstPublishes || secondPublishes) {
+        expect(gateway.snapshot.selfUser).toMatchObject({
+          id: profile.id,
+          identity: { type: "profile", id: profile.id },
+          name: profile.displayName,
+        });
+      } else {
+        expect(gateway.snapshot.selfUser).toEqual(presence);
+      }
+      gateway.stop();
+    },
+  );
+
+  it("preserves presence when a background self read is forbidden", async () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const presence = { id: "raw-person", name: "Presence Person" };
+    current().opts.onHello?.({
+      ...hello(["operator.read"]),
+      snapshot: { presence: [{ instanceId: current().instanceId, user: presence }] },
+    });
+    current().request.mockRejectedValue(
+      new GatewayRequestError({ code: "FORBIDDEN", message: "No authenticated profile" }),
+    );
+    expect(await gateway.loadSelfProfile({ publish: false })).toBeNull();
+    expect(gateway.snapshot.selfUser).toEqual(presence);
+    gateway.stop();
+  });
+
+  it("publishes a foreground load joining after the background response arrives", async () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const pending = createDeferred<{ profile: UserProfile }>();
+    current().request.mockReturnValue(pending.promise);
+    current().opts.onHello?.({
+      ...hello(["operator.read"]),
+      snapshot: {
+        presence: [{ instanceId: current().instanceId, user: { id: "raw-person" } }],
+      },
+    });
+    const background = gateway.loadSelfProfile({ publish: false });
+    pending.resolve({ profile });
+    await Promise.resolve();
+    const foreground = gateway.loadSelfProfile();
+    expect(await background).toEqual(profile);
+    expect(await foreground).toEqual(profile);
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      id: profile.id,
+      identity: { type: "profile", id: profile.id },
+      name: profile.displayName,
+    });
+    gateway.stop();
+  });
+
+  it.each([
     "operator.sessions.read",
     "operator.sessions.write",
     "operator.read",
