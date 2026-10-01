@@ -60,6 +60,7 @@ describe("plugin node-host registry", () => {
         command: {
           command: "browser.proxy",
           cap: "browser",
+          features: ["profile-refresh"],
           handle: vi.fn(async () => "{}"),
         },
         source: "test",
@@ -89,6 +90,7 @@ describe("plugin node-host registry", () => {
     expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toEqual({
       caps: ["browser", "photos"],
       commands: ["browser.inspect", "browser.proxy", "photos.proxy"],
+      commandFeatures: { "browser.proxy": ["profile-refresh"] },
       nodePluginTools: [],
     });
   });

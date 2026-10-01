@@ -1,7 +1,12 @@
 import { once } from "node:events";
+import type { WorkerGitHubBindingRefresh } from "openclaw/plugin-sdk/github-worker-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  encodeCodexNodeGitHubControl,
+  parseCodexNodeGitHubControl,
+} from "../node-github-refresh.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
@@ -95,8 +100,16 @@ function createNodeSandbox() {
   };
 }
 
-function createNodeRuntime(openDuplex: PluginRuntime["nodes"]["openDuplex"]): PluginRuntime {
-  return { nodes: { openDuplex } } as PluginRuntime;
+function createNodeRuntime(
+  openDuplex: PluginRuntime["nodes"]["openDuplex"],
+  features?: Record<string, string[]>,
+): PluginRuntime {
+  return {
+    nodes: {
+      openDuplex,
+      list: async () => ({ nodes: [{ nodeId: "paired-device-1", commandFeatures: features }] }),
+    },
+  } as PluginRuntime;
 }
 
 async function registerNodeRelay(onExecutionDisconnect?: (error: Error) => void) {
@@ -183,6 +196,114 @@ afterEach(async () => {
 });
 
 describe("Codex paired-device exec-server relay", () => {
+  it("revokes the newly issued App grant when feature discovery rejects before launch", async () => {
+    const revoke = vi.fn(async () => {});
+    githubAppGrant.enabled = true;
+    githubAppGrant.prepare.mockResolvedValue({
+      binding: { token: "synthetic-unclaimed", login: "x-access-token", branch: "fixture" },
+      revoke,
+      startRenewal: () => () => {},
+    });
+    const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>();
+    const runtime = createNodeRuntime(openDuplex);
+    vi.spyOn(runtime.nodes, "list").mockRejectedValueOnce(
+      new Error("synthetic metadata lookup failed"),
+    );
+    const sandbox = { ...createNodeSandbox(), placementAgentId: "main" };
+    await expect(
+      ensureCodexSandboxExecServerEnvironment({
+        client: createClient() as never,
+        sandbox,
+        runtime,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("metadata lookup failed");
+    expect(revoke).toHaveBeenCalledOnce();
+    expect(openDuplex).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "starts GitHub delivery only after an advertised node feature: %s",
+    async (supported) => {
+      const transport = createNodeChannel();
+      let install: ((snapshot: WorkerGitHubBindingRefresh) => Promise<void>) | undefined;
+      const stop = vi.fn();
+      const startRenewal = vi.fn(
+        (writer: (snapshot: WorkerGitHubBindingRefresh) => Promise<void>) => {
+          install = writer;
+          return stop;
+        },
+      );
+      const revoke = vi.fn(async () => {});
+      githubAppGrant.enabled = true;
+      githubAppGrant.prepare.mockResolvedValue({
+        binding: { token: "synthetic-initial", login: "x-access-token", branch: "fixture" },
+        revoke,
+        startRenewal,
+        assertCurrent: () => {},
+      });
+      const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
+      const client = createClient();
+      const sandbox = { ...createNodeSandbox(), placementAgentId: "main" };
+      const prepared = ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox,
+        runtime: createNodeRuntime(
+          openDuplex,
+          supported ? { "codex.exec-server.stdio.v1": ["github-profile-refresh"] } : undefined,
+        ),
+        signal: new AbortController().signal,
+      });
+      if (!supported) {
+        await expect(prepared).rejects.toThrow("GitHub profile refresh");
+        expect(revoke).toHaveBeenCalledOnce();
+        expect(openDuplex).not.toHaveBeenCalled();
+        expect(startRenewal).not.toHaveBeenCalled();
+        return;
+      }
+      await prepared;
+      const socket = await openSocket(execServerUrlFromClient(client));
+      try {
+        await Promise.resolve();
+        {
+          expect(openDuplex.mock.calls[0]![0]).toHaveProperty("requiredCommandFeatures", [
+            "github-profile-refresh",
+          ]);
+          const snapshot = {
+            generation: 1,
+            token: "synthetic-refreshed",
+            expiresAtMs: Date.now() + 3_600_000,
+          };
+          const delivered = install!(snapshot);
+          await Promise.resolve();
+          expect(
+            parseCodexNodeGitHubControl(transport.channel.send.mock.calls[0]![0]),
+          ).toMatchObject(snapshot);
+          await transport.receive(
+            encodeCodexNodeGitHubControl({
+              type: "openclaw.github.profile.ack",
+              generation: 2,
+              ok: true,
+            }),
+          );
+          await transport.receive(
+            encodeCodexNodeGitHubControl({
+              type: "openclaw.github.profile.ack",
+              generation: 1,
+              ok: true,
+            }),
+          );
+          await delivered;
+          transport.channel.close();
+          await transport.channel.closed;
+          await expect(install!(snapshot)).rejects.toThrow("lease closed");
+        }
+      } finally {
+        socket.close();
+      }
+    },
+  );
+
   it("authorizes one bounded attempt-owned node channel before registering the local environment", async () => {
     const transport = createNodeChannel();
     const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);

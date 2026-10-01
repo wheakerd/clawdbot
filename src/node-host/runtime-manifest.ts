@@ -17,6 +17,7 @@ import type { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.j
 export type NodeHostManifest = {
   caps: string[];
   commands: string[];
+  commandFeatures?: Record<string, string[]>;
   computerUse?: ComputerUseCapabilityDescriptor;
   pathEnv?: string;
 };
@@ -76,9 +77,15 @@ export function buildNodeHostManifest(params: {
       ),
     ]),
   ].toSorted();
+  const commandFeatures = Object.fromEntries(
+    Object.entries(pluginManifest.commandFeatures ?? {}).filter(([command]) =>
+      commands.includes(command),
+    ),
+  );
   return {
     caps,
     commands,
+    ...(Object.keys(commandFeatures).length ? { commandFeatures } : {}),
     ...(!commandAllowlist && !params.ephemeral && pluginManifest.computerUse
       ? { computerUse: pluginManifest.computerUse }
       : {}),
@@ -111,6 +118,7 @@ export function sameNodeHostManifest(left: NodeHostManifest, right: NodeHostMani
     left.pathEnv === right.pathEnv &&
     sameStringList(left.caps, right.caps) &&
     sameStringList(left.commands, right.commands) &&
-    JSON.stringify(left.computerUse) === JSON.stringify(right.computerUse)
+    JSON.stringify(left.computerUse) === JSON.stringify(right.computerUse) &&
+    JSON.stringify(left.commandFeatures) === JSON.stringify(right.commandFeatures)
   );
 }

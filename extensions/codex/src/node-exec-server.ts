@@ -5,6 +5,7 @@ import type {
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CODEX_NODE_GITHUB_REFRESH_FEATURE } from "./node-github-refresh.js";
 
 const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
 
@@ -60,6 +61,7 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
   return {
     command: CODEX_NODE_EXEC_SERVER_COMMAND,
     cap: CODEX_NODE_EXEC_SERVER_CAPABILITY,
+    features: [CODEX_NODE_GITHUB_REFRESH_FEATURE],
     dangerous: true,
     duplex: true,
     hasActiveWork: () => activeProcesses.size > 0,

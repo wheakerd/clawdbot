@@ -33,6 +33,7 @@ import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   bindWorkerTurnCapabilities,
+  bindWorkerTurnGitHubGrant,
   getWorkerTurnToolSurface,
 } from "./placement-turn-claim-events.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
@@ -40,6 +41,7 @@ import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 import {
   prepareWorkerGitHubBindingGrant,
+  revokeWorkerGitHubBindingGrant,
   type WorkerGitHubBindingGrant,
 } from "./worker-github-binding.js";
 import { createWorkerReplyMedia } from "./worker-reply-media.js";
@@ -253,7 +255,6 @@ export async function executeWorkerTurn(
     authority: runtimeIdentity.approvalAuthority,
     assertCurrent: assertActive,
   });
-  const authority = runtimeIdentity.approvalAuthority;
   const authorityAbort = new AbortController();
   const signal = AbortSignal.any(
     [turn.abortSignal, operatorAuthority?.signal, authorityAbort.signal].filter(
@@ -261,10 +262,8 @@ export async function executeWorkerTurn(
     ),
   );
   const cancel = () => authorityAbort.abort(new Error("Worker turn authority closed"));
-  // Keep exact closure wired through transfer and launch dispatch, including awaited
-  // node readiness. The workspace/tunnel lifetime alone outlives this admitted turn.
   const stopWatchingRun = registerAgentRunDelegatedAuthorityClosedHandler((closed) => {
-    if (closed === authority) {
+    if (closed === runtimeIdentity.approvalAuthority) {
       cancel();
     }
   });
@@ -317,10 +316,12 @@ export async function executeWorkerTurn(
       assertCurrent: isAuthorized,
     });
     if (signal.aborted) {
-      await githubGrant?.revoke();
+      await revokeWorkerGitHubBindingGrant(githubGrant);
       signal.throwIfAborted();
     }
-    const github = githubGrant?.binding;
+    if (githubGrant?.refresh) {
+      bindWorkerTurnGitHubGrant(params.placements, params.turnClaim, githubGrant);
+    }
     if (turn.skillLibraryAuthoring && toolAuthority.allowedToolNames.includes("skill_workshop")) {
       const assertSkillAuthority = () => {
         if (
@@ -525,7 +526,7 @@ export async function executeWorkerTurn(
             prompt: media.prompt,
             suppressPromptTranscript: true,
             workspaceDir: placement.remoteWorkspaceDir,
-            ...(github ? { github } : {}),
+            ...(githubGrant ? { github: githubGrant.binding } : {}),
             ...(skillResources ? { skillResources } : {}),
             ...(turn.permissionMode
               ? {
@@ -637,9 +638,8 @@ export async function executeWorkerTurn(
       deliveryId: credential.deliveryId,
     });
     const reply = workerFailure ? { text } : await prepareReplyMedia({ text });
-    // A terminal turn no longer owns GitHub reach. Revoke before reconciliation
-    // can resume commands retained by the worker workspace.
-    await githubGrant?.revoke();
+    // Close GitHub reach before reconciliation resumes retained commands.
+    await revokeWorkerGitHubBindingGrant(githubGrant);
     const workspaceConflict = await reconcileWorkspaceAfterTurn({
       ...params,
       transcriptTarget,
@@ -678,7 +678,7 @@ export async function executeWorkerTurn(
       reply,
     });
   } finally {
-    await githubGrant?.revoke();
+    await revokeWorkerGitHubBindingGrant(githubGrant);
     await toolRuntime?.close();
     stopWatchingClaim();
     stopWatchingRun();

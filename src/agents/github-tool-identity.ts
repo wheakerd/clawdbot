@@ -663,12 +663,15 @@ async function verifyManagedGitHubCredential(token: string) {
 export async function writeManagedGitHubProfileFiles(
   profileDir: string,
   identity: { login: string; token: string; host?: string },
+  options?: { assertCurrent: () => void },
 ): Promise<void> {
   await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
   await fs.chmod(profileDir, 0o700);
   const profile = await fsRoot(profileDir, { mode: 0o600, mkdir: false, durable: false });
   await profile.write("config.yml", stringifyYaml({ version: "1" }));
-  await profile.write("hosts.yml", managedGitHubHosts(identity));
+  await profile.write("hosts.yml", managedGitHubHosts(identity), {
+    assertBeforeMutation: options?.assertCurrent,
+  });
 }
 
 /** Verifies a rotated token, then atomically replaces credentials in one stable profile. */

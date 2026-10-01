@@ -14,10 +14,12 @@ import {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import type { RawData, WebSocket } from "ws";
+import { CODEX_NODE_GITHUB_REFRESH_FEATURE } from "../node-github-refresh.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { getCodexNativeProcessClient } from "./native-process-authority.js";
 import type { CodexNativeProcessClient } from "./native-process-authority.js";
+import { bindCodexNodeGitHubRenewal } from "./sandbox-exec-server-github.js";
 import {
   createCodexNodeExecServerDisconnectError,
   startCodexNodeExecServerRelay,
@@ -216,8 +218,21 @@ async function acquireOpenClawExecServer(params: {
             );
           }
         };
+        let canRenew = false;
         let channel: Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>>;
         try {
+          const advertisedNode = githubGrant?.startRenewal
+            ? (await runtime.nodes.list()).nodes.find((node) => node.nodeId === server.node.id)
+            : undefined;
+          canRenew =
+            advertisedNode?.commandFeatures?.["codex.exec-server.stdio.v1"]?.includes(
+              CODEX_NODE_GITHUB_REFRESH_FEATURE,
+            ) === true;
+          if (githubGrant?.startRenewal && !canRenew) {
+            throw new Error(
+              "This node does not advertise GitHub profile refresh. Update and reconnect the node before starting an App-backed Codex turn.",
+            );
+          }
           // Capture the admitted caller's exact async scope before a detached WebSocket event.
           channel = await runtime.nodes.openDuplex({
             nodeId: server.node.id,
@@ -229,6 +244,7 @@ async function acquireOpenClawExecServer(params: {
             },
             sessionKey: sandbox.sessionKey,
             timeoutMs: 0,
+            ...(canRenew ? { requiredCommandFeatures: [CODEX_NODE_GITHUB_REFRESH_FEATURE] } : {}),
             maxMessageBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES,
             maxOutstandingDeliveryBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES + 2 * 1024 * 1024,
             signal: githubGrant?.signal ? AbortSignal.any([signal, githubGrant.signal]) : signal,
@@ -246,6 +262,9 @@ async function acquireOpenClawExecServer(params: {
           channel.close();
           await revokeGitHubGrant();
           throw new Error("Codex node execution retired before its channel was ready.");
+        }
+        if (canRenew && githubGrant) {
+          channel = bindCodexNodeGitHubRenewal(channel, githubGrant);
         }
         const nodeLease = {
           id: randomUUID(),

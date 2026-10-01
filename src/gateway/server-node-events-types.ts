@@ -39,6 +39,11 @@ export type NodeEventContext = Pick<
     saturated?: boolean;
   }) => { lastActiveAtMs: number; presenceUpdatedAtMs: number } | null;
   clearNodePresenceActivity?: (params: { nodeId: string; connId?: string }) => boolean | null;
+  updateNodeCommandFeatures?: (params: {
+    nodeId: string;
+    connId?: string;
+    features: Record<string, string[]>;
+  }) => Record<string, string[]> | null;
   updateNodeHostStats?: (params: {
     nodeId: string;
     connId?: string;
@@ -56,4 +61,11 @@ export type NodeEventContext = Pick<
 export type NodeEvent = {
   event: string;
   payloadJSON?: string | null;
+};
+
+export type NodeEventHandleResult = {
+  ok: true;
+  event: string;
+  handled: boolean;
+  reason?: string;
 };

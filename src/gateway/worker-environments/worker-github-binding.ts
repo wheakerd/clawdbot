@@ -2,7 +2,11 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
-import { GITHUB_PUBLIC_HOST, resolveGitHubHost } from "../../agents/github-host.js";
+import {
+  GITHUB_PUBLIC_HOST,
+  resolveGitHubHost,
+  resolveGitHubAppApiBaseUrl,
+} from "../../agents/github-host.js";
 import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
@@ -37,12 +41,34 @@ type WorkerGitHubBinding = WorkerGitHubLaunchBinding;
 
 const log = createSubsystemLogger("gateway/worker-github");
 
+export type WorkerGitHubBindingRefresh = {
+  generation: number;
+  token: string;
+  expiresAtMs: number;
+};
+
 export type WorkerGitHubBindingGrant = {
   binding: WorkerGitHubBinding;
   expiresAtMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
+  refresh?: (installedGeneration?: number) => Promise<WorkerGitHubBindingRefresh | undefined>;
+  startRenewal?: (install: (snapshot: WorkerGitHubBindingRefresh) => Promise<void>) => () => void;
   revoke: () => Promise<void>;
 };
+
+/** Credential cleanup cannot erase work already accepted by its execution owner. */
+export async function revokeWorkerGitHubBindingGrant(
+  grant: WorkerGitHubBindingGrant | undefined,
+): Promise<void> {
+  try {
+    await grant?.revoke();
+  } catch {
+    log.warn(
+      "Worker GitHub cleanup failed; accepted work still reconciles and final cleanup can retry.",
+    );
+  }
+}
 
 export async function prepareWorkerGitHubBindingGrant(params: {
   sessionId: string;
@@ -138,9 +164,13 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   if (!appGrant) {
     throw new Error("Worker GitHub App configuration disappeared during issuance");
   }
-  const revokeAppGrant = async () => {
+  let currentAppGrant = appGrant;
+  const retiredGrants = new Set<typeof currentAppGrant>();
+  const revokeAppGrant = async (candidate = currentAppGrant) => {
+    retiredGrants.add(candidate);
     try {
-      await appGrant.revoke();
+      await candidate.revoke();
+      retiredGrants.delete(candidate);
     } catch {
       log.warn("Worker GitHub token revocation failed; the installation token will expire.");
     }
@@ -206,14 +236,61 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     const subscriptions: (() => void)[] = [];
     let revoked = false;
     let revocation: Promise<void> | undefined;
+    let refreshing: Promise<WorkerGitHubBindingRefresh | undefined> | undefined;
+    let generation = 0;
+    let renewalTimer: ReturnType<typeof setTimeout> | undefined;
+    let deliveryWork: Promise<void> | undefined;
+    let renewalStarted = false;
+    let renewalStopped = false;
+    let currentBinding = binding;
+    let pending: { grant: typeof currentAppGrant; refresh: WorkerGitHubBindingRefresh } | undefined;
+    const issuerAppId = process.env.GITHUB_APP_ID;
+    const issuerInstallationId = process.env.GITHUB_INSTALLATION_ID;
+    const issuerApiBase = resolveGitHubAppApiBaseUrl(githubHost);
+    const assertGrantCurrent = () => {
+      try {
+        signal.throwIfAborted();
+        operator?.assertCurrent();
+        profile?.readCurrentFacts(bindingIds);
+        if (
+          revoked ||
+          params.assertCurrent?.() === false ||
+          process.env.GITHUB_APP_ID !== issuerAppId ||
+          process.env.GITHUB_INSTALLATION_ID !== issuerInstallationId ||
+          resolveGitHubHost() !== githubHost ||
+          resolveGitHubAppApiBaseUrl(githubHost) !== issuerApiBase ||
+          resolveConfiguredGitHubToolIdentity({
+            config: currentGitHubPublicationConfig(),
+            agentId: params.agentId,
+            scope: "agent",
+          }) ||
+          !sameGitHubPublicationWorkspace(workspace, readWorkspace())
+        ) {
+          throw new Error("Worker GitHub credential authority closed");
+        }
+      } catch (error) {
+        sourceAbort.abort(error);
+        throw error;
+      }
+    };
     const revoke = (): Promise<void> => {
       if (!revocation) {
         revoked = true;
+        clearTimeout(renewalTimer);
         signal.removeEventListener("abort", onAbort);
         subscriptions.splice(0).forEach((stop) => stop());
         sourceAbort.abort(new Error("Worker GitHub credential authority closed"));
         revocation = Promise.resolve()
-          .then(revokeAppGrant)
+          .then(async () => {
+            await refreshing?.catch(() => undefined);
+            await deliveryWork?.catch(() => undefined);
+            if (pending) {
+              retiredGrants.add(pending.grant);
+              pending = undefined;
+            }
+            retiredGrants.add(currentAppGrant);
+            await Promise.all([...retiredGrants].map(revokeAppGrant));
+          })
           .finally(() => {
             profile?.release();
             profile = undefined;
@@ -225,24 +302,145 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     const onAbort = () => {
       void revoke();
     };
-    const recheck = () => {
-      if (revoked) {
-        return;
+    const refresh = (
+      installedGeneration?: number,
+    ): Promise<WorkerGitHubBindingRefresh | undefined> => {
+      if (!refreshing) {
+        refreshing = (async () => {
+          assertGrantCurrent();
+          if (pending && pending.refresh.expiresAtMs <= Date.now()) {
+            await revokeAppGrant(pending.grant);
+            pending = undefined;
+            assertGrantCurrent();
+          }
+          if (pending && installedGeneration === pending.refresh.generation) {
+            const previous = currentAppGrant;
+            currentAppGrant = pending.grant;
+            currentBinding = { ...currentBinding, token: pending.refresh.token };
+            pending = undefined;
+            await revokeAppGrant(previous);
+            assertGrantCurrent();
+          }
+          if (pending) {
+            return pending.refresh;
+          }
+          if (currentAppGrant.expiresAtMs - Date.now() > 300_000) {
+            return undefined;
+          }
+          const next = await issueWorkerGitHubInstallationToken({
+            host: githubHost,
+            repository: remote,
+            signal,
+          });
+          if (!next) {
+            throw new Error("Worker GitHub App issuer unavailable during renewal");
+          }
+          try {
+            const refreshedOrigin =
+              workspace.kind === "repository"
+                ? originUrl
+                : (await managedWorktrees.resolveRepositoryIdentity(workspace.worktree.path))
+                    .originUrl;
+            const refreshedRemote = parseGitHubRemoteUrl(refreshedOrigin, githubHost);
+            assertGrantCurrent();
+            if (
+              refreshedRemote?.owner.toLowerCase() !== remote.owner.toLowerCase() ||
+              refreshedRemote?.repo.toLowerCase() !== remote.repo.toLowerCase()
+            ) {
+              sourceAbort.abort(new Error("Worker GitHub workspace changed during renewal"));
+              throw new Error("Worker GitHub workspace changed during renewal");
+            }
+            pending = {
+              grant: next,
+              refresh: {
+                generation: ++generation,
+                token: next.token,
+                expiresAtMs: next.expiresAtMs,
+              },
+            };
+            return pending.refresh;
+          } catch (error) {
+            await revokeAppGrant(next);
+            throw error;
+          }
+        })()
+          .catch(() => {
+            assertGrantCurrent();
+            log.warn(
+              "Worker GitHub renewal failed; retaining the current profile for the next heartbeat.",
+            );
+            return undefined;
+          })
+          .finally(() => {
+            refreshing = undefined;
+          });
       }
-      try {
-        operator?.assertCurrent();
-        profile?.readCurrentFacts(bindingIds);
-        if (params.assertCurrent?.() === false) {
-          throw new Error("Worker GitHub credential authority closed");
+      return refreshing;
+    };
+    const startRenewal = (install: (snapshot: WorkerGitHubBindingRefresh) => Promise<void>) => {
+      assertGrantCurrent();
+      if (renewalStarted) {
+        throw new Error("Worker GitHub grant already has a renewal consumer");
+      }
+      renewalStarted = true;
+      const schedule = (delayMs: number) => {
+        renewalTimer = setTimeout(() => {
+          deliveryWork = (async () => {
+            const snapshot = await refresh();
+            if (snapshot) {
+              assertGrantCurrent();
+              await install(snapshot);
+              assertGrantCurrent();
+              await refresh(snapshot.generation);
+            }
+          })()
+            .catch(() => {
+              if (!revoked && !signal.aborted) {
+                log.warn(
+                  "Worker GitHub profile renewal failed; retrying while the grant remains current.",
+                );
+              }
+            })
+            .finally(() => {
+              deliveryWork = undefined;
+              if (!revoked && !renewalStopped && !signal.aborted) {
+                schedule(Math.max(60_000, currentAppGrant.expiresAtMs - Date.now() - 300_000));
+              }
+            });
+        }, delayMs);
+        renewalTimer.unref?.();
+      };
+      schedule(Math.max(1, currentAppGrant.expiresAtMs - Date.now() - 300_000));
+      return () => {
+        renewalStopped = true;
+        clearTimeout(renewalTimer);
+      };
+    };
+    const recheck = () => {
+      if (!revoked) {
+        try {
+          assertGrantCurrent();
+        } catch {
+          /* The closed signal owns revocation. */
         }
-      } catch (error) {
-        sourceAbort.abort(error);
       }
     };
     signal.addEventListener("abort", onAbort, { once: true });
     subscriptions.push(onUserProfilesChanged(recheck), onUserProfileEmailBindingChanged(recheck));
     retainedProfile = true;
-    return { binding, expiresAtMs: appGrant.expiresAtMs, signal, revoke };
+    return {
+      get binding() {
+        return currentBinding;
+      },
+      get expiresAtMs() {
+        return currentAppGrant.expiresAtMs;
+      },
+      signal,
+      assertCurrent: assertGrantCurrent,
+      refresh,
+      startRenewal,
+      revoke,
+    };
   } catch (error) {
     await revokeAppGrant();
     throw error;

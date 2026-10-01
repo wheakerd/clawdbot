@@ -160,3 +160,7 @@ Read-only mounting protects the profile from modification, but sandboxed code
 can read and use its credentials. Every opted-in agent produces a WARN finding
 in `openclaw security audit`. Enable this only for agents whose sandboxed code
 is trusted with that account's GitHub access.
+
+App installation-token cleanup belongs to its issuer grant. A failed final DELETE retains bounded, coalesced cleanup attempts until confirmed closure or the token's actual expiry, even after a caller releases its profile. Cleanup never issues a replacement token or grants new authority. Warnings preserve unknown remote state, and a Gateway process exit before successful revocation still relies on GitHub expiry. A failed remote revoke must not erase a committed turn or prevent accepted workspace reconciliation.
+
+Current workers refresh their stable private profile before expiry through their exact admitted turn's authenticated heartbeat. App-backed paired Codex node launches require the live command to advertise profile-refresh support. Update and reconnect an older node before starting an App-backed turn; a missing feature prevents launch and closes its newly issued grant. Feature metadata does not change pairing or command permissions. Private refresh messages are consumed by the OpenClaw adapter, never by native Codex JSON-RPC. The adapter preserves the admitted GitHub profile even when a Codex command uses a restrictive environment policy.

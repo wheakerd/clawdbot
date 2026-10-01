@@ -530,12 +530,20 @@ describe("worker turn execution", () => {
     },
   );
 
-  it("settles the committed terminal result when execution is cancelled during hydration", async () => {
+  it.each(["cancel", "revoke failure"] as const)("settles the committed terminal result after %s during finalization", async (failure) => {
     await seedActivePlacement();
     const abort = new AbortController();
     const revoke = vi.fn(async () => {});
+    const grantAbort = new AbortController();
+    if (failure === "revoke failure") {
+      revoke.mockImplementationOnce(async () => {
+        grantAbort.abort();
+        throw new Error("synthetic remote revoke failure");
+      });
+    }
     const github = vi.spyOn(workerGitHub, "prepareWorkerGitHubBindingGrant").mockResolvedValue({
       binding: { token: "synthetic-token", login: "fixture", branch: "fixture" },
+      signal: grantAbort.signal,
       revoke,
     });
     const input = turn("terminal-hydration");
@@ -606,9 +614,15 @@ describe("worker turn execution", () => {
       const committed = (await openSessionManager()).getPersistedEntries();
       const committedRows = readWorkerTurnTranscriptStorageRows();
       expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
-      abort.abort(new Error("cancel after terminal acknowledgement"));
+      if (failure === "cancel") {
+        abort.abort(new Error("cancel after terminal acknowledgement"));
+      }
       release.resolve();
       expect(await operation).toMatchObject({ payloads: [{ text: "Committed reply 🦞" }] });
+      if (failure === "revoke failure") {
+        expect(revoke).toHaveBeenCalledTimes(2);
+        expect(grantAbort.signal.aborted).toBe(true);
+      }
       expect((await openSessionManager()).getPersistedEntries()).toEqual(committed);
       expect(readWorkerTurnTranscriptStorageRows()).toEqual(committedRows);
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);

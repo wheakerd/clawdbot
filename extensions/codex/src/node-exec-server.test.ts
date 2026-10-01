@@ -448,7 +448,9 @@ describe("Codex node exec-server", () => {
       "exactly one message",
     );
     await expect(frames.sendRaw(Uint8Array.of(0xff, 0xfe))).rejects.toThrow("malformed UTF-8");
-    await expect(frames.sendRaw(new Uint8Array(64 * 1024 * 1024 + 1))).rejects.toThrow("64 MiB");
+    const oversized = new Uint8Array(64 * 1024 * 1024 + 1);
+    oversized[0] = 0x7b;
+    await expect(frames.sendRaw(oversized)).rejects.toThrow("64 MiB");
     frames.controller.abort(new Error("malformed-frame fixture closed"));
     await expect(invocation).rejects.toThrow("malformed-frame fixture closed");
     expect(workspace.release).toHaveBeenCalledOnce();
@@ -512,13 +514,18 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
                 processId: "prepared-home",
                 argv: [process.execPath, "-e", script],
                 cwd: pathToFileURL(cwd).href,
-                env: {},
+                env: {
+                  GH_CONFIG_DIR: "/synthetic-other-profile",
+                  GH_HOST: "other-host.example",
+                  GH_TOKEN: "synthetic-caller-token",
+                  GH_ENTERPRISE_TOKEN: "synthetic-caller-enterprise-token",
+                },
                 envPolicy: {
                   inherit: "all",
                   ignoreDefaultExcludes: true,
                   exclude: [],
                   set: {},
-                  includeOnly: [],
+                  includeOnly: ["HOME", "CODEX_HOME"],
                 },
                 tty: false,
                 pipeStdin: false,

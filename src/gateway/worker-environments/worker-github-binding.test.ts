@@ -210,9 +210,9 @@ describe("worker GitHub launch binding", () => {
       gitAuthor: { name: "Signed-in Person", email: "person@example.test" },
     });
     authorityAbort.abort();
-    await Promise.resolve();
-    expect(fetch.mock.calls.at(-1)?.[1]).toMatchObject({ method: "DELETE" });
+    expect(grant?.signal?.aborted).toBe(true);
     await grant?.revoke();
+    expect(fetch.mock.calls.at(-1)?.[1]).toMatchObject({ method: "DELETE" });
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: "GET" });
     expect(fetch.mock.calls[2]?.[1]).toMatchObject({ method: "DELETE" });
@@ -240,6 +240,74 @@ describe("worker GitHub launch binding", () => {
       prepareWorkerGitHubBindingGrant({ ...session, requireOperatorAuthority: true }),
     ).rejects.toThrow("signed-in operator authority");
     expect(fetch).toHaveBeenCalledTimes(6);
+  });
+
+  it("renews the same worker grant through 48 hours only after exact profile acknowledgement", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.stubEnv("GITHUB_HOST", "fixture.ghe.com");
+    vi.stubEnv("GITHUB_API_BASE_URL", "https://api.fixture.ghe.com");
+    vi.stubEnv("GITHUB_APP_ID", "13361");
+    vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
+    vi.stubEnv("GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+    mocks.repository.mockResolvedValue({ originUrl: "fixture@fixture.ghe.com:example/repo.git" });
+    let issued = 0;
+    let deleted = 0;
+    const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) => {
+      if (init.method === "GET") {
+        return Response.json({ id: 119386 });
+      }
+      if (init.method === "DELETE") {
+        deleted += 1;
+        return new Response(null, { status: 204 });
+      }
+      issued += 1;
+      return Response.json({
+        token: `synthetic-renewal-${issued}`,
+        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const grant = await prepareWorkerGitHubBindingGrant({
+      ...session,
+      operatorAuthority: createAdmittedRunOperatorAuthority({
+        profileId: "signed-in-person",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+      }),
+      requireOperatorAuthority: true,
+    });
+    try {
+      expect(grant?.refresh).toBeTypeOf("function");
+      const started = Date.now();
+      for (let step = 1; step <= 53; step += 1) {
+        vi.setSystemTime(started + step * 3_300_000);
+        const next = await grant?.refresh?.();
+        expect(next).toMatchObject({ generation: step, token: `synthetic-renewal-${step + 1}` });
+        expect(deleted).toBe(step - 1);
+        expect(await grant?.refresh?.(step - 1)).toEqual(next);
+        expect(deleted).toBe(step - 1);
+        await grant?.refresh?.(step);
+        expect(deleted).toBe(step);
+      }
+      expect(grant?.binding.token).toBe("synthetic-renewal-54");
+      vi.setSystemTime(started + 54 * 3_300_000);
+      const expired = await grant?.refresh?.();
+      vi.setSystemTime(Date.now() + 3_600_001);
+      const replacement = await grant?.refresh?.(expired?.generation);
+      expect(replacement?.generation).toBe(55);
+      expect(replacement?.token).toBe("synthetic-renewal-56");
+      expect(grant?.binding.token).toBe("synthetic-renewal-54");
+      await grant?.refresh?.(replacement?.generation);
+      expect(grant?.binding.token).toBe("synthetic-renewal-56");
+      config.agents = { entries: { main: { tools: { github: { profileId } } } } };
+      await expect(grant?.refresh?.()).rejects.toThrow("credential authority closed");
+      expect(grant?.signal?.aborted).toBe(true);
+      expect(issued).toBe(56);
+    } finally {
+      await grant?.revoke();
+      vi.useRealTimers();
+    }
+    expect(deleted).toBe(54);
   });
 
   it("retains selected identity on a non-GitHub workspace without App settings", async () => {
