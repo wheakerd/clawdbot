@@ -308,20 +308,35 @@ describe("worker GitHub launch binding", () => {
     }
   });
 
-  it("leaves non-repository turns unbound without accepting a stale session", async () => {
+  it("binds selected credentials for non-repository turns without checkout metadata or native fallback", async () => {
     mocks.session.mockReturnValue({
       canonicalKey: session.sessionKey,
       agentId: "main",
       entry: { sessionId: session.sessionId },
     });
-    await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toBeUndefined();
-    expect(mocks.verify).not.toHaveBeenCalled();
-    mocks.session.mockReturnValue({
-      canonicalKey: session.sessionKey,
-      agentId: "main",
-      entry: { sessionId: "replacement-session" },
-    });
-    await expect(prepareWorkerGitHubBindingGrant(session)).rejects.toThrow();
+    await expect(prepareWorkerGitHubBindingGrant(session)).rejects.toThrow(
+      "selected GitHub identity is unavailable",
+    );
+    await installProfile();
+    const grant = await prepareWorkerGitHubBindingGrant(session);
+    try {
+      expect(grant?.binding).toEqual({
+        token,
+        login: verified.account.login,
+        gitAuthor: { name: "Shared Bot" },
+      });
+      expect(mocks.nativeToken).not.toHaveBeenCalled();
+      expect(mocks.repository).not.toHaveBeenCalled();
+      mocks.session.mockReturnValue({
+        canonicalKey: session.sessionKey,
+        agentId: "main",
+        entry: { sessionId: "replacement-session" },
+      });
+      expect(() => grant?.assertCurrent?.()).toThrow();
+      await expect(prepareWorkerGitHubBindingGrant(session)).rejects.toThrow();
+    } finally {
+      await grant?.revoke();
+    }
   });
 
   it("refuses missing configured credentials without borrowing the host login", async () => {

@@ -81,7 +81,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   });
   signal.throwIfAborted();
   operator?.assertCurrent();
-  if (!readWorkspace || params.assertCurrent?.() === false) {
+  if (params.assertCurrent?.() === false) {
     return undefined;
   }
   const workspace = readWorkspace();
@@ -122,11 +122,13 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   };
   assertCurrent();
   const originUrl =
-    workspace.kind === "repository"
-      ? workspace.workspace.url
-      : (await managedWorktrees.resolveRepositoryIdentity(workspace.worktree.path)).originUrl;
+    workspace.kind === "none"
+      ? undefined
+      : workspace.kind === "repository"
+        ? workspace.workspace.url
+        : (await managedWorktrees.resolveRepositoryIdentity(workspace.worktree.path)).originUrl;
   assertCurrent();
-  const remote = parseGitHubRemoteUrl(originUrl, GITHUB_PUBLIC_HOST);
+  const remote = originUrl ? parseGitHubRemoteUrl(originUrl, GITHUB_PUBLIC_HOST) : undefined;
   const scope =
     identity.source === "agent-override"
       ? "agent"
@@ -143,8 +145,14 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   const binding = parseWorkerGitHubLaunchBinding({
     token: identity.env.GH_TOKEN,
     login: identity.account.login,
-    branch:
-      workspace.kind === "repository" ? workspace.workspace.branch : workspace.worktree.branch,
+    ...(workspace.kind === "none"
+      ? {}
+      : {
+          branch:
+            workspace.kind === "repository"
+              ? workspace.workspace.branch
+              : workspace.worktree.branch,
+        }),
     ...(remote ? { remoteUrl: `https://github.com/${remote.owner}/${remote.repo}.git` } : {}),
     ...(gitAuthor ? { gitAuthor } : {}),
   });

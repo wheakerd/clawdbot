@@ -190,7 +190,8 @@ const GitHubLaunchSchema = workerProtocolObject({
         !value.startsWith("-") &&
         !value.includes("..") &&
         !value.includes("@{"),
-    ),
+    )
+    .optional(),
   host: GitHubHostSchema.optional(),
   remoteUrl: z
     .string()
@@ -203,6 +204,9 @@ const GitHubLaunchSchema = workerProtocolObject({
   .superRefine((value, ctx) => {
     if (!value.remoteUrl) {
       return;
+    }
+    if (!value.branch) {
+      ctx.addIssue({ code: "custom", message: "GitHub checkout remote requires a branch" });
     }
     const remote = URL.parse(value.remoteUrl);
     const host = value.host ?? "github.com";

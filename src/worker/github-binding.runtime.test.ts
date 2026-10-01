@@ -137,6 +137,32 @@ describe("prepareWorkerGitHubEnvironment", () => {
     },
   );
 
+  it("prepares credentials without changing checkout metadata for a non-repository binding", async () => {
+    const before = await git(cwd, "symbolic-ref", "HEAD");
+    const remote = await git(cwd, "remote", "get-url", "origin");
+    const stateDir = path.join(root, "state");
+    const environment = await prepareWorkerGitHubEnvironment({
+      binding: { token: binding.token, login: binding.login },
+      stateDir,
+      turnId: "credential-only",
+      cwd,
+    });
+    try {
+      expect(environment?.localIdentityEnv.GH_CONFIG_DIR).toBeTypeOf("string");
+      expect(environment?.credentialScrubEnv.GH_TOKEN).toBe("");
+      expect(
+        await fs.readFile(
+          path.join(environment!.localIdentityEnv.GH_CONFIG_DIR!, "hosts.yml"),
+          "utf8",
+        ),
+      ).toContain(binding.token);
+      expect(await git(cwd, "symbolic-ref", "HEAD")).toBe(before);
+      expect(await git(cwd, "remote", "get-url", "origin")).toBe(remote);
+    } finally {
+      await disposeWorkerGitHubEnvironment(stateDir, "credential-only");
+    }
+  });
+
   it("leaves diverged local history and files untouched with one warning", async () => {
     const remoteHead = await publishEarlierTurn();
     await fs.writeFile(path.join(cwd, "local.txt"), "local commit\n");

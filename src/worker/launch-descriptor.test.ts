@@ -167,6 +167,7 @@ describe("worker launch descriptor", () => {
       branch: "session/worker-1",
     };
     for (const github of [
+      { token: identity.token, login: identity.login },
       identity,
       {
         ...identity,
@@ -201,7 +202,11 @@ describe("worker launch descriptor", () => {
       withBinding({ unexpected: true }),
       { login: github.login, branch: github.branch },
       { token: github.token, branch: github.branch },
-      { token: github.token, login: github.login },
+      {
+        token: github.token,
+        login: github.login,
+        remoteUrl: "https://github.com/openclaw/openclaw.git",
+      },
       ...["", "token with space", "token\n", "token\u0001", "x".repeat(2049)].map((token) =>
         withBinding({ token }),
       ),

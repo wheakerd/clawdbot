@@ -31,6 +31,9 @@ async function bindWorkerGitHubCheckout(
   baseEnv: NodeJS.ProcessEnv,
   signal?: AbortSignal,
 ) {
+  if (!binding.branch) {
+    return;
+  }
   const git = (args: string[], timeoutMs = 5_000) =>
     executeGitCommand(cwd, args, {
       baseEnv,

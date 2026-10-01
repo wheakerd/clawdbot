@@ -115,7 +115,7 @@ export async function readGitAuthor(env: NodeJS.ProcessEnv, cwd: string) {
   return author;
 }
 
-export async function runGitHubIdentityCommand(
+async function runGitHubIdentityCommand(
   argv: string[],
   env?: NodeJS.ProcessEnv,
   cwd?: string,
