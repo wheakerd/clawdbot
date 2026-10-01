@@ -1,3 +1,4 @@
+import type { UsersSelfResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import { hasOperatorReadAccess } from "./operator-access.ts";
 
@@ -44,7 +45,12 @@ export function startGitHubSignInConsent(
     void context.connectionBootstrap.run(
       selected,
       async () => {
-        const profile = await context.gateway.loadSelfProfile();
+        // Consent consumes identity facts without republishing foreground self presentation.
+        const { profile } = await selected.client.request<UsersSelfResult>(
+          "users.self",
+          {},
+          { signal },
+        );
         if (
           signal.aborted ||
           owner !== selected ||
