@@ -662,6 +662,40 @@ describe("convertMessages relocatable region", () => {
     expect(cacheOptOutIndexes).toEqual(new Set([1]));
   });
 
+  it("keeps mixed-media shipped carriers out of the prompt cache", () => {
+    const imageModel: Model<"openai-completions"> = { ...model, input: ["text", "image"] };
+    const legacyCarrier: UserMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "legacy plugin runtime context" },
+        { type: "image", mimeType: "image/png", data: "aW1n" },
+      ],
+      timestamp: 1,
+      runtimeContextCarrier: true,
+      runtimeContextCarrierRetained: false,
+    };
+    const cacheOptOutIndexes = new Set<number>();
+
+    const converted = convertMessages(
+      imageModel,
+      { systemPrompt: "Stable prefix", messages: [legacyCarrier] },
+      compat(),
+      { cacheOptOutIndexes },
+    );
+
+    expect(converted).toEqual([
+      { role: "system", content: "Stable prefix" },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "legacy plugin runtime context" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
+        ],
+      },
+    ]);
+    expect(cacheOptOutIndexes).toEqual(new Set([1]));
+  });
+
   it("leaves the boundary in place when the caller preserves it", () => {
     const converted = convertMessages(model, contextForSession("alpha"), compat(), {
       preserveSystemPromptCacheBoundary: true,

@@ -251,8 +251,10 @@ async function convertAnthropicMessages(
         ...(operatorMessage?.turnScoped ? { clear_at: "next_user_message" as const } : {}),
       });
       if (
-        isRuntimeContextMessage(msg) &&
-        !(readRuntimeContextMetadata(msg).retained ?? modelRetainsRuntimeContext)
+        isRuntimeContextMessage(msg)
+          ? !(readRuntimeContextMetadata(msg).retained ?? modelRetainsRuntimeContext)
+          : msg.runtimeContextCarrier === true &&
+            !(msg.runtimeContextCarrierRetained ?? modelRetainsRuntimeContext)
       ) {
         options.cacheBreakpointOptOutMessageIndexes?.add(params.length - 1);
       }

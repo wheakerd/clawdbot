@@ -154,6 +154,9 @@ export function convertMessages(
         }
         userParam = { role: "user", content } as ChatCompletionMessageParam;
       }
+      if (msg.runtimeContextCarrier === true) {
+        options.cacheOptOutIndexes?.add(params.length);
+      }
       params.push(userParam);
     } else if (msg.role === "assistant") {
       const assistantMsg: ChatCompletionAssistantMessageParam = {

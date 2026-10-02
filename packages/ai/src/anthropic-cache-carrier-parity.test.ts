@@ -88,6 +88,46 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     },
   );
 
+  it.each(["provider", "transport"] as const)(
+    "keeps mixed-media shipped carriers out of the prompt cache through %s replay",
+    async (implementation) => {
+      const legacyCarrier: Message = {
+        role: "user",
+        content: [
+          { type: "text", text: "legacy plugin runtime context" },
+          { type: "image", mimeType: "image/png", data: "aW1n" },
+        ],
+        timestamp: 2,
+        runtimeContextCarrier: true,
+        runtimeContextCarrierRetained: false,
+      };
+      const { payload } = await captureAnthropicRequest(implementation, {
+        model: { ...anthropicModel, input: ["text", "image"] },
+        cacheRetention: "short",
+        context: {
+          ...context,
+          messages: [{ role: "user", content: "Original question", timestamp: 1 }, legacyCarrier],
+        },
+      });
+      const wire = payload.messages as Array<{ content: unknown }>;
+
+      expect(wire[0]?.content).toEqual([
+        {
+          type: "text",
+          text: "Original question",
+          cache_control: { type: "ephemeral" },
+        },
+      ]);
+      expect(wire[1]?.content).toEqual([
+        { type: "text", text: "legacy plugin runtime context" },
+        {
+          type: "image",
+          source: { type: "base64", media_type: "image/png", data: "aW1n" },
+        },
+      ]);
+    },
+  );
+
   it.each([false, true])(
     "sends operator context with system authority (turn-scoped=%s)",
     async (turnScoped) => {
