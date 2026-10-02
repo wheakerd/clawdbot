@@ -5,13 +5,16 @@ import { hasOperatorReadAccess } from "./operator-access.ts";
 export function startGitHubSignInConsent(
   context: Pick<ApplicationContext, "gateway" | "connectionBootstrap" | "lifecycleAbortSignal">,
 ): () => void {
-  let lifetime: AbortController | undefined;
   let owner:
-    | { client: ApplicationGatewaySnapshot["client"]; profileId: string; hello: object }
+    | {
+        client: ApplicationGatewaySnapshot["client"];
+        profileId: string;
+        hello: object;
+        controller: AbortController;
+      }
     | undefined;
   const retire = () => {
-    lifetime?.abort();
-    lifetime = undefined;
+    owner?.controller.abort();
     owner = undefined;
   };
   const update = (snapshot: ApplicationGatewaySnapshot) => {
@@ -34,13 +37,16 @@ export function startGitHubSignInConsent(
       return;
     }
     retire();
-    const selected = { client: snapshot.client, profileId, hello: snapshot.hello };
+    const selected = {
+      client: snapshot.client,
+      profileId,
+      hello: snapshot.hello,
+      controller: new AbortController(),
+    };
     owner = selected;
-    const controller = new AbortController();
-    lifetime = controller;
     const signal = context.lifecycleAbortSignal
-      ? AbortSignal.any([controller.signal, context.lifecycleAbortSignal])
-      : controller.signal;
+      ? AbortSignal.any([selected.controller.signal, context.lifecycleAbortSignal])
+      : selected.controller.signal;
     void context.connectionBootstrap.run(
       selected,
       async () => {

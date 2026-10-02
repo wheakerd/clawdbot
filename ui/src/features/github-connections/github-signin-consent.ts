@@ -53,10 +53,7 @@ export async function completeGitHubSignInConsent(
         void checkConnection();
       }
     },
-    authorizationSucceeded: () => {
-      notifyPersonalGitHubConnectionChanged({ client, profileId });
-      finish();
-    },
+    authorizationSucceeded: () => notifyPersonalGitHubConnectionChanged({ client, profileId }),
   });
   const stop = onPersonalGitHubConnectionChanged((change) => {
     if (change.client === client && change.profileId === profileId) {

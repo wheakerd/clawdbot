@@ -275,14 +275,8 @@ async function acquireOpenClawExecServer(params: {
         server.node.leases.set(nodeLease.id, nodeLease);
         // The approved child can exit before app-server claims its loopback socket.
         // Observe that lifetime immediately instead of losing its terminal fact.
-        const closedAndRevoked = channel.closed.then(
-          async () => await revokeGitHubGrant(),
-          async (error: unknown) => {
-            await revokeGitHubGrant();
-            throw error;
-          },
-        );
-        void closedAndRevoked
+        void channel.closed
+          .finally(revokeGitHubGrant)
           .then(
             () => handleClosedCodexNodeExecServerLease(server, nodeLease, { failed: false }),
             (error: unknown) =>

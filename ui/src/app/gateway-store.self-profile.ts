@@ -18,7 +18,7 @@ export function createGatewaySelfProfile(options: {
 }) {
   let selfProfileRequest: {
     promise: Promise<UserProfile | null>;
-    publication: { requested: boolean };
+    publish: boolean;
   } | null = null;
   let fallbackAvatarUrl: string | undefined;
   const loadSelfProfile = (readOptions?: { publish?: boolean }): Promise<UserProfile | null> => {
@@ -32,12 +32,11 @@ export function createGatewaySelfProfile(options: {
     ) {
       return Promise.resolve(null);
     }
+    // Foreground loads joining a background read retain their publication intent.
     if (selfProfileRequest) {
-      selfProfileRequest.publication.requested ||= readOptions?.publish !== false;
+      selfProfileRequest.publish ||= readOptions?.publish !== false;
       return selfProfileRequest.promise;
     }
-    // Foreground loads joining a background read retain their publication intent.
-    const publication = { requested: readOptions?.publish !== false };
     const selfAtStart = options.getSnapshot().selfUser;
     const isCurrent = (): boolean =>
       options.getSnapshot().client === requestClient &&
@@ -60,7 +59,7 @@ export function createGatewaySelfProfile(options: {
         if (!isCurrent()) {
           return null;
         }
-        if (publication.requested) {
+        if (pending.publish) {
           if (profile) {
             const currentSelf = options.getSnapshot().selfUser;
             const currentProfile = currentSelf?.id === profile.id ? currentSelf : null;
@@ -111,7 +110,8 @@ export function createGatewaySelfProfile(options: {
           selfProfileRequest = null;
         }
       });
-    selfProfileRequest = { promise: request, publication };
+    const pending = { promise: request, publish: readOptions?.publish !== false };
+    selfProfileRequest = pending;
     return request;
   };
   return {

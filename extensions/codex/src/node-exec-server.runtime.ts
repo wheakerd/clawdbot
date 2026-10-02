@@ -25,6 +25,7 @@ import { closeCodexAppServerTransportAndWait } from "./app-server/transport.js";
 import {
   parseCodexNodeGitHubControl,
   encodeCodexNodeGitHubControl,
+  type CodexNodeGitHubRefresh,
 } from "./node-github-refresh.js";
 
 const MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES = 64 * 1024 * 1024;
@@ -227,8 +228,7 @@ export async function runCodexNodeExecServer(params: {
     let refreshGitHub:
       | ((snapshot: { token: string; expiresAtMs?: number }) => Promise<void>)
       | undefined;
-    let githubGeneration = 0;
-    let installedGitHub: { token: string; expiresAtMs?: number } | undefined;
+    let installedGitHub: CodexNodeGitHubRefresh | undefined;
     if (params.github) {
       const login = params.github.login;
       const { managedGitHubIdentityEnvironment, writeManagedGitHubProfileFiles } =
@@ -395,22 +395,22 @@ export async function runCodexNodeExecServer(params: {
       const control = parseCodexNodeGitHubControl(message);
       if (control) {
         const operation = githubControlWork.then(async () => {
+          const installedGeneration = installedGitHub?.generation ?? 0;
           if (
             control.type !== "openclaw.github.profile" ||
             !refreshGitHub ||
-            control.generation < githubGeneration
+            control.generation < installedGeneration
           ) {
             return;
           }
           let ok =
-            control.generation === githubGeneration &&
+            control.generation === installedGeneration &&
             installedGitHub?.token === control.token &&
             installedGitHub.expiresAtMs === control.expiresAtMs;
           try {
-            if (control.generation > githubGeneration) {
+            if (control.generation > installedGeneration) {
               await refreshGitHub(control);
-              githubGeneration = control.generation;
-              installedGitHub = { token: control.token, expiresAtMs: control.expiresAtMs };
+              installedGitHub = control;
               ok = true;
             }
           } catch {

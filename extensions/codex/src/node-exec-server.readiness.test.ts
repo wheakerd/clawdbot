@@ -139,8 +139,8 @@ async function startFixture(
 
 describe("Codex node native readiness", () => {
   it("settles an admitted GitHub profile write before releasing a disconnected workspace", async () => {
-    const writeHeld = createDeferred<void>();
-    const releaseWrite = createDeferred<void>();
+    const writeHeld = Promise.withResolvers<void>();
+    const releaseWrite = Promise.withResolvers<void>();
     const chmod = fs.chmod.bind(fs);
     let writeSettled = false;
     let cleanedBeforeWriteSettled = false;

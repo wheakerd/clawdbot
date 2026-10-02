@@ -280,7 +280,6 @@ export async function prepareWorkerGitHubBinding(params: {
     const binding = parseWorkerGitHubLaunchBinding({
       token,
       login: identity.account.login,
-      ...(githubHost === "github.com" ? {} : { host: githubHost }),
       branch:
         workspace.kind === "repository" ? workspace.workspace.branch : workspace.worktree.branch,
       ...(remoteUrl ? { remoteUrl } : {}),

@@ -3,6 +3,7 @@
 import type { DesktopAvailability } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { NodeHostStatsPayload } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
+import type { NodeCommandFeaturesUpdate } from "./node-registry.publications.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 /** Runtime context available to node event handlers. */
@@ -39,11 +40,9 @@ export type NodeEventContext = Pick<
     saturated?: boolean;
   }) => { lastActiveAtMs: number; presenceUpdatedAtMs: number } | null;
   clearNodePresenceActivity?: (params: { nodeId: string; connId?: string }) => boolean | null;
-  updateNodeCommandFeatures?: (params: {
-    nodeId: string;
-    connId?: string;
-    features: Record<string, string[]>;
-  }) => Record<string, string[]> | null;
+  updateNodeCommandFeatures?: (
+    params: NodeCommandFeaturesUpdate,
+  ) => Record<string, string[]> | null;
   updateNodeHostStats?: (params: {
     nodeId: string;
     connId?: string;

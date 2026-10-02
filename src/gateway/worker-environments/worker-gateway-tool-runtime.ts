@@ -210,22 +210,19 @@ export function createWorkerGatewayToolRpc(
     run: (runtime: WorkerGatewayToolRuntime) => Promise<T> | T,
   ) => {
     const runtime = getWorkerTurnToolSurface(identity);
-    const admitted = validate(identity, runtime);
-    if (!admitted.ok) {
-      return "closeReason" in admitted
-        ? admitted
-        : { ok: false as const, closeReason: "placement-mismatch" as const };
-    }
     if (!runtime) {
+      const admitted = validate(identity, runtime);
+      if (!admitted.ok) {
+        return "closeReason" in admitted
+          ? admitted
+          : { ok: false as const, closeReason: "placement-mismatch" as const };
+      }
       return { ok: false as const, closeReason: "method-not-allowed" as const };
     }
-    const result = await run(runtime);
-    const current = validate(identity, runtime);
-    return current.ok
-      ? { ok: true as const, result }
-      : "closeReason" in current
-        ? current
-        : { ok: false as const, closeReason: "placement-mismatch" as const };
+    return runWorkerTurnRequestOperation({
+      validate: () => validate(identity, runtime),
+      run: () => run(runtime),
+    });
   };
   return {
     getToolSurface: (identity: WorkerConnectionIdentity) =>
@@ -252,7 +249,7 @@ export async function runWorkerTurnRequestOperation<T>(params: {
     | { ok: true }
     | { ok: false; closeReason: WorkerProtocolCloseReason }
     | { ok: false; reason: "epoch-mismatch" | "session-not-attached" };
-  run: () => Promise<T>;
+  run: () => Promise<T> | T;
 }) {
   const admitted = params.validate();
   if (!admitted.ok) {
