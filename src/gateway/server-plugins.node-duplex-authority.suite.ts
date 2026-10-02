@@ -3,8 +3,11 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { NodeRegistry } from "./node-registry.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
 
 type NodeDuplexAuthorityFixture = {
   registry: PluginRegistry;
@@ -33,11 +36,11 @@ export function registerNodeDuplexAuthoritySuite(setup: () => NodeDuplexAuthorit
         createRuntime,
         getLastDispatchedParams,
       } = setup();
-      const sendInvokeInput = vi.fn();
-      setGatewayContext({
-        nodeRegistry: { sendInvokeInput },
-        // SAFETY: Node dispatch is mocked; the duplex transport only reads this input sender.
-      } as unknown as GatewayRequestContext);
+      const nodeRegistry = new NodeRegistry();
+      const sendInvokeInput = vi
+        .spyOn(nodeRegistry, "sendInvokeInput")
+        .mockImplementation(() => {});
+      setGatewayContext(createGatewayRequestContext(makeContextParams({ nodeRegistry })));
       const waiting = createDeferredCore();
       const approve = createDeferredCore();
       const finish = createDeferredCore();
@@ -100,13 +103,12 @@ export function registerNodeDuplexAuthoritySuite(setup: () => NodeDuplexAuthorit
   test("cancels a retained duplex invocation when its delegated caller authority closes", async () => {
     const { registry, gatewayRequestScopeModule, setGatewayContext, setDispatch, createRuntime } =
       setup();
-    const sendInvokeInput = vi.fn();
+    const nodeRegistry = new NodeRegistry();
+    const sendInvokeInput = vi.spyOn(nodeRegistry, "sendInvokeInput").mockImplementation(() => {});
     const validateAgentRuntimeApprovalAuthority = vi.fn(() => true);
-    const context = {
-      nodeRegistry: { sendInvokeInput },
-      validateAgentRuntimeApprovalAuthority,
-      // SAFETY: Mocked node dispatch uses only the input sender and delegated-authority validator.
-    } as unknown as GatewayRequestContext;
+    const context = createGatewayRequestContext(
+      makeContextParams({ nodeRegistry, validateAgentRuntimeApprovalAuthority }),
+    );
     setGatewayContext(context);
     let invokeSignal: AbortSignal | undefined;
     setDispatch(async (opts: GatewayRequestOptions) => {
