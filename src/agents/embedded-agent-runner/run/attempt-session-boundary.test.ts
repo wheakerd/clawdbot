@@ -21,6 +21,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import { labelRuntimeContextText } from "../../../llm/types.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../../sessions/input-provenance.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -230,7 +231,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         expect(first).toHaveLength(2);
         expect(first[1]).toMatchObject({
           role: "user",
-          content: [{ type: "text", text: carrier.content }],
+          content: labelRuntimeContextText(carrier.content),
         });
         messages.push(
           makeAssistantMessageFixture({
@@ -284,7 +285,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         }
         expect(next.at(-1)).toMatchObject({
           role: "user",
-          content: [{ type: "text", text: nextCarrier.content }],
+          content: labelRuntimeContextText(nextCarrier.content),
         });
       }),
   );
@@ -311,10 +312,12 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         appendOnlyRuntimeContext ? [user, carrier] : [carrier, user],
       );
       const message = converted.at(-1);
-      expect(message).toMatchObject({ role: "user", runtimeContextCarrier: true });
-      expect(
-        (message as { runtimeContextCarrierRetained?: boolean }).runtimeContextCarrierRetained,
-      ).toBe(appendOnlyRuntimeContext);
+      expect(message).toMatchObject({
+        role: "user",
+        runtimeContext: { retained: appendOnlyRuntimeContext },
+        runtimeContextCarrier: true,
+        runtimeContextCarrierRetained: appendOnlyRuntimeContext,
+      });
     },
   );
 

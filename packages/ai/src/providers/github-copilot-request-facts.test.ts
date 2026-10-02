@@ -32,4 +32,22 @@ describe("Copilot request facts", () => {
       hasImages: false,
     });
   });
+
+  it("keeps runtime context transparent to request initiator ownership", () => {
+    const runtimeContext = {
+      role: "user",
+      content: "OpenClaw runtime context:\ncurrent runtime facts",
+      runtimeContext: {},
+    };
+    expect(
+      projectCopilotRequestFacts([{ role: "user", content: "question" }, runtimeContext], "nested")
+        .initiator,
+    ).toBe("user");
+    expect(
+      projectCopilotRequestFacts(
+        [{ role: "toolResult", content: "result" }, runtimeContext],
+        "nested",
+      ).initiator,
+    ).toBe("agent");
+  });
 });

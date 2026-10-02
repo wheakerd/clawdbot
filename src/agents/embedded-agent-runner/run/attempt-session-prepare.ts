@@ -3,6 +3,7 @@ import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { isRuntimeContextMessage, setRuntimeContextRetention } from "../../../llm/types.js";
 import {
   attachRuntimePromptMediaFacts,
   readPersistedMediaFacts,
@@ -434,8 +435,8 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         : relocateCurrentRuntimeContextCarrierToTail(normalized),
     );
     for (const message of converted) {
-      if (message.role === "user" && message.runtimeContextCarrier) {
-        message.runtimeContextCarrierRetained = input.appendOnlyRuntimeContext;
+      if (isRuntimeContextMessage(message)) {
+        setRuntimeContextRetention(message, input.appendOnlyRuntimeContext);
       }
     }
     if (

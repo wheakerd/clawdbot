@@ -1,10 +1,10 @@
 /** Request facts shared by Copilot transports; identity headers remain plugin-owned. */
 export function projectCopilotRequestFacts(
-  messages: readonly { role: string; content: unknown }[],
+  messages: readonly { role: string; content: unknown; runtimeContext?: unknown }[],
   contentMode: "direct" | "nested",
   hasImages?: boolean,
 ): { initiator: "user" | "agent"; hasImages: boolean } {
-  const last = messages.at(-1);
+  const last = messages.findLast((message) => message.runtimeContext === undefined);
   const initiator =
     last &&
     (last.role !== "user" ||

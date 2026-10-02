@@ -42,10 +42,20 @@ it.each([
     const context: Context = {
       messages: [
         user("first"),
-        { ...user("first context"), runtimeContextCarrier: true },
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\nfirst context",
+          timestamp: 0,
+          runtimeContext: {},
+        },
         answer("first answer"),
         user("second"),
-        { ...user("second context"), runtimeContextCarrier: true },
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\nsecond context",
+          timestamp: 0,
+          runtimeContext: {},
+        },
         answer("second answer"),
       ],
     };
@@ -60,10 +70,10 @@ it.each([
     expect(withSteering).toMatchObject(
       [
         "first",
-        "first context",
+        "OpenClaw runtime context:\nfirst context",
         "first answer",
         "second",
-        "second context",
+        "OpenClaw runtime context:\nsecond context",
         "second answer",
         "steering",
       ].map((text) => ({ content: [{ text }] })),

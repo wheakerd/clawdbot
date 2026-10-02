@@ -119,6 +119,7 @@ describe("bounded Decision conversation projection", () => {
           role: "custom",
           customType: "openclaw.runtime-context",
           content: "private runtime",
+          details: { source: "openclaw-runtime-context" },
           display: false,
           timestamp: 3,
         },

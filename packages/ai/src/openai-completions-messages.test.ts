@@ -599,7 +599,12 @@ describe("convertMessages relocatable region", () => {
           isError: false,
           timestamp: 3,
         },
-        { role: "user", content: "later context", runtimeContextCarrier: true, timestamp: 4 },
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\nlater context",
+          timestamp: 4,
+          runtimeContext: {},
+        },
       ],
     };
     const cacheOptOutIndexes = new Set<number>();
@@ -628,9 +633,33 @@ describe("convertMessages relocatable region", () => {
           { type: "text", text: "Runtime facts" },
         ],
       },
-      { role: "user", content: "later context" },
+      { role: "system", content: "OpenClaw runtime context:\nlater context" },
     ]);
     expect(cacheOptOutIndexes).toEqual(new Set([3, 4]));
+  });
+
+  it("recognizes the shipped plugin carrier flag at the provider boundary", () => {
+    const legacyCarrier: UserMessage = {
+      role: "user",
+      content: "legacy plugin runtime context",
+      timestamp: 1,
+      runtimeContextCarrier: true,
+      runtimeContextCarrierRetained: false,
+    };
+    const cacheOptOutIndexes = new Set<number>();
+
+    const converted = convertMessages(
+      model,
+      { systemPrompt: "Stable prefix", messages: [legacyCarrier] },
+      compat(),
+      { cacheOptOutIndexes },
+    );
+
+    expect(converted).toEqual([
+      { role: "system", content: "Stable prefix" },
+      { role: "system", content: "legacy plugin runtime context" },
+    ]);
+    expect(cacheOptOutIndexes).toEqual(new Set([1]));
   });
 
   it("leaves the boundary in place when the caller preserves it", () => {

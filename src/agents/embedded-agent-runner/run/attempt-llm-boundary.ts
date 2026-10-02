@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
-import type { ImageContent, UserMessage } from "../../../llm/types.js";
+import {
+  hasLegacyRuntimeContextEnvelope,
+  type ImageContent,
+  type UserMessage,
+} from "../../../llm/types.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
@@ -9,6 +13,7 @@ import {
   escapeInternalRuntimeContextDelimiters,
   isOpenClawSystemUpdateMessage,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  projectRuntimeContextFragments,
   resolveRuntimeContextPromptOwner,
   retainRuntimeContextMessageForPrompt,
   stripHistoricalRuntimeContextCustomMessages,
@@ -29,8 +34,7 @@ import {
   type UserTranscriptContext,
 } from "./attempt-history.js";
 import {
-  buildRuntimeContextMessageContent,
-  projectRuntimeContextFragments,
+  materializeSteeringRuntimeContext,
   type RuntimeContextCustomMessage,
 } from "./runtime-context-prompt.js";
 
@@ -98,11 +102,17 @@ function projectRuntimeContextMessages(
     if (message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE) {
       const details = runtimeContextDetailsSchema.safeParse(message.details);
       if (details.success) {
-        return Object.assign({}, message, {
-          content: buildRuntimeContextMessageContent(
-            projectRuntimeContextFragments(details.data.fragments),
-          ),
-        });
+        if (
+          typeof message.content === "string" &&
+          hasLegacyRuntimeContextEnvelope(message.content)
+        ) {
+          return message;
+        }
+        return {
+          ...message,
+          content: projectRuntimeContextFragments(details.data.fragments),
+          details: details.data,
+        };
       }
     }
     if (message.role !== "user" && message.role !== "custom") {
@@ -137,7 +147,9 @@ export function normalizeMessagesForLlmBoundary(
   options?: LlmBoundaryOptions,
 ): AgentMessage[] {
   const normalized = stripUnsafeBlockedRunMetadata(
-    stripToolResultDetails(normalizeAssistantReplayContent(messages)),
+    stripToolResultDetails(
+      normalizeAssistantReplayContent(materializeSteeringRuntimeContext(messages)),
+    ),
   );
   const userTranscriptMessages = resolveUserTranscriptMessages(
     normalized,

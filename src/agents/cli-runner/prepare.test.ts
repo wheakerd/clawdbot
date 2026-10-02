@@ -36,6 +36,7 @@ import {
   claimHeartbeatOutcomeForRun,
   persistHeartbeatOutcome,
 } from "../../infra/heartbeat-outcome-store.js";
+import { labelRuntimeContextText } from "../../llm/types.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
   CliBackendExecute,
@@ -108,6 +109,7 @@ import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runn
 import { createContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../harness/gateway-question.js";
 import { withQuestionGateway } from "../harness/gateway-question.test-support.js";
+import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
@@ -2798,21 +2800,19 @@ describe("prepareCliRunContext", () => {
     expect(second.systemPrompt).toBe(
       `${wrappedPluginSystemContext("hook prepend system")}\n\nhook system${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
     );
-    const carrier = [
-      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-      "## Media Generation Tasks",
-      "image task running",
-      "active video task",
-      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-    ].join("\n");
+    const carrier = ["## Media Generation Tasks", "image task running", "active video task"].join(
+      "\n",
+    );
     expect(second.params.prompt).toBe("latest ask");
-    expect(second.promptContext).toEqual({ appendContext: carrier });
+    expect(second.promptContext).toEqual({ appendContext: labelRuntimeContextText(carrier) });
+    expect(stripInternalRuntimeContext(second.promptContext?.appendContext ?? "")).toBe("");
     expect(second.params.transcriptPrompt).toBe("latest ask");
     expect(second.contextEngineTurnPrompt).toBe("latest ask");
     expect(mockBuildMediaTaskRuntimeContext).toHaveBeenCalledWith({
       sessionKey: "agent:main:test",
       agentId: "main",
       capabilityToolNames: new Set(["image_generate", "video_generate"]),
+      includeEmptySnapshots: true,
     });
   });
 

@@ -1,4 +1,11 @@
-import type { ImageContent, Message, TextContent } from "@openclaw/llm-core";
+import {
+  hasLegacyRuntimeContextEnvelope,
+  labelRuntimeContextContent,
+  RUNTIME_CONTEXT_CUSTOM_TYPE,
+  type ImageContent,
+  type Message,
+  type TextContent,
+} from "@openclaw/llm-core";
 import { parseDateStringTimestampMs as parseSessionTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getOpenClawSystemUpdateKind } from "../operator-messages.js";
@@ -115,10 +122,13 @@ export function createCustomMessage(
 }
 
 /** Recognize the structured carrier marker shared with provider replay. */
-export function isRuntimeContextCarrier(message: AgentMessage): boolean {
+export function isRuntimeContextCarrier(message: AgentMessage): message is CustomMessage {
+  const details = message.role === "custom" ? asOptionalRecord(message.details) : undefined;
   return (
     message.role === "custom" &&
-    (asOptionalRecord(message.details)?.runtimeContextCarrier === true ||
+    ((message.customType === RUNTIME_CONTEXT_CUSTOM_TYPE &&
+      details?.source === "openclaw-runtime-context" &&
+      details.runtimeContextCarrier !== false) ||
       getOpenClawSystemUpdateKind(message) === "runtime-context")
   );
 }
@@ -166,17 +176,32 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       default:
         return;
     }
-    // Preserve carrier identity so provider-owned replay and cache policy can
-    // distinguish transient context from append-only context.
-    llmMessages.push({
-      role: "user",
-      content,
-      timestamp:
-        message.role === "compactionSummary"
-          ? normalizeCompactionSummaryTimestamp(message.timestamp)
-          : message.timestamp,
-      ...(isRuntimeContextCarrier(message) ? { runtimeContextCarrier: true } : {}),
-    });
+    const timestamp =
+      message.role === "compactionSummary"
+        ? normalizeCompactionSummaryTimestamp(message.timestamp)
+        : message.timestamp;
+    if (isRuntimeContextCarrier(message)) {
+      // Prefix-bound providers may have signed this exact v2026.9.7 projection.
+      // Keep its historical bytes while attaching the canonical semantic marker.
+      const legacyContent =
+        typeof message.content === "string" && hasLegacyRuntimeContextEnvelope(message.content)
+          ? message.content
+          : undefined;
+      const runtimeContent = legacyContent
+        ? [{ type: "text" as const, text: legacyContent }]
+        : typeof message.content === "string"
+          ? message.content
+          : content.filter((block): block is TextContent => block.type === "text");
+      llmMessages.push({
+        role: "user",
+        content: legacyContent ? runtimeContent : labelRuntimeContextContent(runtimeContent),
+        timestamp,
+        runtimeContext: {},
+        runtimeContextCarrier: true,
+      });
+    } else {
+      llmMessages.push({ role: "user", content, timestamp });
+    }
   });
   return llmMessages;
 }

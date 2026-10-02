@@ -59,10 +59,7 @@ function hasMedia(message: AgentMessage): boolean {
 }
 
 function isRuntimeCarrier(message: AgentMessage): boolean {
-  return (
-    isOpenClawRuntimeContextCustomMessage(message) ||
-    (message.role === "user" && message.runtimeContextCarrier === true)
-  );
+  return isOpenClawRuntimeContextCustomMessage(message);
 }
 
 function readUserText(message: Extract<AgentMessage, { role: "user" }>): string | undefined {
