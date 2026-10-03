@@ -17,6 +17,7 @@ import {
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import { sanitizeNonEmptyTransportPayloadText } from "./transports/transport-stream-shared.js";
 import {
+  hasRuntimeContextMarker,
   isRuntimeContextMessage,
   runtimeContextContentToText,
   type Context,
@@ -154,7 +155,7 @@ export function convertMessages(
         }
         userParam = { role: "user", content } as ChatCompletionMessageParam;
       }
-      if (msg.runtimeContextCarrier === true) {
+      if (hasRuntimeContextMarker(msg)) {
         options.cacheOptOutIndexes?.add(params.length);
       }
       params.push(userParam);
