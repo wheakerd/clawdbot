@@ -1,7 +1,7 @@
 import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import type { WorkerHeartbeatResult } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { isGitHubCloudHost } from "../agents/github-host.js";
+import { CLEARED_GITHUB_CREDENTIALS } from "../agents/github-host.js";
 import {
   managedGitHubIdentityEnvironment,
   removeManagedGitHubProfile,
@@ -171,11 +171,8 @@ export async function prepareWorkerGitHubEnvironment(params: {
     {
       ...process.env,
       ...hostIdentityEnv,
-      ...(isGitHubCloudHost(githubHost)
-        ? { GH_TOKEN: binding.token, GH_ENTERPRISE_TOKEN: "" }
-        : { GH_TOKEN: "", GH_ENTERPRISE_TOKEN: binding.token }),
-      GITHUB_TOKEN: "",
-      GITHUB_ENTERPRISE_TOKEN: "",
+      // Git may rewrite the remote URL; only the host-keyed profile can supply credentials.
+      ...CLEARED_GITHUB_CREDENTIALS,
     },
     signal,
   );
@@ -206,12 +203,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
     },
     managedLocalIdentity: true,
     excludedStoreNames: [],
-    credentialScrubEnv: {
-      GH_TOKEN: "",
-      GH_ENTERPRISE_TOKEN: "",
-      GITHUB_TOKEN: "",
-      GITHUB_ENTERPRISE_TOKEN: "",
-    },
+    credentialScrubEnv: { ...CLEARED_GITHUB_CREDENTIALS },
     localIdentityEnv: hostIdentityEnv,
   };
 }

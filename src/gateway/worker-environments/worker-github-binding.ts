@@ -129,7 +129,8 @@ export async function prepareWorkerGitHubBindingGrant(params: {
         ? workspace.workspace.url
         : (await managedWorktrees.resolveRepositoryIdentity(workspace.worktree.path)).originUrl;
   assertCurrent();
-  const remote = originUrl ? parseGitHubRemoteUrl(originUrl, GITHUB_PUBLIC_HOST) : undefined;
+  const githubHost = identity.host ?? GITHUB_PUBLIC_HOST;
+  const remote = originUrl ? parseGitHubRemoteUrl(originUrl, githubHost) : undefined;
   const scope =
     identity.source === "agent-override"
       ? "agent"
@@ -146,6 +147,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   const binding = parseWorkerGitHubLaunchBinding({
     token: identity.env.GH_TOKEN,
     login: identity.account.login,
+    ...(githubHost !== GITHUB_PUBLIC_HOST ? { host: githubHost } : {}),
     ...(workspace.kind === "none"
       ? {}
       : {
@@ -154,7 +156,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
               ? workspace.workspace.branch
               : workspace.worktree.branch,
         }),
-    ...(remote ? { remoteUrl: `https://github.com/${remote.owner}/${remote.repo}.git` } : {}),
+    ...(remote ? { remoteUrl: `https://${githubHost}/${remote.owner}/${remote.repo}.git` } : {}),
     ...(gitAuthor ? { gitAuthor } : {}),
   });
   if (!binding) {
@@ -174,6 +176,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     if (
       currentIdentity.source !== identity.source ||
       currentIdentity.profileId !== identity.profileId ||
+      (currentIdentity.host ?? GITHUB_PUBLIC_HOST) !== githubHost ||
       currentIdentity.account.accountId !== identity.account.accountId ||
       currentIdentity.account.login.toLowerCase() !== identity.account.login.toLowerCase()
     ) {
@@ -258,7 +261,7 @@ export async function prepareWorkerGitHubBinding(params: {
     if (!token) {
       return undefined;
     }
-    const githubHost = GITHUB_PUBLIC_HOST;
+    const githubHost = identity.host ?? GITHUB_PUBLIC_HOST;
     const remote = parseGitHubRemoteUrl(originUrl, githubHost);
     const remoteUrl =
       remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo)
@@ -280,6 +283,7 @@ export async function prepareWorkerGitHubBinding(params: {
     const binding = parseWorkerGitHubLaunchBinding({
       token,
       login: identity.account.login,
+      ...(githubHost !== GITHUB_PUBLIC_HOST ? { host: githubHost } : {}),
       branch:
         workspace.kind === "repository" ? workspace.workspace.branch : workspace.worktree.branch,
       ...(remoteUrl ? { remoteUrl } : {}),

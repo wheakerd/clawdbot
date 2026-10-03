@@ -23,6 +23,7 @@ import type { WorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.j
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import * as skillTransfer from "./skill-resource-transfer.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import type { WorkerGitHubBindingGrant } from "./worker-github-binding.js";
 import {
   createWorkerTurnTunnel,
   ENVIRONMENT_ID,
@@ -50,6 +51,9 @@ import {
 const prepareGitHubBinding = vi.hoisted(() => vi.fn());
 vi.mock("./worker-github-binding.js", () => ({
   prepareWorkerGitHubBindingGrant: prepareGitHubBinding,
+  revokeWorkerGitHubBindingGrant: async (grant: WorkerGitHubBindingGrant | undefined) => {
+    await grant?.revoke();
+  },
 }));
 
 describe("worker launch capabilities", () => {

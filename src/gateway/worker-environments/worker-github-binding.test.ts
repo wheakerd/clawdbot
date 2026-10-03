@@ -7,6 +7,7 @@ import {
   writeManagedGitHubProfileFiles,
 } from "../../agents/github-tool-identity.js";
 import { clearRuntimeConfigSnapshot, writeConfigFile } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -389,6 +390,53 @@ describe("worker GitHub launch binding", () => {
         expect(grant?.signal?.aborted).toBe(true);
       } finally {
         await grant?.revoke();
+      }
+    },
+  );
+
+  it.each([
+    ["fixture.ghe.com", "https://api.fixture.ghe.com"],
+    ["ghe.example.test", "https://ghe.example.test/api/v3"],
+  ])(
+    "preserves the selected native host %s through launch and renewal",
+    async (host, apiBaseUrl) => {
+      config = { gateway: { github: { host, apiBaseUrl } } };
+      setRuntimeConfigSnapshot(config);
+      vi.stubEnv("GH_HOST", host);
+      for (const name of [
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+      ]) {
+        vi.stubEnv(name, undefined);
+      }
+      mocks.repository.mockResolvedValue({ originUrl: "git@" + host + ":owner/repo.git" });
+      mocks.nativeToken.mockImplementation(async () => ({
+        code: 0,
+        stdout: Buffer.from(token),
+        stderr: Buffer.alloc(0),
+      }));
+      let grant: Awaited<ReturnType<typeof prepareWorkerGitHubBindingGrant>> = undefined;
+      try {
+        grant = await prepareWorkerGitHubBindingGrant(session);
+        expect(grant?.binding).toMatchObject({
+          host,
+          token,
+          remoteUrl: "https://" + host + "/owner/repo.git",
+        });
+        expect(mocks.verify).toHaveBeenCalledWith(token, { apiBaseUrl });
+        expect(await prepareWorkerGitHubBinding(session)).toMatchObject({ host, token });
+        config = {
+          gateway: {
+            github: { host: "other.example.test", apiBaseUrl: "https://other.example.test/api/v3" },
+          },
+        };
+        setRuntimeConfigSnapshot(config);
+        await expect(grant?.refresh?.()).rejects.toThrow(/identity changed/i);
+      } finally {
+        await grant?.revoke();
+        clearRuntimeConfigSnapshot();
       }
     },
   );

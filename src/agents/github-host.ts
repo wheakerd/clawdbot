@@ -3,11 +3,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 export const GITHUB_PUBLIC_HOST = "github.com";
 export const GITHUB_PUBLIC_API_BASE_URL = "https://api.github.com";
 
-export function isGitHubCloudHost(host: string): boolean {
-  const normalized = host.toLowerCase();
-  return normalized === GITHUB_PUBLIC_HOST || normalized.endsWith(".ghe.com");
-}
-
 export const CLEARED_GITHUB_CREDENTIALS = {
   GH_TOKEN: "",
   GH_ENTERPRISE_TOKEN: "",
@@ -63,4 +58,3 @@ export function githubRepositoryUrl(
 ): string {
   return `https://${host}/${repository}.git`;
 }
-

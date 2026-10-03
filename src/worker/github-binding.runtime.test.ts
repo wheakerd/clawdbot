@@ -299,7 +299,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("fetches with the private turn token and managed identity environment", async () => {
+  it("fetches with only the host-keyed private profile and no ambient tokens", async () => {
     const remoteHead = await publishEarlierTurn();
     vi.stubEnv("GH_TOKEN", "inherited-synthetic-token");
     vi.stubEnv("GITHUB_TOKEN", "inherited-synthetic-token");
@@ -336,8 +336,10 @@ describe("prepareWorkerGitHubEnvironment", () => {
     // Project only fixture-owned keys so a failed assertion cannot dump the host environment.
     const expectedEnv = {
       ...prepared?.localIdentityEnv,
-      GH_TOKEN: binding.token,
+      GH_TOKEN: "",
+      GH_ENTERPRISE_TOKEN: "",
       GITHUB_TOKEN: "",
+      GITHUB_ENTERPRISE_TOKEN: "",
     };
     const actualEnv = Object.fromEntries(
       Object.keys(expectedEnv).map((key) => [key, options.baseEnv?.[key]]),
@@ -381,45 +383,50 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await expect(fs.access(currentProfile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("writes an isolated enterprise profile without exposing the token in the prepared env", async () => {
-    const enterprise = {
-      ...binding,
-      host: "fixture.ghe.com",
-      remoteUrl: "https://fixture.ghe.com/example/repo.git",
-    };
-    await git(root, "config", "--global", `url.${origin}.insteadOf`, enterprise.remoteUrl);
-    const runner = vi.spyOn(exec, "runCommandWithTimeout");
-    const prepared = await prepareWorkerGitHubEnvironment({
-      binding: enterprise,
-      stateDir: path.join(root, "enterprise-state"),
-      turnId: "enterprise-turn",
-      cwd,
-    });
-    const hosts = await fs.readFile(
-      path.join(prepared!.localIdentityEnv.GH_CONFIG_DIR!, "hosts.yml"),
-      "utf8",
-    );
+  it.each(["fixture.ghe.com", "ghe.example.test"])(
+    "isolates the %s profile from unscoped fetch tokens",
+    async (host) => {
+      const enterprise = {
+        ...binding,
+        host,
+        remoteUrl: `https://${host}/example/repo.git`,
+      };
+      await git(root, "config", "--global", `url.${origin}.insteadOf`, enterprise.remoteUrl);
+      const runner = vi.spyOn(exec, "runCommandWithTimeout");
+      const prepared = await prepareWorkerGitHubEnvironment({
+        binding: enterprise,
+        stateDir: path.join(root, "enterprise-state"),
+        turnId: "enterprise-turn",
+        cwd,
+      });
+      const hosts = await fs.readFile(
+        path.join(prepared!.localIdentityEnv.GH_CONFIG_DIR!, "hosts.yml"),
+        "utf8",
+      );
 
-    expect(prepared?.localIdentityEnv.GH_HOST).toBe("fixture.ghe.com");
-    const fetchCall = runner.mock.calls.find(([args]) => args[3] === "fetch");
-    const fetchOptions = fetchCall?.[1];
-    if (typeof fetchOptions !== "object") {
-      throw new Error("Expected options for enterprise Git fetch");
-    }
-    expect(fetchOptions.baseEnv).toMatchObject({
-      GH_TOKEN: enterprise.token,
-      GH_ENTERPRISE_TOKEN: "",
-    });
-    expect(hosts).toContain("fixture.ghe.com");
-    expect(hosts).toContain(binding.token);
-    expect(JSON.stringify(prepared)).not.toContain(binding.token);
-    expect(prepared?.credentialScrubEnv).toEqual({
-      GH_TOKEN: "",
-      GH_ENTERPRISE_TOKEN: "",
-      GITHUB_TOKEN: "",
-      GITHUB_ENTERPRISE_TOKEN: "",
-    });
-  });
+      expect(prepared?.localIdentityEnv.GH_HOST).toBe(host);
+      const fetchCall = runner.mock.calls.find(([args]) => args[3] === "fetch");
+      const fetchOptions = fetchCall?.[1];
+      if (typeof fetchOptions !== "object") {
+        throw new Error("Expected options for enterprise Git fetch");
+      }
+      expect(fetchOptions.baseEnv).toMatchObject({
+        GH_TOKEN: "",
+        GH_ENTERPRISE_TOKEN: "",
+        GITHUB_TOKEN: "",
+        GITHUB_ENTERPRISE_TOKEN: "",
+      });
+      expect(hosts).toContain(host);
+      expect(hosts).toContain(binding.token);
+      expect(JSON.stringify(prepared)).not.toContain(binding.token);
+      expect(prepared?.credentialScrubEnv).toEqual({
+        GH_TOKEN: "",
+        GH_ENTERPRISE_TOKEN: "",
+        GITHUB_TOKEN: "",
+        GITHUB_ENTERPRISE_TOKEN: "",
+      });
+    },
+  );
 
   it("warns and continues without changing local files when origin cannot be fetched", async () => {
     await fs.writeFile(path.join(cwd, filename), "unpublished work\n");

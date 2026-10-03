@@ -468,7 +468,7 @@ export async function preparePersonalGitHubPublicationIdentity(params: {
   return Object.freeze({
     source: "personal",
     profileId: params.profileId,
-    host: GITHUB_HOST,
+    host: GITHUB_PUBLIC_HOST,
     account: probe.account,
     env: Object.freeze(env),
   });
