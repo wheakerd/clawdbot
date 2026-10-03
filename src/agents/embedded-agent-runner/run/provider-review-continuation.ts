@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { bindResponsesInputMessage, responsesRequestLifecycle } from "@openclaw/ai/internal/openai";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isRuntimeContextMessage } from "../../../llm/types.js";
+import { hasRuntimeContextMarker } from "../../../llm/types.js";
 import {
   acceptProviderReviewAcknowledgment,
   assertSessionProviderReviewWorkStart,
@@ -75,7 +75,7 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
       throw new Error("Provider review continuation cannot be retried or change transport");
     }
     const message = snapshot.review.review?.continuation?.message;
-    const latestIndex = context.messages.findLastIndex((item) => !isRuntimeContextMessage(item));
+    const latestIndex = context.messages.findLastIndex((item) => !hasRuntimeContextMarker(item));
     const latest = context.messages[latestIndex];
     if (!message || latest?.role !== "user") {
       throw new Error("Provider review continuation requires its exact next user input");

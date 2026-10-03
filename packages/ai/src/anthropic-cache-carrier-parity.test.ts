@@ -88,25 +88,31 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     },
   );
 
-  it.each(["provider", "transport"] as const)(
-    "keeps mixed-media shipped carriers out of the prompt cache through %s replay",
-    async (implementation) => {
-      const legacyCarrier: Message = {
+  it.each([
+    { implementation: "provider", marker: "legacy" },
+    { implementation: "provider", marker: "canonical" },
+    { implementation: "transport", marker: "legacy" },
+    { implementation: "transport", marker: "canonical" },
+  ] as const)(
+    "keeps mixed-media $marker carriers out of the prompt cache through $implementation replay",
+    async ({ implementation, marker }) => {
+      const carrier: Message = {
         role: "user",
         content: [
           { type: "text", text: "legacy plugin runtime context" },
           { type: "image", mimeType: "image/png", data: "aW1n" },
         ],
         timestamp: 2,
-        runtimeContextCarrier: true,
-        runtimeContextCarrierRetained: false,
+        ...(marker === "canonical"
+          ? { runtimeContext: { retained: false } }
+          : { runtimeContextCarrier: true, runtimeContextCarrierRetained: false }),
       };
       const { payload } = await captureAnthropicRequest(implementation, {
         model: { ...anthropicModel, input: ["text", "image"] },
         cacheRetention: "short",
         context: {
           ...context,
-          messages: [{ role: "user", content: "Original question", timestamp: 1 }, legacyCarrier],
+          messages: [{ role: "user", content: "Original question", timestamp: 1 }, carrier],
         },
       });
       const wire = payload.messages as Array<{ content: unknown }>;

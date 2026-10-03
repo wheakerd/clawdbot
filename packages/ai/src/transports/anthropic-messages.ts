@@ -8,8 +8,7 @@ import type {
   ToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import {
-  isRuntimeContextMessage,
-  readRuntimeContextMetadata,
+  hasRuntimeContextMarker,
   supportsClaudeInHistorySystemMessages,
   type Context,
   type Model,
@@ -250,12 +249,11 @@ async function convertAnthropicMessages(
           : content,
         ...(operatorMessage?.turnScoped ? { clear_at: "next_user_message" as const } : {}),
       });
-      if (
-        isRuntimeContextMessage(msg)
-          ? !(readRuntimeContextMetadata(msg).retained ?? modelRetainsRuntimeContext)
-          : msg.runtimeContextCarrier === true &&
-            !(msg.runtimeContextCarrierRetained ?? modelRetainsRuntimeContext)
-      ) {
+      const runtimeContextRetained =
+        msg.runtimeContext !== undefined
+          ? msg.runtimeContext.retained
+          : msg.runtimeContextCarrierRetained;
+      if (hasRuntimeContextMarker(msg) && !(runtimeContextRetained ?? modelRetainsRuntimeContext)) {
         options.cacheBreakpointOptOutMessageIndexes?.add(params.length - 1);
       }
       continue;

@@ -281,6 +281,41 @@ describe("explicit direct Responses continuation", () => {
     },
   );
 
+  it("keeps a mixed-media runtime carrier behind the reviewed user input", async () => {
+    const f = await fixture("sse");
+    const carrier = {
+      role: "user" as const,
+      content: [
+        { type: "text" as const, text: "Plugin runtime context" },
+        { type: "image" as const, mimeType: "image/png", data: "aW1n" },
+      ],
+      timestamp: 3,
+      runtimeContext: {},
+    };
+    const messages = [...context.messages, carrier];
+    const before = JSON.stringify(messages);
+
+    const result = await (await f.stream(model, { ...context, messages }, f.options)).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(f.requests).toHaveLength(1);
+    expect(f.requests[0]?.input).toEqual([
+      { type: "message", role: "user", content: [{ type: "input_text", text: "old history" }] },
+      { type: "message", role: "user", content: [{ type: "input_text", text: steer }] },
+      {
+        type: "message",
+        role: "system",
+        content: [
+          {
+            type: "input_text",
+            text: "Plugin runtime context\n(image omitted: model does not support images)",
+          },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(messages)).toBe(before);
+  });
+
   it.each(["sse", "websocket"] as const)(
     "sends the literal steer and one-shot metadata over %s, then leaves later tool calls ordinary",
     async (transport) => {
