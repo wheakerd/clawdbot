@@ -70,7 +70,7 @@ export function assertCanonicalRetainedHistoryReferences(
     !isRecord(value) ||
     Object.keys(value).some((key) => key !== "sessionIds" && key !== "artifactPaths")
   ) {
-    refuse();
+    return refuse();
   }
   for (const field of ["sessionIds", "artifactPaths"] as const) {
     const references = value[field];
