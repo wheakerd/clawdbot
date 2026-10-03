@@ -194,18 +194,17 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       }
       // Prefix-bound providers may have signed this exact v2026.9.7 projection.
       // Keep its historical bytes while attaching the canonical semantic marker.
-      const legacyContent =
-        typeof message.content === "string" && hasLegacyRuntimeContextEnvelope(message.content)
-          ? message.content
-          : undefined;
-      const runtimeContent = legacyContent
-        ? [{ type: "text" as const, text: legacyContent }]
-        : typeof message.content === "string"
-          ? message.content
-          : content.filter((block): block is TextContent => block.type === "text");
+      const textContent = content.filter((block): block is TextContent => block.type === "text");
+      const legacyContent = hasLegacyRuntimeContextEnvelope(
+        textContent.map((block) => block.text).join(""),
+      )
+        ? textContent
+        : undefined;
+      const runtimeContent =
+        legacyContent ?? (typeof message.content === "string" ? message.content : textContent);
       llmMessages.push({
         role: "user",
-        content: legacyContent ? runtimeContent : labelRuntimeContextContent(runtimeContent),
+        content: legacyContent ?? labelRuntimeContextContent(runtimeContent),
         timestamp,
         runtimeContext: {},
         runtimeContextCarrier: true,
