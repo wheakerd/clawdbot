@@ -31,7 +31,6 @@ import {
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
-import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import {
   createWorkerGatewayToolRpc,
   runWorkerTurnRequestOperation,

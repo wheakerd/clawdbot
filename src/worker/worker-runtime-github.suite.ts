@@ -42,11 +42,7 @@ type WorkerGitHubFixture = {
   sessionId: string;
 };
 
-export function registerWorkerGitHubTests({
-  setup,
-  waitForFast,
-  sessionId: SESSION_ID,
-}: WorkerGitHubFixture) {
+export function registerWorkerGitHubTests({ setup, sessionId: SESSION_ID }: WorkerGitHubFixture) {
   // The probe uses a POSIX shell; Windows launches exec through PowerShell.
   it.skipIf(process.platform === "win32")(
     "binds the turn GitHub identity and checkout to real exec without publishing its token",
@@ -148,6 +144,17 @@ export function registerWorkerGitHubTests({
   it.skipIf(process.platform === "win32")(
     "keeps exec unbound and creates no GitHub profile without a turn identity",
     async () => {
+      // This unbound worker fixture must not inherit the developer host GitHub login.
+      for (const name of [
+        "GH_CONFIG_DIR",
+        "GH_HOST",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+      ]) {
+        vi.stubEnv(name, undefined);
+      }
       const { gateway, launch } = await setup({
         inferencePlans: ["tool", "text"],
         execCommand: 'printf "profile=%s\\n" "${GH_CONFIG_DIR-unset}"',

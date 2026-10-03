@@ -10,7 +10,6 @@ import {
   overlayConfiguredModelCatalog,
 } from "../../agents/model-catalog.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
-import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
@@ -235,22 +234,27 @@ export async function executeWorkerTurn(
     toolAuthority.allowedToolNames,
     assertTurnInputCurrent,
   );
-  const { operationalRunInstance, runtimeIdentity, operatorAuthority, assertActive, takeFinishingOutcome } =
-    await prepareWorkerAgentRuntimeIdentity({
-      ...params,
-      agentId: placement.agentId,
-      runtimeInstanceId: placement.environmentId,
-      sessionKey: placement.sessionKey,
-      sessionTarget: transcriptTarget,
-      promptCacheContext: {
-        boundaryCount: manager.getBoundaryCount(),
-        promptCacheKey: turn.promptCacheKey,
-        fastMode: turn.fastMode,
-        fastModeStartedAtMs: turn.fastModeStartedAtMs,
-        fastModeAutoOnSeconds: turn.fastModeAutoOnSeconds,
-      },
-      assertSourceCurrent,
-    });
+  const {
+    operationalRunInstance,
+    runtimeIdentity,
+    operatorAuthority,
+    assertActive,
+    takeFinishingOutcome,
+  } = await prepareWorkerAgentRuntimeIdentity({
+    ...params,
+    agentId: placement.agentId,
+    runtimeInstanceId: placement.environmentId,
+    sessionKey: placement.sessionKey,
+    sessionTarget: transcriptTarget,
+    promptCacheContext: {
+      boundaryCount: manager.getBoundaryCount(),
+      promptCacheKey: turn.promptCacheKey,
+      fastMode: turn.fastMode,
+      fastModeStartedAtMs: turn.fastModeStartedAtMs,
+      fastModeAutoOnSeconds: turn.fastModeAutoOnSeconds,
+    },
+    assertSourceCurrent,
+  });
   preparedComputer?.bind(operationalRunInstance, {
     authority: runtimeIdentity.approvalAuthority,
     assertCurrent: assertActive,
@@ -306,7 +310,7 @@ export async function executeWorkerTurn(
       throw new StaleWorkerBuildError();
     }
     let skillWorkshop: AnyAgentTool | undefined;
-    githubGrant = await prepareWorkerGitHubBindingGrant({
+    const preparingGitHubGrant = prepareWorkerGitHubBindingGrant({
       operatorAuthority,
       signal,
       sessionId: placement.sessionId,
@@ -314,6 +318,13 @@ export async function executeWorkerTurn(
       agentId: placement.agentId,
       assertCurrent: isAuthorized,
     });
+    try {
+      githubGrant = await raceNodeWorkerOperation(preparingGitHubGrant, signal);
+    } catch (error) {
+      // The shared account owner may finish after cancellation; retire any late execution copy.
+      void preparingGitHubGrant.then(revokeWorkerGitHubBindingGrant, () => {});
+      throw error;
+    }
     if (signal.aborted) {
       await revokeWorkerGitHubBindingGrant(githubGrant);
       signal.throwIfAborted();

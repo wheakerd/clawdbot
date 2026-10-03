@@ -348,8 +348,7 @@ export async function hasSupportedGitHubPublicationTarget(
   let originUrl: string;
   if (workspaceId) {
     const prepared = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
-    currentSession();
-    const owner = resolveGitHubPublicationWorkspaceOwner(session, prepared);
+    const owner = resolveGitHubPublicationWorkspaceOwner(currentSession(), prepared);
     if (owner.kind !== "repository") {
       throw new GitHubPublicationSessionChangedError();
     }
