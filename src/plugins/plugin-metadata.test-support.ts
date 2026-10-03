@@ -69,3 +69,17 @@ export function createPluginMetadataSnapshotFixture(
   };
   return rebasePluginMetadataSnapshotManifestRegistry(snapshot, manifestRegistry);
 }
+
+export function createDefaultedPluginMetadataSnapshotFixture(pluginId: string) {
+  return createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: pluginId,
+        configSchema: {
+          type: "object",
+          properties: { mode: { type: "string", default: "auto" } },
+        },
+      },
+    ],
+  });
+}

@@ -8,16 +8,24 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import {
+  createDefaultedPluginMetadataSnapshotFixture,
+  createPluginMetadataSnapshotFixture,
+} from "../../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { clearConfigSchemaResponseCacheForTests, configHandlers } from "./config.js";
-import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
+import {
+  createConfigHandlerHarness,
+  createConfigWriteSnapshot,
+  getConfigChangedPaths,
+} from "./config.test-helpers.js";
 
 const configWriteMocks = vi.hoisted(() => ({
   commitGatewayConfigWrite: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
+  currentPluginMetadataSnapshot: undefined as PluginMetadataSnapshot | undefined,
 }));
 
 vi.mock("../../config/io.js", async () => {
@@ -34,18 +42,35 @@ vi.mock("../../config/validation.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/validation.js")>(
     "../../config/validation.js",
   );
+  const validationParams = (
+    params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
+  ) =>
+    params?.pluginMetadataSnapshot || !configWriteMocks.currentPluginMetadataSnapshot
+      ? params
+      : {
+          ...params,
+          pluginMetadataSnapshot: configWriteMocks.currentPluginMetadataSnapshot,
+        };
   return {
     ...actual,
-    validateConfigObjectRawWithPlugins: vi.fn((config: OpenClawConfig) => ({
-      ok: true,
-      config,
-      warnings: [],
-    })),
-    validateConfigObjectWithPlugins: vi.fn((config: OpenClawConfig) => ({
-      ok: true,
-      config,
-      warnings: [],
-    })),
+    validateConfigObjectRawWithPlugins: vi.fn(
+      (
+        config: OpenClawConfig,
+        params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
+      ) =>
+        configWriteMocks.currentPluginMetadataSnapshot
+          ? actual.validateConfigObjectRawWithPlugins(config, validationParams(params))
+          : { ok: true, config, warnings: [] },
+    ),
+    validateConfigObjectWithPlugins: vi.fn(
+      (
+        config: OpenClawConfig,
+        params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
+      ) =>
+        configWriteMocks.currentPluginMetadataSnapshot
+          ? actual.validateConfigObjectWithPlugins(config, validationParams(params))
+          : { ok: true, config, warnings: [] },
+    ),
   };
 });
 
@@ -162,6 +187,7 @@ beforeEach(() => {
   storedHash = "base-hash";
   nextHash = 1;
   modelNormalizationPluginMetadata = undefined;
+  configWriteMocks.currentPluginMetadataSnapshot = undefined;
   configWriteMocks.readConfigFileSnapshotForWrite.mockImplementation(async () =>
     currentWriteSnapshot(),
   );
@@ -206,6 +232,26 @@ afterEach(() => {
 });
 
 describe("config.patch effective change receipt", () => {
+  it("does not report plugin defaults discovered after the write snapshot", async () => {
+    const pluginId = "defaulted-plugin";
+    modelNormalizationPluginMetadata = createPluginMetadataSnapshotFixture();
+    configWriteMocks.currentPluginMetadataSnapshot =
+      createDefaultedPluginMetadataSnapshotFixture(pluginId);
+    storedConfig = {
+      plugins: { entries: { [pluginId]: { enabled: true } } },
+      ui: { prefs: { sidebarEntries: ["route:usage"] } },
+    };
+
+    const harness = await invokeConfigPatch({
+      raw: { ui: { prefs: { sidebarEntries: ["route:tasks"] } } },
+      replacePaths: ["ui.prefs.sidebarEntries"],
+    });
+
+    const changedPaths = getConfigChangedPaths(harness);
+    expect(changedPaths).toContain("ui.prefs.sidebarEntries");
+    expect(changedPaths).not.toContain(`plugins.entries.${pluginId}.config`);
+  });
+
   it.each([
     { nextToken: "synthetic-old-token", expectedPaths: [] },
     {
@@ -218,15 +264,11 @@ describe("config.patch effective change receipt", () => {
       storedConfig = {
         channels: { matrix: { accounts: { sut: { accessToken: "synthetic-old-token" } } } },
       };
-      const { respond } = await invokeConfigPatch({
+      const harness = await invokeConfigPatch({
         raw: { channels: { matrix: { accounts: { sut: { accessToken: nextToken } } } } },
         baseHash: "base-hash",
       });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ changedPaths: expectedPaths }),
-        undefined,
-      );
+      expect(getConfigChangedPaths(harness)).toEqual(expectedPaths);
     },
   );
 });

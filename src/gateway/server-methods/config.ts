@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
@@ -22,7 +21,6 @@ import {
   resolveConfigSnapshotHash,
 } from "../../config/io.js";
 import { ConfigWritePostCommitError } from "../../config/io.write-errors.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
 import { normalizeSubmittedConfigModelRefs } from "../../config/model-input-normalization.js";
 import { isBuiltInModelProviderOverlayId } from "../../config/model-provider-overlay-ids.js";
@@ -45,6 +43,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
 import { redactToolDetail } from "../../logging/redact.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -68,6 +67,7 @@ import {
   summarizeChangedPaths,
 } from "../control-plane-audit.js";
 import { resolveBaseHashParam } from "./base-hash.js";
+import { summarizeConfigValidationIssues } from "./config-validation-errors.js";
 import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
@@ -86,7 +86,6 @@ import {
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
 // ui.prefs is the cross-device Control UI preference surface documented in docs/web/control-ui.md.
 // Leaf preferences are LWW so independent tabs/devices do not CAS-conflict on the whole config;
 // every other path keeps strict document CAS.
@@ -480,6 +479,7 @@ async function prepareConfigReplacementOrRespond(
       candidate: sourceCandidate,
       sourceConfig: snapshot.sourceConfig,
     }),
+    pluginMetadataSnapshot: writeOptions.basePluginMetadataSnapshot,
     modelIdNormalizationPolicies:
       writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
     respond,
@@ -536,6 +536,7 @@ function rejectDroppedAgentRosterEntries(params: {
 
 function validateSubmittedConfigOrRespond(params: {
   candidate: unknown;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   modelIdNormalizationPolicies: Parameters<typeof normalizeSubmittedConfigModelRefs>[1];
   respond: RespondFn;
 }): { validationCandidate: OpenClawConfig; config: OpenClawConfig } | null {
@@ -552,31 +553,18 @@ function validateSubmittedConfigOrRespond(params: {
       }),
     );
   };
-  const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
+  const validationParams = { pluginMetadataSnapshot: params.pluginMetadataSnapshot };
+  const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate, validationParams);
   if (!sourceValidated.ok) {
     respondInvalid(sourceValidated.issues);
     return null;
   }
-  const validated = validateConfigObjectWithPlugins(validationCandidate);
+  const validated = validateConfigObjectWithPlugins(validationCandidate, validationParams);
   if (!validated.ok) {
     respondInvalid(validated.issues);
     return null;
   }
   return { validationCandidate: validationCandidate as OpenClawConfig, config: validated.config };
-}
-
-function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
-  const trimmed = issues.slice(0, MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE);
-  const lines = normalizeStringEntries(
-    formatConfigIssueLines(trimmed, "", { normalizeRoot: true }),
-  );
-  if (lines.length === 0) {
-    return "invalid config";
-  }
-  const hiddenCount = Math.max(0, issues.length - lines.length);
-  return `invalid config: ${lines.join("; ")}${
-    hiddenCount > 0 ? ` (+${hiddenCount} more issue${hiddenCount === 1 ? "" : "s"})` : ""
-  }`;
 }
 
 async function ensureResolvableSecretRefsOrRespond(params: {
@@ -1104,6 +1092,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const validatedSubmission = validateSubmittedConfigOrRespond({
       candidate: restoredMerge.result,
+      pluginMetadataSnapshot: writeOptions.basePluginMetadataSnapshot,
       modelIdNormalizationPolicies,
       respond,
     });

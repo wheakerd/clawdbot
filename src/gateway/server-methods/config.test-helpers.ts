@@ -3,6 +3,7 @@
  */
 import { vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isRecord } from "../../utils.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -84,6 +85,13 @@ export function createConfigHandlerHarness(args?: {
     logGateway,
     disconnectClientsUsingSharedGatewayAuth,
   };
+}
+
+export function getConfigChangedPaths(harness: Pick<ConfigHandlerHarness, "respond">): string[] {
+  const payload = harness.respond.mock.calls[0]?.[1];
+  return isRecord(payload) && Array.isArray(payload.changedPaths)
+    ? payload.changedPaths.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 /** Allows fire-and-forget config handler microtasks to settle before assertions. */
