@@ -1,4 +1,5 @@
 import {
+  hasRuntimeContextMarker,
   isRuntimeContextMessage,
   runtimeContextContentToText,
   type Api,
@@ -375,7 +376,7 @@ function convertResponsesMessagesWithStyle(
   // Each carrier stays with its preceding user/checkpoint; moving it past an
   // appended steering user would rewrite the already admitted request prefix.
   const isCarrier = (message: (typeof replayMessages)[number]) =>
-    "role" in message && isRuntimeContextMessage(message);
+    "role" in message && hasRuntimeContextMarker(message);
   if (replayMessages.some(isCarrier)) {
     const anchored: typeof replayMessages = [];
     // A canonical window is already emitted above; its checkpoint anchors an otherwise userless tail.

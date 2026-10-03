@@ -1,10 +1,9 @@
 import {
   escapeRuntimeContextFooter,
-  isRuntimeContextMessage,
+  hasRuntimeContextMarker,
   labelRuntimeContextText,
   RUNTIME_CONTEXT_HEADER,
   type Context,
-  type RuntimeContextMessage,
 } from "../../../llm/types.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
@@ -194,13 +193,13 @@ export function prependRuntimeContextForModel(
   if (!runtimeContext.trim()) {
     return messages;
   }
-  const carrierIndex = messages.findIndex(isRuntimeContextMessage);
+  const carrierIndex = messages.findIndex(hasRuntimeContextMarker);
   const carrier = messages[carrierIndex];
   const prepend = (text: string) =>
     text.startsWith(`${RUNTIME_CONTEXT_HEADER}\n`)
       ? `${RUNTIME_CONTEXT_HEADER}\n${escapeRuntimeContextFooter(runtimeContext)}\n\n${text.slice(RUNTIME_CONTEXT_HEADER.length + 1)}`
       : labelRuntimeContextText([runtimeContext, text].filter(Boolean).join("\n\n"));
-  if (!carrier || !isRuntimeContextMessage(carrier)) {
+  if (!carrier || carrier.role !== "user" || !hasRuntimeContextMarker(carrier)) {
     return [
       ...messages,
       {
@@ -214,18 +213,19 @@ export function prependRuntimeContextForModel(
   const content = carrier.content;
   const firstTextIndex =
     typeof content === "string" ? -1 : content.findIndex((part) => part.type === "text");
-  const updated: RuntimeContextMessage = {
+  const updatedContent: typeof content =
+    typeof content === "string"
+      ? prepend(content)
+      : firstTextIndex < 0
+        ? [{ type: "text", text: prepend("") }, ...content]
+        : content.map((part, index) =>
+            index === firstTextIndex && part.type === "text"
+              ? Object.assign({}, part, { text: prepend(part.text) })
+              : part,
+          );
+  const updated = {
     ...carrier,
-    content:
-      typeof content === "string"
-        ? prepend(content)
-        : firstTextIndex < 0
-          ? [{ type: "text", text: prepend("") }, ...content]
-          : content.map((part, index) =>
-              index === firstTextIndex && part.type === "text"
-                ? Object.assign({}, part, { text: prepend(part.text) })
-                : part,
-            ),
+    content: updatedContent,
   };
   return messages.with(carrierIndex, updated);
 }

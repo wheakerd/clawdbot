@@ -203,4 +203,39 @@ describe("per-request runtime instructions", () => {
     expect(messages).toHaveLength(1);
     expect(prependRuntimeContextForModel(messages, "")).toBe(messages);
   });
+
+  it("prepends into a mixed-media shipped carrier without moving it", () => {
+    const carrier = {
+      role: "user" as const,
+      content: [
+        { type: "text" as const, text: "Existing facts" },
+        { type: "image" as const, mimeType: "image/png", data: "aW1n" },
+      ],
+      timestamp: 2,
+      runtimeContextCarrier: true as const,
+    };
+    const messages: Context["messages"] = [
+      { role: "user", content: "Question", timestamp: 1 },
+      carrier,
+      { role: "user", content: "Steering", timestamp: 3 },
+    ];
+
+    const projected = prependRuntimeContextForModel(messages, "Date B");
+
+    expect(projected).toEqual([
+      messages[0],
+      {
+        ...carrier,
+        content: [
+          {
+            type: "text",
+            text: "OpenClaw runtime context:\nDate B\n\nExisting facts\nEnd OpenClaw runtime context.",
+          },
+          carrier.content[1],
+        ],
+      },
+      messages[2],
+    ]);
+    expect(messages[1]).toBe(carrier);
+  });
 });
