@@ -32,7 +32,6 @@ import {
   cleanupOpenClawOwnedAcpxPendingLease,
   cleanupOpenClawOwnedAcpxProcessTree,
   reapStaleOpenClawOwnedAcpxOrphans,
-  type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 import type { CompleteAcpRuntime } from "./runtime-proxy.js";
 import { AcpxRuntime } from "./runtime.js";
@@ -75,7 +74,6 @@ type CreateAcpxRuntimeServiceParams = {
   getAllowedAgents?: () => readonly string[] | undefined;
   openKeyedStore?: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
-  processCleanupDeps?: AcpxProcessCleanupDeps;
 };
 
 function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
@@ -211,14 +209,9 @@ async function resolveGatewayInstanceId(
 async function reapOpenAcpxProcessLeases(params: {
   gatewayInstanceId: string;
   leaseStore: AcpxProcessLeaseStore;
-  deps?: AcpxProcessCleanupDeps;
   assertCurrent?: () => void;
 }): Promise<{ inspectedPids: number[]; terminatedPids: number[] }> {
-  const assertCurrent = () => {
-    params.assertCurrent?.();
-    params.deps?.assertCurrent?.();
-  };
-  const deps = { ...params.deps, assertCurrent };
+  const { assertCurrent } = params;
   const leases = await params.leaseStore.listOpen(params.gatewayInstanceId);
   const inspectedPids: number[] = [];
   const terminatedPids: number[] = [];
@@ -228,23 +221,23 @@ async function reapOpenAcpxProcessLeases(params: {
     if (pending) {
       legacyWrapperRoots.add(lease.wrapperRoot);
     }
-    assertCurrent();
+    assertCurrent?.();
     await params.leaseStore.markState(lease.leaseId, "closing");
-    assertCurrent();
+    assertCurrent?.();
     const result = pending
       ? await cleanupOpenClawOwnedAcpxPendingLease({
           leaseId: lease.leaseId,
           gatewayInstanceId: lease.gatewayInstanceId,
           wrapperRoot: lease.wrapperRoot,
           wrapperPath: lease.wrapperPath,
-          deps,
+          assertCurrent,
         })
       : await cleanupOpenClawOwnedAcpxProcessTree({
           rootPid: lease.rootPid,
           expectedLeaseId: lease.leaseId,
           expectedGatewayInstanceId: lease.gatewayInstanceId,
           wrapperRoot: lease.wrapperRoot,
-          deps,
+          assertCurrent,
         });
     inspectedPids.push(...result.inspectedPids);
     terminatedPids.push(...result.terminatedPids);
@@ -258,7 +251,7 @@ async function reapOpenAcpxProcessLeases(params: {
           result.skippedReason === "unverified-root" ||
           (lease.sessionKey === ACPX_PROBE_LEASE_SESSION_KEY &&
             result.skippedReason === "missing-root")));
-    assertCurrent();
+    assertCurrent?.();
     await params.leaseStore.markState(
       lease.leaseId,
       retryableEvidenceFailure ? "open" : result.terminatedPids.length > 0 ? "closed" : "lost",
@@ -268,10 +261,10 @@ async function reapOpenAcpxProcessLeases(params: {
   // proves this Gateway had an uncertain spawn. Keep aggregate results wholly
   // separate from the state transition of any specific lease.
   for (const wrapperRoot of legacyWrapperRoots) {
-    assertCurrent();
+    assertCurrent?.();
     const legacyResult = await reapStaleOpenClawOwnedAcpxOrphans({
       wrapperRoot,
-      deps,
+      assertCurrent,
     });
     inspectedPids.push(...legacyResult.inspectedPids);
     terminatedPids.push(...legacyResult.terminatedPids);
@@ -376,7 +369,6 @@ export function createAcpxRuntimeService(
         reapOpenAcpxProcessLeases({
           gatewayInstanceId,
           leaseStore: processLeaseStore,
-          deps: params.processCleanupDeps,
           assertCurrent,
         });
       if (params.startupPurpose !== "inspection") {

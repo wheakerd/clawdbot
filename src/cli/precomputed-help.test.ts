@@ -1,16 +1,21 @@
 // Precomputed help tests cover the strict argv shape required by help fast paths.
 import { describe, expect, it, vi } from "vitest";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
+import { runWithPrecomputedHelpMocks } from "./precomputed-help.test-helpers.js";
 
 describe("tryOutputPrecomputedCommandHelp", () => {
   it("renders only an unambiguous command help request", async () => {
     const outputBrowserHelp = vi.fn(() => true);
 
     await expect(
-      tryOutputPrecomputedCommandHelp(["node", "openclaw", "browser", "--help"], {
-        outputPrecomputedBrowserHelpText: outputBrowserHelp,
-        env: {},
-      }),
+      runWithPrecomputedHelpMocks(
+        tryOutputPrecomputedCommandHelp,
+        ["node", "openclaw", "browser", "--help"],
+        {
+          outputPrecomputedBrowserHelpText: outputBrowserHelp,
+          env: {},
+        },
+      ),
     ).resolves.toBe(true);
     expect(outputBrowserHelp).toHaveBeenCalledOnce();
   });
@@ -21,10 +26,14 @@ describe("tryOutputPrecomputedCommandHelp", () => {
       const outputSubcommandHelp = vi.fn(() => true);
 
       await expect(
-        tryOutputPrecomputedCommandHelp(["node", "openclaw", ...args], {
-          outputPrecomputedSubcommandHelpText: outputSubcommandHelp,
-          env: {},
-        }),
+        runWithPrecomputedHelpMocks(
+          tryOutputPrecomputedCommandHelp,
+          ["node", "openclaw", ...args],
+          {
+            outputPrecomputedSubcommandHelpText: outputSubcommandHelp,
+            env: {},
+          },
+        ),
       ).resolves.toBe(false);
       expect(outputSubcommandHelp).not.toHaveBeenCalled();
     },
@@ -34,10 +43,14 @@ describe("tryOutputPrecomputedCommandHelp", () => {
     const outputBrowserHelp = vi.fn(() => true);
 
     await expect(
-      tryOutputPrecomputedCommandHelp(["node", "openclaw", "browser", "--target", "--help"], {
-        outputPrecomputedBrowserHelpText: outputBrowserHelp,
-        env: {},
-      }),
+      runWithPrecomputedHelpMocks(
+        tryOutputPrecomputedCommandHelp,
+        ["node", "openclaw", "browser", "--target", "--help"],
+        {
+          outputPrecomputedBrowserHelpText: outputBrowserHelp,
+          env: {},
+        },
+      ),
     ).resolves.toBe(false);
     expect(outputBrowserHelp).not.toHaveBeenCalled();
   });
@@ -46,7 +59,8 @@ describe("tryOutputPrecomputedCommandHelp", () => {
     const outputSecretsHelp = vi.fn(() => true);
 
     await expect(
-      tryOutputPrecomputedCommandHelp(
+      runWithPrecomputedHelpMocks(
+        tryOutputPrecomputedCommandHelp,
         ["node", "openclaw", "secrets", "apply", "--from", "--help"],
         {
           outputPrecomputedSecretsHelpText: outputSecretsHelp,
@@ -60,7 +74,8 @@ describe("tryOutputPrecomputedCommandHelp", () => {
   it("renders catalog command help after root selectors", async () => {
     const output = vi.fn(() => true);
     await expect(
-      tryOutputPrecomputedCommandHelp(
+      runWithPrecomputedHelpMocks(
+        tryOutputPrecomputedCommandHelp,
         ["node", "openclaw", "--profile", "work", "gateway", "--help"],
         { outputPrecomputedSubcommandHelpText: output, env: {} },
       ),
@@ -76,7 +91,7 @@ describe("tryOutputPrecomputedCommandHelp", () => {
   ])("defers ambiguous catalog help %j to Commander", async (args) => {
     const output = vi.fn(() => true);
     await expect(
-      tryOutputPrecomputedCommandHelp(["node", "openclaw", ...args], {
+      runWithPrecomputedHelpMocks(tryOutputPrecomputedCommandHelp, ["node", "openclaw", ...args], {
         outputPrecomputedSubcommandHelpText: output,
         env: {},
       }),
