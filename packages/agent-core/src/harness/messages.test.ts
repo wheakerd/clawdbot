@@ -142,6 +142,29 @@ describe("convertToLlm message ownership", () => {
     );
   });
 
+  it("preserves mixed-media shipped carrier blocks without claiming canonical text context", () => {
+    const content = [
+      { type: "text" as const, text: "legacy runtime facts" },
+      { type: "image" as const, data: "AA==", mimeType: "image/png" },
+    ];
+    const carrier = createCustomMessage(
+      "openclaw.runtime-context",
+      content,
+      false,
+      { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+      "2026-05-30T09:00:00.000Z",
+    );
+
+    expect(convertToLlm([carrier])).toEqual([
+      {
+        role: "user",
+        content,
+        timestamp: Date.parse("2026-05-30T09:00:00.000Z"),
+        runtimeContextCarrier: true,
+      },
+    ]);
+  });
+
   it("skips array holes and does not visit messages appended during conversion", () => {
     const messages: AgentMessage[] = [];
     messages.length = 3;

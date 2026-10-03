@@ -447,6 +447,18 @@ export type RuntimeContextMessage = Omit<UserMessage, "content"> & {
     | { runtimeContextCarrier: true }
   );
 
+/** Identifies trusted runtime context independently of its provider-compatible shape. */
+export function hasRuntimeContextMarker(message: {
+  role: string;
+  runtimeContext?: unknown;
+  runtimeContextCarrier?: unknown;
+}): boolean {
+  return (
+    message.role === "user" &&
+    (message.runtimeContext !== undefined || message.runtimeContextCarrier === true)
+  );
+}
+
 /** Distinguishes trusted runtime context while preserving user-role plugin compatibility. */
 export function isRuntimeContextMessage(message: {
   role: string;
@@ -466,11 +478,7 @@ export function isRuntimeContextMessage(message: {
           "text" in part &&
           typeof part.text === "string",
       ));
-  return (
-    message.role === "user" &&
-    textOnlyContent &&
-    (message.runtimeContext !== undefined || message.runtimeContextCarrier === true)
-  );
+  return textOnlyContent && hasRuntimeContextMarker(message);
 }
 
 /** Reads canonical metadata while accepting the shipped v2026.9.7 carrier fields. */

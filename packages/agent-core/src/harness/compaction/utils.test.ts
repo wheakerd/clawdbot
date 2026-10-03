@@ -192,7 +192,10 @@ describe("getCompactionContent", () => {
 });
 
 describe("serializeConversation", () => {
-  it("excludes mixed-media shipped runtime carriers from summaries", () => {
+  it.each([
+    { name: "canonical", marker: { runtimeContext: {} } },
+    { name: "shipped", marker: { runtimeContextCarrier: true } },
+  ])("excludes mixed-media $name runtime carriers from summaries", ({ marker }) => {
     const serialized = serializeConversation([
       {
         role: "user",
@@ -201,7 +204,7 @@ describe("serializeConversation", () => {
           { type: "image", data: "AA==", mimeType: "image/png" },
         ],
         timestamp: 1,
-        runtimeContextCarrier: true,
+        ...marker,
       },
       { role: "user", content: "visible user text", timestamp: 2 },
     ]);

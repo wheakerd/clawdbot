@@ -5,6 +5,7 @@ import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-pr
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionWriteSettlementRunner } from "../agents/sessions/agent-session.js";
 import {
+  hasRuntimeContextMarker,
   isRuntimeContextMessage,
   readRuntimeContextMetadata,
   type Context,
@@ -25,11 +26,7 @@ import {
 function toWorkerInferenceMessage(
   message: Message,
 ): WorkerMessageProjection<WorkerInferenceContext["messages"][number]> {
-  if (
-    message.role === "user" &&
-    message.runtimeContextCarrier === true &&
-    !isRuntimeContextMessage(message)
-  ) {
+  if (hasRuntimeContextMarker(message) && !isRuntimeContextMessage(message)) {
     throw new Error(
       "Cloud worker cannot preserve runtime context with media. Stop or reclaim the cloud worker, then retry locally.",
     );

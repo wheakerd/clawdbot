@@ -46,25 +46,31 @@ it("round-trips runtime context metadata through worker inference", () => {
   expect(toWorkerInferenceContext(context)).toEqual({ kind: "complete", context });
 });
 
-it("rejects mixed-media shipped runtime context instead of projecting it as user input", () => {
-  const context: Context = {
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "private legacy runtime context" },
-          { type: "image", data: "AA==", mimeType: "image/png" },
-        ],
-        timestamp: 1,
-        runtimeContextCarrier: true,
-      },
-    ],
-  };
+it.each([
+  { name: "canonical", marker: { runtimeContext: {} } },
+  { name: "shipped", marker: { runtimeContextCarrier: true } },
+])(
+  "rejects mixed-media $name runtime context instead of projecting it as user input",
+  ({ marker }) => {
+    const context: Context = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "private legacy runtime context" },
+            { type: "image", data: "AA==", mimeType: "image/png" },
+          ],
+          timestamp: 1,
+          ...marker,
+        },
+      ],
+    };
 
-  expect(() => toWorkerInferenceContext(context)).toThrow(
-    "Cloud worker cannot preserve runtime context with media. Stop or reclaim the cloud worker, then retry locally.",
-  );
-});
+    expect(() => toWorkerInferenceContext(context)).toThrow(
+      "Cloud worker cannot preserve runtime context with media. Stop or reclaim the cloud worker, then retry locally.",
+    );
+  },
+);
 
 function assistantWithReplay(
   replay: AssistantMessage["providerReplay"] = structuredClone(providerReplay),

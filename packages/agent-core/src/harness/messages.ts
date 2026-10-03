@@ -181,6 +181,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         ? normalizeCompactionSummaryTimestamp(message.timestamp)
         : message.timestamp;
     if (isRuntimeContextCarrier(message)) {
+      if (content.some((block) => block.type === "image")) {
+        llmMessages.push({
+          role: "user",
+          content,
+          timestamp,
+          runtimeContextCarrier: true,
+        });
+        return;
+      }
       // Prefix-bound providers may have signed this exact v2026.9.7 projection.
       // Keep its historical bytes while attaching the canonical semantic marker.
       const legacyContent =
