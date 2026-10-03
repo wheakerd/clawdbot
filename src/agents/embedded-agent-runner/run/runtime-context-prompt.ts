@@ -101,6 +101,11 @@ export function attachSteeringRuntimeContext(
   }
   // The enumerable symbol survives in-memory message copies but never enters
   // transcript JSON or provider payloads. Queue cancellation stays atomic.
+  Object.defineProperty(runtimeContext, STEERING_RUNTIME_CONTEXT, {
+    configurable: true,
+    enumerable: true,
+    value: runtimeContext,
+  });
   Object.defineProperty(message, STEERING_RUNTIME_CONTEXT, {
     configurable: true,
     enumerable: true,

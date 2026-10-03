@@ -401,6 +401,17 @@ function isRetainedRuntimeContextMessage(message: unknown): boolean {
   );
 }
 
+function steeringRuntimeContextToken(message: unknown): unknown {
+  return typeof message === "object" && message !== null
+    ? Reflect.get(message, STEERING_RUNTIME_CONTEXT)
+    : undefined;
+}
+
+function isSteeringRuntimeContextPair(messages: readonly unknown[], carrierIndex: number): boolean {
+  const token = steeringRuntimeContextToken(messages[carrierIndex]);
+  return token !== undefined && token === steeringRuntimeContextToken(messages[carrierIndex + 1]);
+}
+
 /** Steering extends this prompt; it does not retire its original user's context. */
 export function resolveRuntimeContextPromptOwner(messages: readonly unknown[]) {
   const carrierIndex = messages.findIndex(isRetainedRuntimeContextMessage);
@@ -446,14 +457,10 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
     if (!isOpenClawRuntimeContextCustomMessage(message)) {
       return true;
     }
-    const owningUser = messages[index + 1];
     // An all-mode drain can admit several carrier/user pairs in one request.
     // A settled answer retires earlier pairs; tool loops remain the same turn.
     const isAdmittedSteeringContext =
-      index + 1 > lastSettledAssistantIndex &&
-      typeof owningUser === "object" &&
-      owningUser !== null &&
-      Reflect.get(owningUser, STEERING_RUNTIME_CONTEXT) === message;
+      index + 1 > lastSettledAssistantIndex && isSteeringRuntimeContextPair(messages, index);
     return (
       isAdmittedSteeringContext ||
       (index >= currentRuntimeContextStart && index < lastUserIndex) ||
@@ -469,26 +476,61 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
  * Runs after historical context stripping; already-placed carriers stay put.
  */
 export function relocateCurrentRuntimeContextCarrierToTail<T>(messages: T[]): T[] {
-  const carrierIndex = messages.findIndex(isOpenClawRuntimeContextCustomMessage);
-  const userIndex = messages.findIndex(
-    (message, index) => index > carrierIndex && isUserMessage(message),
+  const lastUserIndex = messages.findLastIndex(isUserMessage);
+  const promptCarrierIndex = messages.findIndex(
+    (message, index) =>
+      isOpenClawRuntimeContextCustomMessage(message) &&
+      !isSteeringRuntimeContextPair(messages, index) &&
+      index < lastUserIndex,
   );
-  if (carrierIndex < 0 || userIndex < 0) {
+  const promptUserIndex = messages.findIndex(
+    (message, index) => index > promptCarrierIndex && isUserMessage(message),
+  );
+  const promptBoundaryIndex = messages.findIndex(
+    (message, index) => index > promptUserIndex && isUserMessage(message),
+  );
+  if (
+    promptCarrierIndex < 0 &&
+    !messages.some((_message, index) => isSteeringRuntimeContextPair(messages, index))
+  ) {
     return messages;
   }
-  const nextUserIndex = messages.findIndex(
-    (message, index) => index > userIndex && isUserMessage(message),
-  );
-  const boundary = nextUserIndex < 0 ? messages.length : nextUserIndex;
-  const prefix = messages
-    .slice(0, boundary)
-    .filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
-  const carriers = messages.filter(isOpenClawRuntimeContextCustomMessage);
-  return [
-    ...prefix,
-    ...carriers,
-    ...messages
-      .slice(boundary)
-      .filter((message) => !isOpenClawRuntimeContextCustomMessage(message)),
-  ];
+
+  const relocated: T[] = [];
+  const promptCarriers: T[] = [];
+  let promptInsertionIndex = -1;
+  let skipPairedUser = false;
+  for (const [index, message] of messages.entries()) {
+    if (skipPairedUser) {
+      skipPairedUser = false;
+      continue;
+    }
+    if (!isOpenClawRuntimeContextCustomMessage(message)) {
+      if (index === promptBoundaryIndex) {
+        promptInsertionIndex = relocated.length;
+      }
+      relocated.push(message);
+      continue;
+    }
+    if (!isSteeringRuntimeContextPair(messages, index)) {
+      if (index < lastUserIndex) {
+        promptCarriers.push(message);
+      } else {
+        relocated.push(message);
+      }
+      continue;
+    }
+
+    if (index + 1 === promptBoundaryIndex) {
+      promptInsertionIndex = relocated.length;
+    }
+    // Responses anchors a carrier to the preceding user. Preserve each
+    // steering pair instead of coalescing later carriers onto the first user.
+    relocated.push(...messages.slice(index, index + 2).toReversed());
+    skipPairedUser = true;
+  }
+
+  const insertionIndex = promptInsertionIndex < 0 ? relocated.length : promptInsertionIndex;
+  relocated.splice(insertionIndex, 0, ...promptCarriers);
+  return relocated;
 }
