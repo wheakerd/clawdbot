@@ -74,7 +74,6 @@ export function useSubagentRestartRecoveryFixture() {
   };
   const activateGatewayRuntime = async () => {
     const gatewayContext = {
-      chatAbortControllers: new Map(),
       recoveryRuntime: gatewayRuntime,
       chatAbortControllers: new Map(),
       resolveGatewayContext: () => gatewayContext as never,
