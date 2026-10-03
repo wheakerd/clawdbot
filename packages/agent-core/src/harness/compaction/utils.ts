@@ -306,7 +306,10 @@ export function serializeConversation(messages: Message[]): string {
   for (const msg of messages) {
     // Carriers remain in replay for thinking-prefix binding, not in summaries
     // where runtime-only context could become durable assistant-authored text.
-    if (isRuntimeContextMessage(msg)) {
+    if (
+      isRuntimeContextMessage(msg) ||
+      (msg.role === "user" && msg.runtimeContextCarrier === true)
+    ) {
       continue;
     }
     if (msg.role === "user" || msg.role === "toolResult") {

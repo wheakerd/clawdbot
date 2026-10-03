@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import type { UserMessage } from "../../../llm/types.js";
 import {
@@ -26,6 +27,7 @@ import {
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("structured prompt media replay", () => {
   it("keeps per-slot provenance when the same image object is reused", () => {
@@ -39,7 +41,7 @@ describe("structured prompt media replay", () => {
   });
 
   it("retains the runtime fact carrier when queued hydration fails", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-failure-"));
+    const workspaceDir = tempDirs.make("openclaw-runtime-failure-");
     const media = [{ path: path.join(workspaceDir, "missing.png"), contentType: "image/png" }];
     const message = attachRuntimePromptMediaFacts(
       { role: "user" as const, content: "missing attachment" },
@@ -62,7 +64,7 @@ describe("structured prompt media replay", () => {
   });
 
   it("preserves shipped carrier metadata through provider media materialization", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-carrier-"));
+    const workspaceDir = tempDirs.make("openclaw-legacy-carrier-");
     const imagePath = path.join(workspaceDir, "attachment.png");
     await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 }));
     const message: UserMessage = attachRuntimePromptMediaFacts(

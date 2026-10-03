@@ -25,6 +25,15 @@ import {
 function toWorkerInferenceMessage(
   message: Message,
 ): WorkerMessageProjection<WorkerInferenceContext["messages"][number]> {
+  if (
+    message.role === "user" &&
+    message.runtimeContextCarrier === true &&
+    !isRuntimeContextMessage(message)
+  ) {
+    throw new Error(
+      "Cloud worker cannot preserve runtime context with media. Stop or reclaim the cloud worker, then retry locally.",
+    );
+  }
   if (isRuntimeContextMessage(message)) {
     return {
       kind: "complete",

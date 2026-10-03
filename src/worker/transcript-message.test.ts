@@ -46,6 +46,26 @@ it("round-trips runtime context metadata through worker inference", () => {
   expect(toWorkerInferenceContext(context)).toEqual({ kind: "complete", context });
 });
 
+it("rejects mixed-media shipped runtime context instead of projecting it as user input", () => {
+  const context: Context = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "private legacy runtime context" },
+          { type: "image", data: "AA==", mimeType: "image/png" },
+        ],
+        timestamp: 1,
+        runtimeContextCarrier: true,
+      },
+    ],
+  };
+
+  expect(() => toWorkerInferenceContext(context)).toThrow(
+    "Cloud worker cannot preserve runtime context with media. Stop or reclaim the cloud worker, then retry locally.",
+  );
+});
+
 function assistantWithReplay(
   replay: AssistantMessage["providerReplay"] = structuredClone(providerReplay),
 ): AssistantMessage {

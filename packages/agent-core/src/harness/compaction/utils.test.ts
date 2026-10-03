@@ -192,6 +192,23 @@ describe("getCompactionContent", () => {
 });
 
 describe("serializeConversation", () => {
+  it("excludes mixed-media shipped runtime carriers from summaries", () => {
+    const serialized = serializeConversation([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "private legacy runtime context" },
+          { type: "image", data: "AA==", mimeType: "image/png" },
+        ],
+        timestamp: 1,
+        runtimeContextCarrier: true,
+      },
+      { role: "user", content: "visible user text", timestamp: 2 },
+    ]);
+
+    expect(serialized).toBe("[User]: visible user text");
+  });
+
   it("sends independent tool-result blocks to the summarizer with their boundaries intact", async () => {
     const model: Model = {
       id: "summary-model",
