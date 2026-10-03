@@ -32,7 +32,7 @@ import {
   clampReasoning,
   createHttpProxyAgentsForTarget,
   createToolArgumentPreviewSchedule,
-  isRuntimeContextMessage,
+  hasRuntimeContextMarker,
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
@@ -929,7 +929,7 @@ function convertMessages(
           continue;
         }
         const volatileRuntimeContext =
-          isRuntimeContextMessage(m) && !bindsClaudeThinkingPrefix(model);
+          hasRuntimeContextMarker(m) && !bindsClaudeThinkingPrefix(model);
         if (volatileRuntimeContext && firstVolatileMessageIndex === undefined) {
           firstVolatileMessageIndex = result.length;
         }

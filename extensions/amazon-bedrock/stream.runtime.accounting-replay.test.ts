@@ -543,6 +543,34 @@ describe("Bedrock prompt cache ownership", () => {
     },
   );
 
+  it("does not cache a later stable turn after a mixed-media shipped carrier", async () => {
+    const messages = await captureMessages(
+      bedrockModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "OpenClaw runtime context:\nvolatile current-turn metadata" },
+              { type: "image", mimeType: "image/png", data: "AA==" },
+            ],
+            timestamp: 0,
+            runtimeContextCarrier: true,
+          },
+          { role: "user", content: "later stable operator request", timestamp: 1 },
+        ],
+      } as never,
+      { cacheRetention: "long" },
+    );
+
+    expect(messages).toHaveLength(2);
+    for (const message of messages) {
+      for (const block of message.content ?? []) {
+        expect(block).not.toHaveProperty("cachePoint");
+      }
+    }
+  });
+
   it("does not cache a later stable turn when volatile context starts the prefix", async () => {
     const messages = await captureMessages(
       model(),

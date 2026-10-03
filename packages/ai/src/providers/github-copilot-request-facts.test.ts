@@ -33,11 +33,14 @@ describe("Copilot request facts", () => {
     });
   });
 
-  it("keeps runtime context transparent to request initiator ownership", () => {
+  it.each([
+    { name: "canonical", marker: { runtimeContext: {} } },
+    { name: "shipped", marker: { runtimeContextCarrier: true } },
+  ])("keeps $name runtime context transparent to request initiator ownership", ({ marker }) => {
     const runtimeContext = {
       role: "user",
       content: "OpenClaw runtime context:\ncurrent runtime facts",
-      runtimeContext: {},
+      ...marker,
     };
     expect(
       projectCopilotRequestFacts([{ role: "user", content: "question" }, runtimeContext], "nested")

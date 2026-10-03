@@ -32,7 +32,11 @@ export {
 } from "@openclaw/ai/internal/shared";
 export { transformMessages } from "@openclaw/ai/internal/shared";
 export { complete, completeSimple, stream, streamSimple } from "../llm/stream.js";
-export { isRuntimeContextMessage, runtimeContextContentToText } from "../llm/types.js";
+export {
+  hasRuntimeContextMarker,
+  isRuntimeContextMessage,
+  runtimeContextContentToText,
+} from "../llm/types.js";
 export type {
   Api,
   AssistantMessage,
