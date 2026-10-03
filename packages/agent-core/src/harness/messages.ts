@@ -127,8 +127,9 @@ export function isRuntimeContextCarrier(message: AgentMessage): message is Custo
   return (
     message.role === "custom" &&
     ((message.customType === RUNTIME_CONTEXT_CUSTOM_TYPE &&
-      details?.source === "openclaw-runtime-context" &&
-      details.runtimeContextCarrier !== false) ||
+      ((details?.source === "openclaw-runtime-context" &&
+        details.runtimeContextCarrier !== false) ||
+        (details?.source === undefined && details?.runtimeContextCarrier === true))) ||
       getOpenClawSystemUpdateKind(message) === "runtime-context")
   );
 }

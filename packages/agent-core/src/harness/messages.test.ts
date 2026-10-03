@@ -142,6 +142,26 @@ describe("convertToLlm message ownership", () => {
     );
   });
 
+  it("recognizes the shipped marker-only persisted carrier shape", () => {
+    const carrier = createCustomMessage(
+      "openclaw.runtime-context",
+      "legacy runtime facts",
+      false,
+      { runtimeContextCarrier: true },
+      "2026-05-30T09:00:00.000Z",
+    );
+
+    expect(convertToLlm([carrier])).toEqual([
+      {
+        role: "user",
+        content: "OpenClaw runtime context:\nlegacy runtime facts\nEnd OpenClaw runtime context.",
+        timestamp: Date.parse("2026-05-30T09:00:00.000Z"),
+        runtimeContext: {},
+        runtimeContextCarrier: true,
+      },
+    ]);
+  });
+
   it("preserves mixed-media shipped carrier blocks without claiming canonical text context", () => {
     const content = [
       { type: "text" as const, text: "legacy runtime facts" },
