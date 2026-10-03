@@ -46,7 +46,7 @@ it.each([true, false])(
         storePath,
         sessionKey: "agent:main:main",
         entry: { sessionId: "session-1", updatedAt: 1, label: "Existing title" },
-        readTranscriptEvents: (append) => events.forEach(append),
+        readTranscriptEvents: (append) => events.forEach((event) => append(event)),
       });
       fs.writeFileSync(storePath, "{}");
       const target = {

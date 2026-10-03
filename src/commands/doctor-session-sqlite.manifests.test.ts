@@ -75,7 +75,8 @@ describe("runDoctorSessionSqlite", () => {
           sessionKey: "agent:main:main",
           storePath: store.storePath,
           entry: { sessionId, updatedAt: 2000 },
-          readTranscriptEvents: (append) => events.slice(0, eventCount).forEach(append),
+          readTranscriptEvents: (append) =>
+            events.slice(0, eventCount).forEach((event) => append(event)),
         });
       }
       if (missingSource) {

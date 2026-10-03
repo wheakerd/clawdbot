@@ -320,7 +320,7 @@ it("keeps legacy Codex assistant rows that precede later transcript rows during 
       await importSqliteSessionRows({
         ...params,
         repairLegacyTranscript: true,
-        readTranscriptEvents: (append) => events.forEach(append),
+        readTranscriptEvents: (append) => events.forEach((event) => append(event)),
       }),
     ).toMatchObject({ transcriptEvents: events.length });
 

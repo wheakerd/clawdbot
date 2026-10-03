@@ -241,7 +241,8 @@ describe("runDoctorSessionSqlite", () => {
         sessionKey: "agent:main:main",
         storePath: store.storePath,
         entry: { sessionId: "session-1", updatedAt: 1000 },
-        readTranscriptEvents: (append) => sourceEvents.slice(0, 3).forEach(append),
+        readTranscriptEvents: (append) =>
+          sourceEvents.slice(0, 3).forEach((event) => append(event)),
       });
 
       const run = () => importLegacyStore(store);
