@@ -34,6 +34,7 @@ export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
 export const RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
 export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = RUNTIME_CONTEXT_CUSTOM_TYPE;
+export const STEERING_RUNTIME_CONTEXT = Symbol.for("openclaw.steeringRuntimeContext");
 
 /** Provenance assigned by the context producer, never inferred from its text. */
 export type RuntimeContextFragment = {
@@ -430,11 +431,31 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
   ) {
     currentRuntimeContextStart -= 1;
   }
+  const lastSettledAssistantIndex = messages.findLastIndex((message) => {
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      Reflect.get(message, "role") !== "assistant"
+    ) {
+      return false;
+    }
+    const stopReason = Reflect.get(message, "stopReason");
+    return stopReason === "stop" || stopReason === "length";
+  });
   return messages.filter((message, index) => {
     if (!isOpenClawRuntimeContextCustomMessage(message)) {
       return true;
     }
+    const owningUser = messages[index + 1];
+    // An all-mode drain can admit several carrier/user pairs in one request.
+    // A settled answer retires earlier pairs; tool loops remain the same turn.
+    const isAdmittedSteeringContext =
+      index + 1 > lastSettledAssistantIndex &&
+      typeof owningUser === "object" &&
+      owningUser !== null &&
+      Reflect.get(owningUser, STEERING_RUNTIME_CONTEXT) === message;
     return (
+      isAdmittedSteeringContext ||
       (index >= currentRuntimeContextStart && index < lastUserIndex) ||
       isRetainedRuntimeContextMessage(message)
     );

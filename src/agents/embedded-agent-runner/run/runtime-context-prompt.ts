@@ -7,6 +7,7 @@ import {
 } from "../../../llm/types.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  STEERING_RUNTIME_CONTEXT,
   SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
   RUNTIME_EVENT_USER_PROMPT,
   projectRuntimeContextFragments,
@@ -15,7 +16,16 @@ import {
 } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 
-const STEERING_RUNTIME_CONTEXT = Symbol.for("openclaw.steeringRuntimeContext");
+const RETAIN_STEERING_RUNTIME_CONTEXT = Symbol.for("openclaw.retainSteeringRuntimeContext");
+
+/** Configure transcript retention for steering-owned runtime context. */
+export function setSteeringRuntimeContextRetention(session: object, retain: boolean): void {
+  Reflect.set(session, RETAIN_STEERING_RUNTIME_CONTEXT, retain);
+}
+
+export function shouldRetainSteeringRuntimeContext(session: object): boolean {
+  return Reflect.get(session, RETAIN_STEERING_RUNTIME_CONTEXT) === true;
+}
 
 /** Hidden custom transcript message that carries runtime context into model conversion. */
 export type RuntimeContextCustomMessage = {
@@ -112,6 +122,13 @@ export function materializeSteeringRuntimeContext(messages: AgentMessage[]): Age
     projected.push(message);
   }
   return projected;
+}
+
+/** Returns the carrier bound to this queued user turn. */
+export function getSteeringRuntimeContext(
+  message: AgentMessage,
+): RuntimeContextCustomMessage | undefined {
+  return Reflect.get(message, STEERING_RUNTIME_CONTEXT);
 }
 
 /** Selects explicit producer context without interpreting any prompt text as provenance. */

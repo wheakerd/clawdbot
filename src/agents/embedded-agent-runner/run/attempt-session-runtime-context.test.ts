@@ -9,7 +9,10 @@ import type { AgentSession } from "../../sessions/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
-import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+import {
+  buildRuntimeContextCustomMessage,
+  shouldRetainSteeringRuntimeContext,
+} from "./runtime-context-prompt.js";
 
 function createSessionManager(version: 3 | 4) {
   return {
@@ -62,6 +65,7 @@ describe("runtime-context session compatibility", () => {
       sessionManager: createSessionManager(4),
       setActiveSessionSystemPrompt: vi.fn(),
     });
+    expect(shouldRetainSteeringRuntimeContext(activeSession)).toBe(true);
 
     const converted = await activeSession.agent.convertToLlm([
       { role: "user", content: "Original question", timestamp: 1 },

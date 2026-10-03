@@ -16,7 +16,10 @@ import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/at
 import { installAttemptPermissionPrompt } from "../embedded-agent-runner/run/attempt-permission-prompt.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import { createUserTranscriptContextRegistry } from "../embedded-agent-runner/run/attempt-user-transcript-context-registry.js";
-import { buildSystemUpdateMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import {
+  buildSystemUpdateMessage,
+  setSteeringRuntimeContextRetention,
+} from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -28,6 +31,7 @@ import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
+  testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { agentSessionQueuePromptContext } from "./agent-session-prompting.js";
@@ -217,6 +221,149 @@ describe("AgentSession operator context ordering", () => {
 });
 
 describe("AgentSession quoted steering context", () => {
+  it("keeps every context when all steering messages drain together", async () => {
+    const requests: Context[] = [];
+    const firstRequest = createDeferredCore();
+    let finishInitialResponse = () => {};
+    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+      requests.push(context);
+      if (requests.length === 1) {
+        const stream = createAssistantMessageEventStream();
+        finishInitialResponse = () => {
+          const message = createAssistant(model, [{ type: "text", text: "Initial answer" }]);
+          stream.push({ type: "done", reason: "stop", message });
+          stream.end();
+        };
+        firstRequest.resolve();
+        return stream;
+      }
+      return createAssistantResultStream(
+        createAssistant(model, [{ type: "text", text: "Steering received" }]),
+      );
+    });
+    const { session } = await createTestSession();
+    session.agent.steeringMode = "all";
+    const convertToLlm = session.agent.convertToLlm.bind(session.agent);
+    session.agent.convertToLlm = (messages) =>
+      convertToLlm(normalizeMessagesForLlmBoundary(messages, { sessionVersion: 4 }));
+    const initialPrompt = session.prompt("An unrelated discussion is active.");
+    const deliveries: Array<ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait>> = [];
+
+    try {
+      await Promise.race([firstRequest.promise, initialPrompt]);
+      for (const subject of ["invitation", "poster"]) {
+        const accepted = createDeferredCore<boolean>();
+        const contextText = `Replied message (untrusted, for context): ${subject}`;
+        deliveries.push(
+          steerActiveSessionWithOptionalDeliveryWait(session, "Use the same color.", {
+            isInboundUserMessage: true,
+            onQueueAccepted: accepted.resolve,
+            currentInboundContext: {
+              text: contextText,
+              fragments: [{ kind: "conversation-data", text: contextText }],
+            },
+          }),
+        );
+        expect(await accepted.promise).toBe(true);
+      }
+      finishInitialResponse();
+      await Promise.all([initialPrompt, ...deliveries]);
+
+      expect(requests).toHaveLength(2);
+      const steeringRequest = JSON.stringify(requests[1]?.messages);
+      expect(steeringRequest).toContain("invitation");
+      expect(steeringRequest).toContain("poster");
+    } finally {
+      finishInitialResponse();
+      await Promise.allSettled([initialPrompt, ...deliveries]);
+    }
+  });
+
+  it("persists retained steering context through session reopen", async () => {
+    const claudeModel = {
+      ...testModel,
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      api: "anthropic-messages",
+      provider: "anthropic",
+    } satisfies Model;
+    const requests: Context[] = [];
+    const firstRequest = createDeferredCore();
+    let finishInitialResponse = () => {};
+    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+      requests.push(context);
+      if (requests.length === 1) {
+        const stream = createAssistantMessageEventStream();
+        finishInitialResponse = () => {
+          const message = createAssistant(model, [
+            { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
+            { type: "text", text: "Initial answer" },
+          ]);
+          stream.push({ type: "done", reason: "stop", message });
+          stream.end();
+        };
+        firstRequest.resolve();
+        return stream;
+      }
+      return createAssistantResultStream(
+        createAssistant(model, [
+          { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
+          { type: "text", text: "Done" },
+        ]),
+      );
+    });
+    const { session, sessionManager } = await createTestSession({ model: claudeModel });
+    setSteeringRuntimeContextRetention(session, true);
+    const installBoundary = (target: typeof session) => {
+      const convertToLlm = target.agent.convertToLlm.bind(target.agent);
+      target.agent.convertToLlm = (messages) =>
+        convertToLlm(
+          normalizeMessagesForLlmBoundary(messages, {
+            appendOnlyRuntimeContext: true,
+            sessionVersion: 4,
+          }),
+        );
+    };
+    installBoundary(session);
+    const initialPrompt = session.prompt("An unrelated discussion is active.");
+    let delivery: ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait> | undefined;
+
+    try {
+      await Promise.race([firstRequest.promise, initialPrompt]);
+      const accepted = createDeferredCore<boolean>();
+      const contextText = "Replied message (untrusted, for context): keep violet";
+      delivery = steerActiveSessionWithOptionalDeliveryWait(session, "Use the same color.", {
+        isInboundUserMessage: true,
+        onQueueAccepted: accepted.resolve,
+        currentInboundContext: {
+          text: contextText,
+          fragments: [{ kind: "conversation-data", text: contextText }],
+        },
+      });
+      expect(await accepted.promise).toBe(true);
+      finishInitialResponse();
+      await Promise.all([initialPrompt, delivery]);
+    } finally {
+      finishInitialResponse();
+      await Promise.allSettled([initialPrompt, delivery]);
+    }
+
+    session.dispose();
+    const replayRequests: Context[] = [];
+    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+      replayRequests.push(context);
+      return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done" }]));
+    });
+    const { session: reopened } = await createTestSession({ model: claudeModel, sessionManager });
+    installBoundary(reopened);
+    await reopened.prompt("Continue");
+
+    const replay = JSON.stringify(replayRequests[0]?.messages);
+    expect(replay).toContain("keep violet");
+    expect(replay).toContain("signature");
+    expect(replay.indexOf("keep violet")).toBeLessThan(replay.lastIndexOf("signature"));
+  });
+
   it.each(
     [3, 4].flatMap((sessionVersion) =>
       ["text", "inline", "offloaded"].map((mediaKind) => ({ sessionVersion, mediaKind })),
