@@ -1,5 +1,9 @@
+import { createHash, randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { scanDoctorSessionEntriesTolerant } from "../config/sessions/session-accessor.js";
+import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
   hasLegacySessionEntryState,
   hasLegacySessionProviderState,
@@ -9,10 +13,17 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+  sqliteStringSet,
+} from "../infra/kysely-sync.js";
+import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -23,6 +34,7 @@ import {
   DoctorStateMigrationRefusalError,
 } from "../infra/state-migrations.messages.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../state/openclaw-agent-db-migration-required.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
@@ -203,6 +215,99 @@ export function repairCanonicalSessionEntries(
   };
 }
 
+/** Bind both compaction repair paths to the raw bytes their backup must preserve. */
+export function readSessionCompactionRepairPreimage(
+  database: DatabaseSync,
+  sessionKeys: readonly string[],
+  sessionIds: readonly string[],
+): { fingerprint: string; entries: ReadonlyMap<string, string> } {
+  return runSqliteDeferredTransactionSync(
+    database,
+    () => {
+      const db = getSessionKysely(database);
+      const digest = createHash("sha256");
+      const hashRows = <Row extends object>(table: string, rows: Iterable<Row>) => {
+        digest.update(table).update("\0");
+        for (const row of rows) {
+          for (const [field, value] of Object.entries(row)) {
+            digest.update(field).update("\0");
+            if (value instanceof Uint8Array) {
+              digest.update(`blob:${value.byteLength}:`).update(value);
+            } else {
+              const serialized = JSON.stringify(value);
+              if (serialized === undefined) {
+                throw new Error("Session repair preimage contains an undefined SQLite value");
+              }
+              digest.update(serialized);
+            }
+            digest.update("\0");
+          }
+        }
+      };
+      const nodes = executeSqliteQuerySync(
+        database,
+        db
+          .selectFrom("session_nodes")
+          .selectAll()
+          .where("session_key", "in", sqliteStringSet(sessionKeys))
+          .orderBy("session_key"),
+      ).rows;
+      hashRows("nodes", nodes);
+      hashRows(
+        "snapshots",
+        iterateSqliteQuerySync(
+          database,
+          db
+            .selectFrom("session_entry_snapshots")
+            .selectAll()
+            .where("session_key", "in", sqliteStringSet(sessionKeys))
+            .orderBy("session_key")
+            .orderBy("field"),
+        ),
+      );
+      hashRows(
+        "windows",
+        iterateSqliteQuerySync(
+          database,
+          db
+            .selectFrom("session_windows")
+            .selectAll()
+            .where("session_id", "in", sqliteStringSet(sessionIds))
+            .orderBy("session_id"),
+        ),
+      );
+      hashRows(
+        "events",
+        iterateSqliteQuerySync(
+          database,
+          db
+            .selectFrom("transcript_events")
+            .selectAll()
+            .where("session_id", "in", sqliteStringSet(sessionIds))
+            .orderBy("session_id")
+            .orderBy("seq"),
+        ),
+      );
+      hashRows(
+        "cold",
+        iterateSqliteQuerySync(
+          database,
+          db
+            .selectFrom("session_transcript_cold_archives")
+            .selectAll()
+            .where("session_id", "in", sqliteStringSet(sessionIds))
+            .orderBy("session_id"),
+        ),
+      );
+      return {
+        fingerprint: digest.digest("hex"),
+        entries: new Map(nodes.map((row) => [row.session_key, row.entry_json])),
+      };
+    },
+    { operationLabel: "doctor.compaction-repair.preimage" },
+  );
+}
+
 /** Raw repair and its backup precede all canonical session readers. */
 export async function repairLegacySessionEntryStates(params: {
   apply: boolean;
@@ -214,6 +319,7 @@ export async function repairLegacySessionEntryStates(params: {
 }): Promise<SessionDeliveryStateRepairReport> {
   try {
     const preparedFacts = new Map<string, Map<string, string>>();
+    const preparedEntries = new Map<string, ReadonlyMap<string, string>>();
     const preparedTransforms = new Map<
       string,
       ReturnType<typeof createLegacyCompactionTranscriptTransform>
@@ -225,6 +331,16 @@ export async function repairLegacySessionEntryStates(params: {
       rawTransform: (entry, sessionKey, updatedAt, database) => {
         if (!hasLegacySessionEntryState(entry)) {
           return entry;
+        }
+        const raw = executeSqliteQueryTakeFirstSync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("session_nodes")
+            .select("entry_json")
+            .where("session_key", "=", sessionKey),
+        );
+        if (raw?.entry_json !== preparedEntries.get(database.path)?.get(sessionKey)) {
+          throw new Error(`Session entry changed after backup preparation for ${sessionKey}`);
         }
         const next = migrateLegacySessionEntryState(entry, updatedAt);
         const prepared = prepareLegacySessionCompactionHistory(
@@ -270,18 +386,10 @@ export async function repairLegacySessionEntryStates(params: {
         assertTargetCurrent(target);
       }
     };
-    assertCurrent();
-    const backup = await backupDoctorSqliteDatabases({
-      env: params.env,
-      pendingDatabasePaths: plan.pending.map(({ target }) => target.sqlitePath),
-      databasePaths: plan.targets.map((target) => target.sqlitePath),
-      authority: { assertCurrent },
-    });
-    assertCurrent();
-    note(
-      [...backup.changes, ...backup.warnings].map((message) => `- ${message}`).join("\n"),
-      "Session SQLite backups",
-    );
+    const preimages = new Map<
+      string,
+      { sessionKeys: readonly string[]; sessionIds: string[]; fingerprint: string }
+    >();
     for (const { target, scope, sessionKeys, identity } of plan.pending) {
       assertTargetCurrent(target);
       const selected = new Set(sessionKeys);
@@ -311,10 +419,52 @@ export async function repairLegacySessionEntryStates(params: {
         createLegacyCompactionTranscriptTransform(eventFacts),
       );
       preparedFacts.set(target.sqlitePath, fingerprints);
-      if (transcriptIds.size > 0) {
+      const sessionIds = [...transcriptIds];
+      const preimage = withOpenClawAgentDatabaseReadOnly(
+        (database) => readSessionCompactionRepairPreimage(database.db, sessionKeys, sessionIds),
+        { agentId: target.agentId, path: target.sqlitePath, env: params.env },
+      );
+      if (!preimage.found) {
+        throw new Error(`Session database unavailable before repair backup: ${preimage.reason}`);
+      }
+      preimages.set(realpathSync.native(target.sqlitePath), {
+        sessionKeys,
+        sessionIds,
+        fingerprint: preimage.value.fingerprint,
+      });
+      preparedEntries.set(target.sqlitePath, preimage.value.entries);
+      assertTargetCurrent(target);
+    }
+    const backup = await backupDoctorSqliteDatabases({
+      env: params.env,
+      pendingDatabasePaths: plan.pending.map(({ target }) => target.sqlitePath),
+      databasePaths: plan.targets.map((target) => target.sqlitePath),
+      authority: { assertCurrent },
+      repair: {
+        key: randomUUID(),
+        validate: (database, sourcePath) => {
+          const preimage = preimages.get(sourcePath);
+          if (
+            preimage &&
+            readSessionCompactionRepairPreimage(database, preimage.sessionKeys, preimage.sessionIds)
+              .fingerprint !== preimage.fingerprint
+          ) {
+            throw new Error(`Session repair backup differs from the planned source: ${sourcePath}`);
+          }
+        },
+      },
+    });
+    assertCurrent();
+    note(
+      [...backup.changes, ...backup.warnings].map((message) => `- ${message}`).join("\n"),
+      "Session SQLite backups",
+    );
+    for (const { target, scope } of plan.pending) {
+      const preimage = preimages.get(realpathSync.native(target.sqlitePath))!;
+      if (preimage.sessionIds.length > 0) {
         const { restoreSessionColdTranscript } =
           await import("../config/sessions/session-cold-storage.js");
-        for (const sessionId of transcriptIds) {
+        for (const sessionId of preimage.sessionIds) {
           await restoreSessionColdTranscript({ ...scope, sessionId }, () =>
             assertTargetCurrent(target),
           );

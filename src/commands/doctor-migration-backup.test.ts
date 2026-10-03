@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,7 +8,10 @@ import * as directoryDurability from "../infra/directory-durability.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import * as version from "../version.js";
-import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
+import {
+  backupDoctorMigrationDatabases,
+  backupDoctorSqliteDatabases,
+} from "./doctor-migration-backup.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -284,5 +288,94 @@ describe("Doctor migration backup retries", () => {
       "next build history",
     ]);
     expect(originalBackups.map((snapshot) => fs.readFileSync(snapshot))).toEqual(originalBytes);
+  });
+
+  it("preserves a later data repair preimage without replacing the completed schema rollback group", async () => {
+    const fixture = createFixture();
+    const sources = [fixture.agent, fixture.shared].map((source) => fs.realpathSync.native(source));
+    const currentEntry = '{"compactionCheckpoints":[{"opaque":9007199254740993}]}';
+    const currentMetric = '{"type":"compaction","tokensBefore":9007199254740993}';
+    const currentCold = new Uint8Array([0, 255, 31, 7]);
+    for (const source of sources) {
+      const database = new DatabaseSync(source);
+      try {
+        database.exec(
+          "CREATE TABLE repair_originals (source_path TEXT, entry_json TEXT, event_json TEXT, cold_archive BLOB)",
+        );
+        database
+          .prepare("INSERT INTO repair_originals VALUES (?, ?, ?, ?)")
+          .run(source, "{}", "{}", null);
+      } finally {
+        database.close();
+      }
+    }
+    await backup(fixture);
+    const originals = sources.map((source) => listBackups(source)[0]!);
+    const originalBytes = originals.map((snapshot) => fs.readFileSync(snapshot));
+    const identities = sources.map((source) => fs.statSync(source).ino);
+    for (const source of sources) {
+      const database = new DatabaseSync(source);
+      try {
+        database
+          .prepare("UPDATE repair_originals SET entry_json = ?, event_json = ?, cold_archive = ?")
+          .run(currentEntry, currentMetric, currentCold);
+      } finally {
+        database.close();
+      }
+    }
+    const seenSources = new Set<string>();
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => {},
+    });
+    const repair = {
+      key: randomUUID(),
+      validate: (database: DatabaseSync, sourcePath: string) => {
+        expect(sources).toContain(sourcePath);
+        seenSources.add(sourcePath);
+        expect(database.prepare("SELECT * FROM repair_originals").get()).toEqual({
+          source_path: sourcePath,
+          entry_json: currentEntry,
+          event_json: currentMetric,
+          cold_archive: currentCold,
+        });
+      },
+    };
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await maintenance.run(() =>
+          backupDoctorSqliteDatabases({
+            env: fixture.env,
+            pendingDatabasePaths: [fixture.agent],
+            databasePaths: [fixture.agent],
+            authority: { assertCurrent: () => maintenance.assertAdmission() },
+            repair,
+          }),
+        );
+      }
+    } finally {
+      await maintenance.close();
+    }
+    expect(seenSources).toEqual(new Set(sources));
+    expect(sources.map((source) => fs.statSync(source).ino)).toEqual(identities);
+    for (const source of sources) {
+      const snapshots = listBackups(source);
+      expect(snapshots).toHaveLength(2);
+      const current = snapshots.find((snapshot) => !originals.includes(snapshot))!;
+      const database = new DatabaseSync(current, { readOnly: true });
+      try {
+        expect(database.prepare("SELECT * FROM repair_originals").get()).toEqual({
+          source_path: source,
+          entry_json: currentEntry,
+          event_json: currentMetric,
+          cold_archive: currentCold,
+        });
+      } finally {
+        database.close();
+      }
+    }
+    await backup(fixture);
+    expect(sources.flatMap(listBackups)).toHaveLength(4);
+    expect(originals.map((snapshot) => fs.readFileSync(snapshot))).toEqual(originalBytes);
   });
 });

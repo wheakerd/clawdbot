@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -45,6 +46,7 @@ import {
   createLegacyCompactionTranscriptTransform,
   prepareLegacySessionCompactionHistory,
 } from "./doctor-session-compaction-history.js";
+import { readSessionCompactionRepairPreimage } from "./doctor-session-delivery-state.js";
 import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
 import type { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
@@ -242,12 +244,38 @@ async function prepareCompactionImportDestination(params: {
   };
   assertSourcesCurrent();
   if (existing) {
+    const sessionKeys = params.records.map((record) => record.sessionKey);
+    const sourcePath = fs.realpathSync.native(sqlitePath);
+    const preimage = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        readSessionCompactionRepairPreimage(database.db, sessionKeys, params.sessionIds),
+      { agentId: params.target.agentId, path: sqlitePath, env: params.env },
+    );
+    if (!preimage.found) {
+      throw new Error(
+        `Session database unavailable before compaction import backup: ${preimage.reason}`,
+      );
+    }
     // Original JSONL does not preserve preexisting destination metrics or cold archives.
     const backup = await backupDoctorSqliteDatabases({
       env: params.env,
       pendingDatabasePaths: [sqlitePath],
       databasePaths: [sqlitePath],
       authority: { assertCurrent: assertDestinationCurrent },
+      repair: {
+        key: randomUUID(),
+        validate: (database, currentSourcePath) => {
+          if (
+            currentSourcePath === sourcePath &&
+            readSessionCompactionRepairPreimage(database, sessionKeys, params.sessionIds)
+              .fingerprint !== preimage.value.fingerprint
+          ) {
+            throw new Error(
+              `Compaction import backup differs from the planned source: ${sourcePath}`,
+            );
+          }
+        },
+      },
     });
     assertSourcesCurrent();
     const backupMessages = [...backup.changes, ...backup.warnings];
