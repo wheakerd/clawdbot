@@ -356,24 +356,26 @@ describe("Doctor migration backup retries", () => {
     } finally {
       await maintenance.close();
     }
-    expect(seenSources).toEqual(new Set(sources));
-    expect(sources.map((source) => fs.statSync(source).ino)).toEqual(identities);
     for (const source of sources) {
       const snapshots = listBackups(source);
+      const preserved = snapshots.map((snapshot) => {
+        const database = new DatabaseSync(snapshot, { readOnly: true });
+        try {
+          return database.prepare("SELECT * FROM repair_originals").get();
+        } finally {
+          database.close();
+        }
+      });
+      expect(preserved).toContainEqual({
+        source_path: source,
+        entry_json: currentEntry,
+        event_json: currentMetric,
+        cold_archive: currentCold,
+      });
       expect(snapshots).toHaveLength(2);
-      const current = snapshots.find((snapshot) => !originals.includes(snapshot))!;
-      const database = new DatabaseSync(current, { readOnly: true });
-      try {
-        expect(database.prepare("SELECT * FROM repair_originals").get()).toEqual({
-          source_path: source,
-          entry_json: currentEntry,
-          event_json: currentMetric,
-          cold_archive: currentCold,
-        });
-      } finally {
-        database.close();
-      }
     }
+    expect(seenSources).toEqual(new Set(sources));
+    expect(sources.map((source) => fs.statSync(source).ino)).toEqual(identities);
     await backup(fixture);
     expect(sources.flatMap(listBackups)).toHaveLength(4);
     expect(originals.map((snapshot) => fs.readFileSync(snapshot))).toEqual(originalBytes);
