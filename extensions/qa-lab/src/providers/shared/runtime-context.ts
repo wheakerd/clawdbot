@@ -5,12 +5,13 @@ const RUNTIME_CONTEXT_HEADER = "OpenClaw runtime context:";
 
 export function isInternalRuntimeContextCarrierText(text: string) {
   const trimmed = text.trim();
+  const legacyEndIndex = trimmed.indexOf(INTERNAL_RUNTIME_CONTEXT_END);
   // Subagent tasks sit between two closed scaffolding blocks. Only the current
   // label or one complete legacy carrier is transparent to the user turn.
   return (
     trimmed.startsWith(`${RUNTIME_CONTEXT_HEADER}\n`) ||
     (trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
-      trimmed.indexOf(INTERNAL_RUNTIME_CONTEXT_END) ===
-        trimmed.length - INTERNAL_RUNTIME_CONTEXT_END.length)
+      legacyEndIndex >= 0 &&
+      legacyEndIndex + INTERNAL_RUNTIME_CONTEXT_END.length === trimmed.length)
   );
 }
