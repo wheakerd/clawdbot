@@ -178,7 +178,7 @@ export function verifyHistoricalMigrationArtifact(params: {
         }
         attachSessionEntrySnapshots(current, row);
         const entry: SessionEntry = { ...raw, sessionId, updatedAt: raw.updatedAt };
-        const compactionPlan = prepareLegacySessionCompactionHistory(entry);
+        const compactionPlan = prepareLegacySessionCompactionHistory(raw);
         const canonical = normalizePersistedSessionEntryShape(compactionPlan.entry, {
           sessionKey: key,
         });
