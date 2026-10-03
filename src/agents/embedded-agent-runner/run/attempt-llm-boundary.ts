@@ -3,6 +3,8 @@ import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-me
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import {
   hasLegacyRuntimeContextEnvelope,
+  RUNTIME_CONTEXT_BEGIN_MARKER,
+  RUNTIME_CONTEXT_END_MARKER,
   type ImageContent,
   type UserMessage,
 } from "../../../llm/types.js";
@@ -102,15 +104,13 @@ function projectRuntimeContextMessages(
     if (message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE) {
       const details = runtimeContextDetailsSchema.safeParse(message.details);
       if (details.success) {
-        if (
-          typeof message.content === "string" &&
-          hasLegacyRuntimeContextEnvelope(message.content)
-        ) {
-          return message;
-        }
+        const projected = projectRuntimeContextFragments(details.data.fragments);
         return {
           ...message,
-          content: projectRuntimeContextFragments(details.data.fragments),
+          content:
+            typeof message.content === "string" && hasLegacyRuntimeContextEnvelope(message.content)
+              ? `${RUNTIME_CONTEXT_BEGIN_MARKER}\n${projected}\n${RUNTIME_CONTEXT_END_MARKER}`
+              : projected,
           details: details.data,
         };
       }
