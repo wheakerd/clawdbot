@@ -4,7 +4,9 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import type { PhysicalStore, SessionClaim } from "./legacy-main-session-migration.contract.js";
+import { resolveSessionArtifactDirectory } from "./paths.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import {
   readSqliteSessionGenerationClaim,
@@ -15,6 +17,7 @@ import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-gen
 import { readSessionNodeArtifactFingerprint } from "./session-accessor.sqlite-node-artifacts.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { assertRetainedHistoryArtifactTransfer } from "./session-retained-history.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
@@ -170,4 +173,50 @@ export async function restoreColdSessionClaims(
     }
     claims[index] = refreshed.value;
   }
+}
+
+export function samePhysicalStore(left: PhysicalStore, right: PhysicalStore): boolean {
+  return isSameOpenClawAgentDatabasePath(left.path, right.path);
+}
+
+export function freshestClaim(claims: readonly SessionClaim[]): SessionClaim {
+  return claims.toSorted((left, right) => {
+    const freshness = (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0);
+    return (
+      freshness ||
+      left.key.localeCompare(right.key) ||
+      left.store.path.localeCompare(right.store.path)
+    );
+  })[0]!;
+}
+
+/** Check definite transfers before cold restoration; divergent claims retain their store owner. */
+export function assertLegacyMainSessionHistoryCustody(params: {
+  claims: readonly SessionClaim[];
+  destination: PhysicalStore;
+  destinationCanonical?: SessionClaim;
+}): void {
+  const winner = params.destinationCanonical ?? freshestClaim(params.claims);
+  for (const claim of params.claims) {
+    if (
+      samePhysicalStore(claim.store, params.destination) ||
+      (claim !== winner && !claimsMatch(claim, winner))
+    ) {
+      continue;
+    }
+    assertRetainedHistoryArtifactTransfer(
+      claim.entry.retainedHistoryReferences,
+      resolveSessionArtifactDirectory(claim.store.ownerStorePath),
+      resolveSessionArtifactDirectory(params.destination.ownerStorePath),
+    );
+  }
+}
+
+export function warningForDivergence(
+  kind: "divergent-aliases" | "divergent-canonical",
+  canonicalKey: string,
+  claims: readonly SessionClaim[],
+): string {
+  const claimsText = claims.map((claim) => `${claim.store.path}#${claim.key}`).join(", ");
+  return `session: ${kind} for ${canonicalKey}; preserved claims ${claimsText}. Run openclaw doctor --fix to quarantine the losing claims.`;
 }

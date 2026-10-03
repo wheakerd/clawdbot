@@ -21,13 +21,16 @@ import {
   readClaimsFromStores,
   storeHasLegacyAgentSessionKey,
 } from "./legacy-main-session-key-scan.js";
-import { claimsMatch, restoreColdSessionClaims } from "./legacy-main-session-migration-claims.js";
 import {
   assertLegacyMainSessionHistoryCustody,
-  processIdenticalClaims,
-  repairDivergentClaims,
+  claimsMatch,
+  restoreColdSessionClaims,
   samePhysicalStore,
   warningForDivergence,
+} from "./legacy-main-session-migration-claims.js";
+import {
+  processIdenticalClaims,
+  repairDivergentClaims,
 } from "./legacy-main-session-migration-operations.js";
 import type {
   LegacyMainSessionMigrationMode,

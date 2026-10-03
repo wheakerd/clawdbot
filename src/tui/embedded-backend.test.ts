@@ -20,7 +20,10 @@ import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-ha
 import { notifyListeners } from "../shared/listeners.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { registerEmbeddedHistoryProjectionTests } from "./embedded-backend.history.test-support.js";
+import {
+  registerEmbeddedHistoryProjectionTests,
+  registerEmbeddedHistoryReadTests,
+} from "./embedded-backend.history.test-support.js";
 import type { EmbeddedTuiBackend as EmbeddedTuiBackendType } from "./embedded-backend.js";
 import { registerEmbeddedBackendStreamTests } from "./embedded-backend.stream.test-support.js";
 import {
@@ -1389,105 +1392,11 @@ describe("EmbeddedTuiBackend", () => {
     await backend.stop();
   });
 
-  it("uses the canonical gateway projector for embedded TUI history reads", async () => {
-    const entry = {
-      sessionId: "sess-main",
-      retainedHistoryReferences: { sessionIds: ["sess-main"], artifactPaths: [] },
-    };
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      agentId: "main",
-      canonicalKey: "agent:main:main",
-      storePath: "/tmp/openclaw-sessions.json",
-      entry,
-    });
-
-    const backend = new EmbeddedTuiBackend();
-    const messages = [
-      {
-        role: "system",
-        content: [{ type: "text", text: "Compaction" }],
-        __openclaw: {
-          kind: "compaction",
-          id: "compact",
-          tokensBefore: 100,
-          tokensAfter: 25,
-        },
-      },
-      {
-        role: "toolResult",
-        toolCallId: "wait",
-        toolName: "collab.wait",
-        content: "raw result",
-        isError: false,
-        __openclaw: { id: "wait-result" },
-      },
-    ];
-    readChatHistoryPageMock.mockResolvedValueOnce({
-      messages,
-      activity: [{ messageId: "wait-result", items: [] }],
-    });
-    const history = await backend.loadHistory({ sessionKey: "agent:main:main" });
-    expect(history).toMatchObject({
-      messages,
-      activity: [{ messageId: "wait-result", items: [] }],
-    });
-
-    expect(readChatHistoryPageMock).toHaveBeenCalledWith({
-      entry,
-      provider: "openai",
-      sessionId: "sess-main",
-      storePath: "/tmp/openclaw-sessions.json",
-      sessionAgentId: "main",
-      canonicalKey: "agent:main:main",
-      max: 200,
-      maxHistoryBytes: 100_000,
-      effectiveMaxChars: 100_000,
-      offset: undefined,
-      messageId: undefined,
-    });
-  });
-
-  it("loads runtime plugins for the send-path workspace before returning embedded history", async () => {
-    const cfg = { agents: { list: [{ id: "main" }] } };
-    loadSessionEntryMock.mockReturnValue({
-      cfg,
-      agentId: "main",
-      canonicalKey: "agent:main:main",
-      storePath: "/tmp/openclaw-sessions.json",
-      entry: { spawnedWorkspaceDir: "/tmp/openclaw-custom-workspace" },
-    });
-
-    const backend = new EmbeddedTuiBackend();
-
-    await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
-      runtimePluginsPrewarm: { status: "warmed" },
-    });
-    expect(loadAgentRuntimePluginRegistryHandleMock).toHaveBeenCalledWith({
-      config: cfg,
-      workspaceDir: "/tmp/openclaw-agent-main",
-    });
-  });
-
-  it("returns embedded history when runtime plugin loading fails", async () => {
-    loadAgentRuntimePluginRegistryHandleMock.mockImplementationOnce(() => {
-      throw new Error("runtime unavailable");
-    });
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      agentId: "main",
-      canonicalKey: "agent:main:main",
-      storePath: "/tmp/openclaw-sessions.json",
-      entry: {},
-    });
-
-    const backend = new EmbeddedTuiBackend();
-
-    await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
-      sessionKey: "agent:main:main",
-      messages: [],
-      runtimePluginsPrewarm: { status: "failed", error: "runtime unavailable" },
-    });
+  registerEmbeddedHistoryReadTests({
+    createBackend: () => new EmbeddedTuiBackend(),
+    loadSessionEntryMock,
+    readChatHistoryPageMock,
+    loadAgentRuntimePluginRegistryHandleMock,
   });
 
   it("waits for the newest publication before returning model choices", async () => {

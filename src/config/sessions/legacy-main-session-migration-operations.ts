@@ -17,13 +17,14 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   claimFullyCopied,
   claimUnchanged,
   claimsMatch,
+  freshestClaim,
   generationsMatch,
   readClaim,
+  samePhysicalStore,
 } from "./legacy-main-session-migration-claims.js";
 import type {
   LegacyMainSessionMigrationMode,
@@ -60,52 +61,6 @@ import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { assertRetainedHistoryArtifactTransfer } from "./session-retained-history.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-
-export function samePhysicalStore(left: PhysicalStore, right: PhysicalStore): boolean {
-  return isSameOpenClawAgentDatabasePath(left.path, right.path);
-}
-
-function freshestClaim(claims: readonly SessionClaim[]): SessionClaim {
-  return claims.toSorted((left, right) => {
-    const freshness = (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0);
-    return (
-      freshness ||
-      left.key.localeCompare(right.key) ||
-      left.store.path.localeCompare(right.store.path)
-    );
-  })[0]!;
-}
-
-/** Check definite transfers before cold restoration; divergent claims retain their store owner. */
-export function assertLegacyMainSessionHistoryCustody(params: {
-  claims: readonly SessionClaim[];
-  destination: PhysicalStore;
-  destinationCanonical?: SessionClaim;
-}): void {
-  const winner = params.destinationCanonical ?? freshestClaim(params.claims);
-  for (const claim of params.claims) {
-    if (
-      samePhysicalStore(claim.store, params.destination) ||
-      (claim !== winner && !claimsMatch(claim, winner))
-    ) {
-      continue;
-    }
-    assertRetainedHistoryArtifactTransfer(
-      claim.entry.retainedHistoryReferences,
-      resolveSessionArtifactDirectory(claim.store.ownerStorePath),
-      resolveSessionArtifactDirectory(params.destination.ownerStorePath),
-    );
-  }
-}
-
-export function warningForDivergence(
-  kind: "divergent-aliases" | "divergent-canonical",
-  canonicalKey: string,
-  claims: readonly SessionClaim[],
-): string {
-  const claimsText = claims.map((claim) => `${claim.store.path}#${claim.key}`).join(", ");
-  return `session: ${kind} for ${canonicalKey}; preserved claims ${claimsText}. Run openclaw doctor --fix to quarantine the losing claims.`;
-}
 
 function writeMigratedSessionClaim(
   database: OpenClawAgentDatabase,

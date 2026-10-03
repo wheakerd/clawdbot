@@ -6,6 +6,8 @@ import {
   listCanonicalSessionRepairFacts,
   type CanonicalSessionRepairFact,
 } from "../config/sessions/session-accessor.js";
+import { preserveCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { mergeRetainedHistoryReferences } from "../config/sessions/session-retained-history.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "../config/sessions/store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
@@ -229,4 +231,93 @@ export function collectCanonicalSessionRepairGroups(
   stores: readonly ExistingAgentDatabaseTarget[],
 ): CanonicalSessionRepairGroup[] {
   return groupRepairCandidates(collectCanonicalSessionCandidateFacts(params, stores), params);
+}
+
+function mergeCanonicalSessionEntryCandidates<T>(
+  candidates: readonly { entry: SessionEntry; preferred?: boolean; value: T }[],
+): { entry: SessionEntry; winner: T } | undefined {
+  let selected: { entry: SessionEntry; preferred: boolean; winner: T } | undefined;
+  for (const candidate of candidates) {
+    const incomingUpdatedAt =
+      typeof candidate.entry.updatedAt === "number" && Number.isFinite(candidate.entry.updatedAt)
+        ? candidate.entry.updatedAt
+        : 0;
+    const selectedUpdatedAt =
+      typeof selected?.entry.updatedAt === "number" && Number.isFinite(selected.entry.updatedAt)
+        ? selected.entry.updatedAt
+        : 0;
+    if (
+      !selected ||
+      incomingUpdatedAt > selectedUpdatedAt ||
+      (incomingUpdatedAt === selectedUpdatedAt &&
+        (candidate.preferred === true
+          ? !selected.preferred
+          : !selected.preferred &&
+            Buffer.compare(
+              Buffer.from(JSON.stringify(candidate.entry), "utf8"),
+              Buffer.from(JSON.stringify(selected.entry), "utf8"),
+            ) > 0))
+    ) {
+      selected = {
+        entry: structuredClone(candidate.entry),
+        preferred: candidate.preferred === true,
+        winner: candidate.value,
+      };
+    }
+  }
+  return selected;
+}
+
+export function selectCanonicalSessionCandidate(
+  candidates: readonly CanonicalSessionCandidate[],
+  params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
+) {
+  const first = candidates[0];
+  if (!first) {
+    return undefined;
+  }
+  const destination = resolveCanonicalSessionDestination({
+    canonicalKey: first.canonicalKey,
+    cfg: params.cfg,
+    env: params.env,
+    sourceAgentId: first.agentId,
+  });
+  const rankedCandidates = candidates
+    .toSorted((left, right) =>
+      Buffer.compare(
+        Buffer.from(`${left.sqlitePath}\0${left.sessionKey}`, "utf8"),
+        Buffer.from(`${right.sqlitePath}\0${right.sessionKey}`, "utf8"),
+      ),
+    )
+    .map((candidate) => ({
+      entry: candidate.entry,
+      preferred:
+        candidate.sqlitePath === destination.sqlitePath &&
+        candidate.sessionKey === candidate.canonicalKey,
+      value: candidate,
+    }));
+  const metadataCandidates = rankedCandidates.filter(({ value }) => !value.ownerEvidenceOnly);
+  const selected = mergeCanonicalSessionEntryCandidates(
+    metadataCandidates.length > 0 ? metadataCandidates : rankedCandidates,
+  );
+  if (!selected) {
+    return undefined;
+  }
+  // Metadata follows recency, but an existing canonical isolation identity wins
+  // even over a newer required alias. Otherwise retain the newest required alias.
+  const requiredCandidates = rankedCandidates.filter(({ entry }) => entry.sandbox === "required");
+  const authoritativeStamp =
+    requiredCandidates.find(({ preferred }) => preferred)?.entry ??
+    mergeCanonicalSessionEntryCandidates(requiredCandidates)?.entry;
+  const entry = preserveCreationStamp(selected.entry, authoritativeStamp);
+  if (candidates.every((candidate) => candidate.sqlitePath === destination.sqlitePath)) {
+    entry.retainedHistoryReferences = mergeRetainedHistoryReferences(
+      candidates.map((candidate) => candidate.entry.retainedHistoryReferences),
+    );
+  }
+  return {
+    ...selected,
+    entry,
+    destination,
+  };
 }
