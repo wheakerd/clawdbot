@@ -122,11 +122,12 @@ export function createCustomMessage(
 }
 
 /** Recognize the structured carrier marker shared with provider replay. */
-export function isRuntimeContextCarrier(message: AgentMessage): message is CustomMessage {
-  const details = message.role === "custom" ? asOptionalRecord(message.details) : undefined;
+export function isRuntimeContextCarrier(message: unknown): message is CustomMessage {
+  const candidate = asOptionalRecord(message);
+  const details = candidate?.role === "custom" ? asOptionalRecord(candidate.details) : undefined;
   return (
-    message.role === "custom" &&
-    ((message.customType === RUNTIME_CONTEXT_CUSTOM_TYPE &&
+    candidate?.role === "custom" &&
+    ((candidate.customType === RUNTIME_CONTEXT_CUSTOM_TYPE &&
       ((details?.source === "openclaw-runtime-context" &&
         details.runtimeContextCarrier !== false) ||
         (details?.source === undefined && details?.runtimeContextCarrier === true))) ||

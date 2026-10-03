@@ -3,8 +3,7 @@
  * Protects runtime-generated prompt blocks from user text and removes old
  * context formats before replaying or comparing messages.
  */
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { getOpenClawSystemUpdateKind } from "../../packages/agent-core/src/operator-messages.js";
+import { isRuntimeContextCarrier } from "../../packages/agent-core/src/harness/messages.js";
 import {
   RUNTIME_CONTEXT_HEADER,
   RUNTIME_CONTEXT_FOOTER,
@@ -334,15 +333,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
 
 /** Identifies hidden runtime context independently of its queue or transcript owner. */
 export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
-  const candidate = asOptionalRecord(message);
-  const details = asOptionalRecord(candidate?.details);
-  return (
-    candidate?.role === "custom" &&
-    ((candidate.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE &&
-      details?.source === "openclaw-runtime-context" &&
-      details.runtimeContextCarrier !== false) ||
-      getOpenClawSystemUpdateKind(message) === "runtime-context")
-  );
+  return isRuntimeContextCarrier(message);
 }
 
 /** Remove all structured runtime-context custom messages. */

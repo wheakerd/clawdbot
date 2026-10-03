@@ -155,7 +155,8 @@ async function withPersistedOrphanBoundary(
 describe("prepareEmbeddedAttemptSessionBoundary", () => {
   it("strips persisted carriers when a session switches to transient replay", async () => {
     const previousUser: AgentMessage = { role: "user", content: "first question", timestamp: 1 };
-    const previousCarrier = buildRuntimeContextCustomMessage("persisted context")!;
+    const previousCarrier: AgentMessage = buildRuntimeContextCustomMessage("persisted context")!;
+    previousCarrier.details = { runtimeContextCarrier: true };
     const reply = makeAssistantMessageFixture({
       content: [{ type: "text", text: "first answer" }],
     });
