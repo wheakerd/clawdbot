@@ -280,8 +280,6 @@ Open **Settings → Profile → GitHub connections** to connect **My GitHub** wi
 
 My GitHub requires an authenticated, durable Gateway profile, including the local owner profile. An identified operator with `operator.read` can manage only their own connection, even without administrative or general write access. Shared-secret devices using the owner profile share that connection. Use per-person sign-in for a team. System and per-agent connection changes still require `operator.admin`.
 
-After verified GitHub sign-in, the Control UI offers the existing personal GitHub consent flow when My GitHub is disconnected. Complete the displayed device authorization to obtain a personal API credential; Cloudflare Access and Tailscale identity proof do not themselves contain that token. Existing connected accounts are left alone. Closing the prompt cancels its pending setup, and connection or profile changes retire it. This setup never selects personal publication automatically or changes System GitHub or an agent override.
-
 1. Choose **For me** and connect GitHub. For identified administrators, this is the default purpose. **For the system** is an explicit alternative.
 2. Open the displayed `github.com/login/device` link yourself and approve the one-time code. The Gateway verifies the account and keeps the credentials out of browser responses and agent context.
 3. Check the connected account before using it. Personal connections use device authorization. The existing PAT alternative remains available for admin-managed shared connections.

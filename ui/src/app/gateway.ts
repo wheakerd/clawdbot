@@ -66,7 +66,7 @@ export type ApplicationGateway = {
   subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
   subscribeEventLog: (listener: (events: readonly EventLogEntry[]) => void) => () => void;
   subscribeEvents: (listener: GatewayEventListener) => () => void;
-  loadSelfProfile: (options?: { publish?: boolean }) => Promise<UserProfile | null>;
+  loadSelfProfile: () => Promise<UserProfile | null>;
   updateSelfUser?: (patch: Partial<Omit<AuthenticatedUser, "id">>) => void;
   /** True when this browser holds a stored operator device token for the current gateway. */
   hasStoredDeviceToken?: () => boolean;

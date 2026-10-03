@@ -16,12 +16,9 @@ export function createGatewaySelfProfile(options: {
   publish: (selfUser: AuthenticatedUser | null) => void;
   resourceBasePath?: string;
 }) {
-  let selfProfileRequest: {
-    promise: Promise<UserProfile | null>;
-    publish: boolean;
-  } | null = null;
+  let selfProfileRequest: Promise<UserProfile | null> | null = null;
   let fallbackAvatarUrl: string | undefined;
-  const loadSelfProfile = (readOptions?: { publish?: boolean }): Promise<UserProfile | null> => {
+  const loadSelfProfile = (): Promise<UserProfile | null> => {
     const requestClient = options.getSnapshot().client;
     const hello = options.getSnapshot().hello;
     if (
@@ -32,86 +29,71 @@ export function createGatewaySelfProfile(options: {
     ) {
       return Promise.resolve(null);
     }
-    // Foreground loads joining a background read retain their publication intent.
     if (selfProfileRequest) {
-      selfProfileRequest.publish ||= readOptions?.publish !== false;
-      return selfProfileRequest.promise;
+      return selfProfileRequest;
     }
     const selfAtStart = options.getSnapshot().selfUser;
     const isCurrent = (): boolean =>
       options.getSnapshot().client === requestClient &&
       options.getSnapshot().hello === hello &&
       options.getSnapshot().phase === "connected" &&
-      selfProfileRequest?.promise === request;
+      selfProfileRequest === request;
     const request: Promise<UserProfile | null> = requestClient
       .request<UsersSelfResult>("users.self", {})
-      .then(({ profile }) => profile)
+      .then(({ profile }) => {
+        if (!isCurrent()) {
+          return null;
+        }
+        const currentSelf = options.getSnapshot().selfUser;
+        const currentProfile = currentSelf?.id === profile.id ? currentSelf : null;
+        const newerDisplay = currentProfile && currentSelf !== selfAtStart ? currentProfile : null;
+        const presence = resolveSelfPresenceUser(
+          readPresenceEntries(hello.snapshot) ?? [],
+          requestClient.instanceId,
+        );
+        const previousAvatar =
+          currentProfile?.avatarUrl ??
+          (presence?.id === profile.id ? presence.avatarUrl : undefined);
+        const fallback =
+          userProfileAvatarUrl(
+            options.getConnection().gatewayUrl,
+            profile.id,
+            profile.updatedAt,
+            options.resourceBasePath,
+          ) ?? undefined;
+        const avatarUrl =
+          previousAvatar && previousAvatar !== fallbackAvatarUrl ? previousAvatar : fallback;
+        fallbackAvatarUrl = fallback;
+        const selfUser = {
+          id: profile.id,
+          identity: { type: "profile" as const, id: profile.id },
+          name: newerDisplay ? newerDisplay.name : (profile.displayName ?? undefined),
+          email: profile.emails[0],
+          // Refresh our timestamp fallback without replacing a precise presence/upload revision.
+          avatarUrl,
+        };
+        if (!sameSelfUser(options.getSnapshot().selfUser, selfUser)) {
+          options.publish(selfUser);
+        }
+        // Publishing identity can synchronously stop or replace the connection.
+        return isCurrent() ? profile : null;
+      })
       .catch((error: unknown) => {
         if (!isCurrent()) {
           return null;
         }
         if (error instanceof GatewayRequestError && error.code === "FORBIDDEN") {
+          options.publish(null);
           return null;
         }
         throw error;
       })
-      .then((profile) => {
-        if (!isCurrent()) {
-          return null;
-        }
-        if (pending.publish) {
-          if (profile) {
-            const currentSelf = options.getSnapshot().selfUser;
-            const currentProfile = currentSelf?.id === profile.id ? currentSelf : null;
-            const newerDisplay =
-              currentProfile && currentSelf !== selfAtStart ? currentProfile : null;
-            const presence = resolveSelfPresenceUser(
-              readPresenceEntries(hello.snapshot) ?? [],
-              requestClient.instanceId,
-            );
-            const previousAvatar =
-              currentProfile?.avatarUrl ??
-              (presence?.id === profile.id ? presence.avatarUrl : undefined);
-            const fallback =
-              userProfileAvatarUrl(
-                options.getConnection().gatewayUrl,
-                profile.id,
-                profile.updatedAt,
-                options.resourceBasePath,
-              ) ?? undefined;
-            const avatarUrl =
-              previousAvatar && previousAvatar !== fallbackAvatarUrl ? previousAvatar : fallback;
-            fallbackAvatarUrl = fallback;
-            const selfUser = {
-              id: profile.id,
-              identity: { type: "profile" as const, id: profile.id },
-              name: newerDisplay ? newerDisplay.name : (profile.displayName ?? undefined),
-              email: profile.emails[0],
-              // Refresh our timestamp fallback without replacing a precise presence/upload revision.
-              avatarUrl,
-            };
-            if (!sameSelfUser(options.getSnapshot().selfUser, selfUser)) {
-              options.publish(selfUser);
-            }
-          } else {
-            options.publish(null);
-          }
-        }
-        // Publication and retirement are atomic so late callers cannot lose their intent.
-        // Publishing identity can synchronously stop or replace the connection.
-        const result = isCurrent() ? profile : null;
-        if (selfProfileRequest?.promise === request) {
-          selfProfileRequest = null;
-        }
-        return result;
-      })
       .finally(() => {
-        if (selfProfileRequest?.promise === request) {
+        if (selfProfileRequest === request) {
           selfProfileRequest = null;
         }
       });
-    const pending = { promise: request, publish: readOptions?.publish !== false };
-    selfProfileRequest = pending;
+    selfProfileRequest = request;
     return request;
   };
   return {
