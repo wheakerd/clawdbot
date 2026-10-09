@@ -477,6 +477,7 @@ describe("gateway server cron", () => {
       configRevision: initialJob.configRevision,
     });
 
+    cronState.schedulerClock.setTime(initialJob.updatedAtMs + 1);
     const first = await directCronReq(cronState, "cron.update", {
       id: initialJob.id,
       expectedConfigRevision: initialJob.configRevision,

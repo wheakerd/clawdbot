@@ -166,6 +166,7 @@ it("retires live watchers and starts successor indexing without a search or turn
     memory: {
       search: {
         provider: "none",
+        rememberAcrossConversations: false,
         sources: ["memory"],
         // Keep this watcher case memory-only; retirement during session startup
         // discovery has its own deterministic case below.
