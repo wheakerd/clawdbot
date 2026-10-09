@@ -49,20 +49,17 @@ export type ContextEngineTurnRuntimeContext = Readonly<{
 
 type AdmittedContextEngineTurnOutboxPayload = Readonly<{
   admission: TranscriptTurnAdmission;
-  isHeartbeat: boolean;
   state: "admitted";
 }>;
 
 type AcceptedContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
-  isHeartbeat: boolean;
   state: "accepted";
   runtimeContext?: ContextEngineTurnRuntimeContext;
 }>;
 
 type ReadyContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
-  isHeartbeat: boolean;
   messages: AgentMessage[];
   state: "ready";
   runtimeContext?: ContextEngineTurnRuntimeContext;
@@ -76,7 +73,6 @@ type ContextEngineTurnReadFailureKind = Exclude<
 type BlockedContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
   failure: Exclude<ContextEngineTurnReadFailureKind, "projection-unavailable">;
-  isHeartbeat: boolean;
   state: "blocked";
 }>;
 
@@ -201,7 +197,6 @@ export function enqueueContextEngineTurnIntent(params: OutboxKernelParams<"enque
     ...params,
     payload: {
       admission: params.admission,
-      isHeartbeat: params.isHeartbeat,
       state: "admitted",
     },
   });
@@ -212,7 +207,6 @@ export function acceptContextEngineTurnIntent(params: OutboxKernelParams<"accept
     ...params,
     payload: {
       boundary: params.boundary,
-      isHeartbeat: params.isHeartbeat,
       state: "accepted",
       runtimeContext: params.runtimeContext,
     },
@@ -236,7 +230,6 @@ function blockContextEngineTurnIntent(
     boundary: TranscriptTurnBoundary;
     database: ContextEngineTurnOutboxConnection;
     failure: BlockedContextEngineTurnOutboxPayload["failure"];
-    isHeartbeat: boolean;
   },
 ): void {
   writeContextEngineTurnOutboxPayload({
@@ -244,7 +237,6 @@ function blockContextEngineTurnIntent(
     payload: {
       boundary: params.boundary,
       failure: params.failure,
-      isHeartbeat: params.isHeartbeat,
       state: "blocked",
     },
   });
@@ -316,7 +308,6 @@ function advanceAcceptedContextEngineTurn(
         database: owner.database,
         engineId: owner.engineId,
         failure: closedTurn.kind,
-        isHeartbeat: payload.isHeartbeat,
         ownerPluginId: owner.ownerPluginId,
       });
     }
@@ -328,7 +319,6 @@ function advanceAcceptedContextEngineTurn(
     ownerPluginId: owner.ownerPluginId,
     payload: {
       boundary: payload.boundary,
-      isHeartbeat: payload.isHeartbeat,
       messages: closedTurn.messages,
       runtimeContext: payload.runtimeContext,
     },
@@ -596,7 +586,6 @@ async function commitPendingContextEngineTurn(params: {
         sessionKey: payload.boundary.admission.sessionKey,
         storePath: payload.boundary.admission.storePath,
       },
-      isHeartbeat: payload.isHeartbeat,
       ...(payload.runtimeContext ? { runtimeContext: payload.runtimeContext } : {}),
     };
     params.store.assertReadable?.();
@@ -632,7 +621,6 @@ export type ContextEngineTurnOutboxWorkerOperations = {
   prepareRun: {
     input: ContextEngineTurnOutboxFilter & {
       admission?: TranscriptTurnAdmission;
-      isHeartbeat: boolean;
       sessionId: string;
     };
     output: { warnings: string[]; pending: boolean; admitted: boolean };
@@ -654,14 +642,12 @@ export type ContextEngineTurnOutboxWorkerOperations = {
   enqueueIntent: {
     input: ContextEngineTurnOutboxFilter & {
       admission: TranscriptTurnAdmission;
-      isHeartbeat: boolean;
     };
     output: undefined;
   };
   acceptIntent: {
     input: ContextEngineTurnOutboxFilter & {
       boundary: TranscriptTurnBoundary;
-      isHeartbeat: boolean;
       runtimeContext?: ContextEngineTurnRuntimeContext;
     };
     output: undefined;
@@ -669,7 +655,6 @@ export type ContextEngineTurnOutboxWorkerOperations = {
   publishClosedTurn: {
     input: ContextEngineTurnOutboxFilter & {
       boundary: TranscriptTurnBoundary;
-      isHeartbeat: boolean;
       maxBytes: number;
       maxEvents: number;
       runtimeContext?: ContextEngineTurnRuntimeContext;

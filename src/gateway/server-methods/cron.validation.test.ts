@@ -200,7 +200,6 @@ describe("cron method validation", () => {
       defaultAgentId: "main",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     const context = createDirectChatContext({ cron, cronStorePath: storePath, getRuntimeConfig });
@@ -935,6 +934,8 @@ describe("cron method validation", () => {
     loadGatewaySessionEntry.mockReturnValueOnce({ canonicalKey: sessionKey, entry });
     const { context, respond } = await invokeWake({ mode: "now", text: "ping", sessionKey });
     expect(context.cron.wake).toHaveBeenCalledWith({
+      commitGuard: expect.any(Function),
+      createIfMissing: true,
       agentId: "main",
       mode: "now",
       text: "ping",
@@ -1241,7 +1242,6 @@ describe("cron method validation", () => {
       defaultAgentId: "main",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     await cron.start();
@@ -1836,7 +1836,6 @@ describe("cron method validation", () => {
       defaultAgentId: "ops",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const context = createCronContext();
@@ -2569,20 +2568,20 @@ describe("cron method validation", () => {
           sessionKey: "agent:agent-456:discord:thread-xyz",
           agentId: "agent-456",
         },
-        caller: undefined,
       },
       {
         name: "blank session key",
         params: { mode: "now", text: "ping", sessionKey: "   " },
         expected: { mode: "now", text: "ping" },
-        caller: undefined,
       },
-    ])("resolves wake target for $name", async ({ params, expected, caller }) => {
-      const { context, respond } = await invokeWake(
-        params,
-        caller ? callerClient(caller) : undefined,
-      );
-      expect(context.cron.wake).toHaveBeenCalledWith(expected);
+    ])("resolves wake target for $name", async ({ params, expected }) => {
+      const { context, respond } = await invokeWake(params);
+      const expectedWake = {
+        ...expected,
+        commitGuard: expect.any(Function),
+        createIfMissing: true,
+      };
+      expect(context.cron.wake).toHaveBeenCalledWith(expectedWake);
       expect(context.cron.prepareWake).toHaveBeenCalledOnce();
       expect(context.cron.prepareWake.mock.invocationCallOrder[0]).toBeLessThan(
         context.cron.wake.mock.invocationCallOrder[0]!,

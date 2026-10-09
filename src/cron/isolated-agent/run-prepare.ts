@@ -9,7 +9,9 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
+import { captureSessionEventTargetForHost } from "../../auto-reply/reply/session-event-target.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -22,24 +24,26 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { appendCronJobScratchPrompt, appendCronUnattendedRunPreamble } from "../run-prompt.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import { isDetachedCronSessionTarget } from "../session-target.js";
+import { readCronScratchSnapshot } from "../scratch-read.js";
+import { isDetachedCronSessionTarget, resolveCronDeliverySessionKey } from "../session-target.js";
+import { resolveCronJobsStorePathFromConfig } from "../store/paths.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
   resolveCronThinkingSelection,
 } from "./model-selection.js";
+import { resolveCronAutomationMessage } from "./run-automation-context.js";
 import { resolveCronCommandPromptPreflight } from "./run-command-preflight.js";
 import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-config.js";
-import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 import {
   createCronToolsAllowPreflightDiagnostics,
   resolveCronDeliveryContext,
 } from "./run-delivery-trace.js";
 import { resolveCronPreflight } from "./run-fallback-policy.js";
 import {
-  appendCronUnattendedRunPreamble,
   resolveCronAuthSelection,
   loadCronExternalContentRuntime,
   loadSessionAccessorRuntime,
@@ -88,6 +92,7 @@ export async function prepareCronRunContext(params: {
   onLifecycleInterrupt: () => void;
 }) {
   const { input } = params;
+  input.assertCurrent?.();
   const commandPromptPreflight = resolveCronCommandPromptPreflight(input.job);
   if (commandPromptPreflight) {
     return { ok: false as const, result: commandPromptPreflight };
@@ -103,6 +108,16 @@ export async function prepareCronRunContext(params: {
   );
   await using runtimeResources = new AsyncDisposableStack();
   let runtimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
+  const resultSessionKey =
+    (input.job.sessionTarget === "isolated"
+      ? input.job.sourceConversation?.sessionKey
+      : undefined) ??
+    resolveCronDeliverySessionKey(input.job) ??
+    resolveAgentMainSessionKey({ cfg: requestedRuntimeCfg, agentId: initialAgentId });
+  const resultTarget = await captureSessionEventTargetForHost(initialAgentId, resultSessionKey, {
+    assertCaptureCurrent: input.assertCurrent,
+  });
+  input.assertCurrent?.();
   const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
     agentId: initialAgentId,
     demand: "scheduled",
@@ -253,22 +268,41 @@ export async function prepareCronRunContext(params: {
         update,
         assertCommitAllowed,
       }) => {
+        const assertCurrent = () => {
+          input.assertCurrent?.();
+          assertCommitAllowed?.();
+        };
         const { applySessionEntryLifecycleMutation, patchSessionEntryCore } =
           await loadSessionAccessorRuntime();
         if (resetBoundary) {
+          const followsOwnedReset =
+            resultTarget.agentId === agentId &&
+            resultTarget.sessionKey === sessionKey &&
+            resultTarget.storePath === storePath &&
+            resultTarget.sessionId === cronSession.initialSessionEntry?.sessionId &&
+            resultTarget.lifecycleRevision === cronSession.initialSessionEntry?.lifecycleRevision;
           await applySessionEntryLifecycleMutation({
             activeSessionKey: sessionKey,
             agentId,
             storePath,
+            commitGuard: assertCurrent,
             upserts: [
               {
                 sessionKey,
                 resetBoundary,
-                buildEntry: ({ currentEntry }) => update(currentEntry),
+                buildEntry: ({ currentEntry }) => {
+                  assertCurrent();
+                  return update(currentEntry);
+                },
               },
             ],
             skipMaintenance: true,
           });
+          if (followsOwnedReset) {
+            // Advance only this committed reset; retain the target's physical-store capture.
+            resultTarget.sessionId = fallbackEntry.sessionId;
+            resultTarget.lifecycleRevision = fallbackEntry.lifecycleRevision;
+          }
           return;
         }
         // Guarded replace reads the freshest row so lifecycle claims reject stale owners.
@@ -278,7 +312,7 @@ export async function prepareCronRunContext(params: {
           {
             fallbackEntry,
             replaceEntry: true,
-            workerGuard: { assertCurrent: assertCommitAllowed },
+            workerGuard: { assertCurrent },
           },
         );
       };
@@ -476,21 +510,23 @@ export async function prepareCronRunContext(params: {
       });
 
       const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
-      // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
-      const currentConversationContext =
-        input.job.sessionTarget === "current" && agentPayload && sourceSessionKey && sourceEntry
-          ? await buildCurrentConversationContextBlock({
-              agentId,
-              sourceSessionEntry: sourceEntry,
-              sourceSessionKey,
-              storePath: cronSession.storePath,
-            })
-          : undefined;
-      const turnMessage =
-        input.job.payload.kind === "agentTurn" ? input.job.payload.message : input.message;
-      const message = currentConversationContext
-        ? `${currentConversationContext}\n\n${turnMessage}`
-        : turnMessage;
+      const message = await resolveCronAutomationMessage({
+        cfg: admittedConfig,
+        job: input.job,
+        agentId,
+        runSessionKey,
+        message: input.message,
+        sourceSessionKey,
+        sourceEntry,
+        storePath: cronSession.storePath,
+        assertCurrent: () => {
+          input.assertCurrent?.();
+          (input.abortSignal ?? input.signal)?.throwIfAborted();
+          if (!sessionWorkAdmission.isActive()) {
+            throw new CronSessionLifecycleClaimError(agentSessionKey);
+          }
+        },
+      });
       const sourcePromptPrefix = `[cron:${input.job.id} ${input.job.name}]`;
       const base = `${sourcePromptPrefix} ${message}`.trim();
       const isExternalHook =
@@ -529,6 +565,14 @@ export async function prepareCronRunContext(params: {
       commandBody = appendCronUnattendedRunPreamble(commandBody, {
         externalHook: isExternalHook,
       });
+
+      const scratchSnapshot = await readCronScratchSnapshot(
+        resolveCronJobsStorePathFromConfig(admittedConfig),
+        { kind: "job", jobId: input.job.id, createdAtMsFallback: input.job.createdAtMs },
+        {},
+        { assertCurrent: input.assertCurrent, signal: input.abortSignal ?? input.signal },
+      );
+      commandBody = appendCronJobScratchPrompt(commandBody, scratchSnapshot?.state.scratch);
 
       const skillsSnapshot = await resolveCronSkillsSnapshot({
         workspaceDir,
@@ -628,6 +672,7 @@ export async function prepareCronRunContext(params: {
           agentCfg,
           agentDir,
           agentSessionKey,
+          resultTarget,
           sourceSessionKey:
             input.job.sessionTarget === "isolated"
               ? input.job.sourceConversation?.sessionKey

@@ -47,6 +47,7 @@ async function createHarness(params: {
   const events: CronEvent[] = [];
   const eventContexts: Array<CronEventContext | undefined> = [];
   const enqueueSystemEvent = vi.fn();
+  const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
   const runIsolatedAgentJob =
     params.runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const }));
   const deps: CronServiceDeps = {
@@ -57,7 +58,8 @@ async function createHarness(params: {
     cronConfig: { triggers: { enabled: true } },
     log: logger,
     enqueueSystemEvent,
-    requestHeartbeat: vi.fn(),
+    runSessionEvent,
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob,
     ...(params.evaluateCronTrigger ? { evaluateCronTrigger: params.evaluateCronTrigger } : {}),
     ...(params.runScriptJob ? { runScriptJob: params.runScriptJob } : {}),
@@ -69,7 +71,16 @@ async function createHarness(params: {
   };
   const cron = new CronService(deps);
   await cron.start();
-  return { cron, deps, enqueueSystemEvent, eventContexts, events, runIsolatedAgentJob, storePath };
+  return {
+    cron,
+    deps,
+    enqueueSystemEvent,
+    runSessionEvent,
+    eventContexts,
+    events,
+    runIsolatedAgentJob,
+    storePath,
+  };
 }
 
 async function runWhenDue(cron: CronService, jobId: string) {
@@ -239,6 +250,7 @@ describe("cron trigger evaluation", () => {
         }),
       );
       await runWhenDue(harness.cron, job.id);
+      expect(harness.runSessionEvent).not.toHaveBeenCalled();
       expect(harness.enqueueSystemEvent).not.toHaveBeenCalled();
       await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: true, active: 0 });
       const state = harness.cron.getJob(job.id)?.state;
@@ -289,6 +301,7 @@ describe("cron trigger evaluation", () => {
         evaluation.resolve({ kind: "evaluated", fire: true, state: { owner: "late result" } });
         await run;
         expect(signal.aborted).toBe(true);
+        expect(harness.runSessionEvent).not.toHaveBeenCalled();
         expect(harness.enqueueSystemEvent).not.toHaveBeenCalled();
         expect(harness.runIsolatedAgentJob).not.toHaveBeenCalled();
         expect(harness.events.filter((event) => event.action === "finished")).toEqual([
@@ -381,10 +394,13 @@ describe("cron trigger evaluation", () => {
         }),
       );
       await runWhenDue(harness.cron, job.id);
-      expect(harness.enqueueSystemEvent).toHaveBeenCalledWith(
-        "base message\n\nCI became red",
-        expect.any(Object),
+      expect(harness.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          text: "base message\n\nCI became red",
+          job: expect.objectContaining({ id: job.id }),
+        }),
       );
+      expect(harness.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(harness.events.find((event) => event.action === "finished")).toMatchObject({
         status: "ok",
         triggerFired: true,
@@ -684,7 +700,7 @@ function createTriggerDeps(
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     evaluateCronTrigger,
   };
@@ -724,7 +740,8 @@ describe("cron trigger cadence", () => {
       await cron.start();
 
       expect(evaluateCronTrigger).toHaveBeenCalledTimes(2);
-      expect(deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(deps.runSessionEvent).toHaveBeenCalledOnce();
+      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
     } finally {
       cron.stop();
@@ -828,8 +845,8 @@ describe("cron trigger cadence", () => {
       expect(persisted?.state).toMatchObject(expected);
       expect(persisted?.state.lastRunAtMs).toBeUndefined();
       expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+      expect(deps.runSessionEvent).not.toHaveBeenCalled();
       expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
     } finally {
       cron.stop();
     }

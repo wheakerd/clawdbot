@@ -2011,6 +2011,7 @@ describe("active-memory plugin", () => {
         "exec",
         "read",
         "web_search",
+        "automations",
         " MEMORY_SEARCH ",
         " lcm_grep ",
         "",
@@ -4160,7 +4161,7 @@ describe("active-memory plugin", () => {
 
     const result = await runPromptBuild(
       { prompt: "what wings should i order?" },
-      { trigger: "heartbeat", sessionKey, messageProvider: "webchat" },
+      { trigger: "cron", sessionKey, messageProvider: "webchat" },
     );
 
     expect(result).toBeUndefined();

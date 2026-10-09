@@ -153,7 +153,7 @@ async function resolvePreparedCronDeliveryPreview(
     const detail =
       plan.mode === "none"
         ? `message tool target unresolved: ${resolved.error.message}`
-        : `${requestedChannel === "last" ? "last -> no route, will fail-closed: " : ""}${resolved.error.message}`;
+        : `${plan.target === "owner" ? "owner has no route: " : requestedChannel === "last" ? "last -> no route, will fail-closed: " : ""}${resolved.error.message}`;
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
       detail:
@@ -166,11 +166,13 @@ async function resolvePreparedCronDeliveryPreview(
   return {
     label: `${plan.mode} -> ${formatTarget(resolved.channel, resolved.to)}`,
     detail:
-      requestedChannel !== "last"
-        ? "explicit"
-        : deliverySessionKey
-          ? `resolved from last, session ${deliverySessionKey}`
-          : "resolved from last, main session",
+      plan.target === "owner"
+        ? "resolved from configured owner"
+        : requestedChannel !== "last"
+          ? "explicit"
+          : deliverySessionKey
+            ? `resolved from last, session ${deliverySessionKey}`
+            : "resolved from last, main session",
   };
 }
 

@@ -253,7 +253,7 @@ exit "$RG_STATUS"
         models?: { catalogRefresh?: { enabled?: boolean } };
       };
       expect(parsedConfig).toMatchObject({
-        agents: { defaults: { heartbeat: { every: "0m" } } },
+        cron: { enabled: false },
         browser: { enabled: false },
         update: { checkOnStart: false },
         gateway: {

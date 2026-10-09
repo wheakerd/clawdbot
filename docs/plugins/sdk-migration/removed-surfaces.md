@@ -46,6 +46,34 @@ subpaths, including older published `@openclaw/discord` packages. Upgrade affect
 plugins before upgrading the host. Not every export has a path-only replacement;
 see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
 
+### Heartbeat runtime and reply helpers
+
+The Heartbeat to Automations cutover removes the heartbeat execution APIs with
+maintainer approval dated October 3, 2026. This is a **breaking Plugin SDK change**;
+there are no deprecated heartbeat aliases. Upgrade plugins that import or call
+these APIs before upgrading the host.
+
+| Removed surface                                                                                                                                                                 | Replacement                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openclaw/plugin-sdk/heartbeat-runtime`                                                                                                                                         | Use ordinary Automations through the service-owned Cron capability.                                                                                                                                                                                                                                                                          |
+| `api.runtime.system.requestHeartbeat`, `requestHeartbeatNow`, and `runHeartbeatOnce`                                                                                            | For immediate asynchronous follow-ups, capture the destination with `captureSessionEventTarget(agentId, sessionKey)` before starting work, then call `enqueueSessionEvent(text, { agentId, sessionKey, expectedTarget })`. Await its `accepted` or `settled` receipt as required. For scheduled work, use the service-owned Cron capability. |
+| `reply-runtime.HEARTBEAT_PROMPT`, `DEFAULT_HEARTBEAT_ACK_MAX_CHARS`, `resolveHeartbeatPromptCore`, `stripHeartbeatToken`, `resolveHeartbeatReplyPayload`, and `HEARTBEAT_TOKEN` | Use an ordinary Automation prompt and ordinary replies. `SILENT_REPLY_TOKEN` and `isSilentReplyText` remain available from `reply-runtime`.                                                                                                                                                                                                  |
+| `agent-harness-runtime.HeartbeatToolResponse`, `HEARTBEAT_RESPONSE_TOOL_NAME`, and `normalizeHeartbeatToolResponse`                                                             | Remove heartbeat response tool registration and response normalization. Scheduled runs use ordinary assistant replies.                                                                                                                                                                                                                       |
+| `provider-model-shared.GPT5_HEARTBEAT_PROMPT_OVERLAY` and `GPT5_FRIENDLY_PROMPT_OVERLAY`                                                                                        | Use the ordinary chat overlay when appropriate; no heartbeat prompt overlay remains.                                                                                                                                                                                                                                                         |
+
+A service that previously woke a heartbeat can use
+`await context.getCron()?.wake({ mode: "now", text })`. This starts ordinary session
+work under the service capability; it does not run a separate heartbeat engine.
+`enqueueSystemEvent(text, options)` remains a passive, two-argument queue API and
+does not itself execute a turn. Use `enqueueSessionEvent` for an immediate
+follow-up, and keep the captured target so completion cannot drift into a
+replacement session.
+
+Host-owned scheduling and event authority cannot be supplied through public
+reply options. The `heartbeat_prompt_contribution` hook remains supported for
+receipt-owned migrated and default proactive jobs. Transport keepalives are
+unaffected.
+
 ### Retroactively recorded shipped exports
 
 The following exports shipped in `v2026.9.8` and were removed without a

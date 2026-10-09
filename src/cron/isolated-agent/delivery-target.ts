@@ -40,6 +40,7 @@ export type DeliveryTargetResolution =
       mode: "explicit" | "implicit";
       error: Error;
       sourceConversationUnavailable?: true;
+      deliverySuppressionReason?: "channel_transform";
     };
 
 // Explicit destinations remain owed when channel selection fails; remembered
@@ -145,7 +146,10 @@ function stripSelectedProviderPrefix(params: { channel: string; to?: string }): 
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
-  jobPayload: Pick<CronDeliveryPlan, "channel" | "to" | "threadId" | "accountId"> &
+  jobPayload: Pick<
+    CronDeliveryPlan,
+    "target" | "directPolicy" | "channel" | "to" | "threadId" | "accountId"
+  > &
     Partial<Pick<CronStoredJob, "sessionKey" | "sessionTarget" | "sourceConversation">>,
   options?: {
     dryRun?: boolean;
@@ -202,6 +206,42 @@ export async function resolveDeliveryTarget(
   // A missing creating conversation cannot inherit another conversation's shared route.
   const main =
     hasConversationCompletion && usedSharedMainFallback ? undefined : sessionContext.main;
+
+  if (jobPayload.target === "owner") {
+    const resolved = await deliveryTargetRuntime.resolveProactiveDeliveryTargetWithSessionRoute({
+      cfg,
+      agentId,
+      entry: main,
+      currentSessionKey: threadSessionKey,
+      policy: {
+        target: "owner",
+        channel: requestedChannel === "last" ? undefined : requestedChannel,
+        accountId: jobPayload.accountId,
+        directPolicy: jobPayload.directPolicy,
+      },
+    });
+    return resolved.channel !== "none" && resolved.to
+      ? {
+          ok: true,
+          channel: resolved.channel,
+          to: resolved.to,
+          accountId: resolved.accountId,
+          threadId: resolved.threadId,
+          mode: "explicit",
+        }
+      : {
+          ok: false,
+          channel: resolved.channel,
+          accountId: resolved.accountId,
+          mode: "explicit",
+          ...(resolved.reason === "dm-blocked"
+            ? { deliverySuppressionReason: "channel_transform" as const }
+            : {}),
+          error: new Error(
+            `Owner delivery unavailable (${resolved.reason ?? "no-route"}); configure an authorized owner DM or edit this automation's delivery`,
+          ),
+        };
+  }
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
@@ -279,7 +319,7 @@ export async function resolveDeliveryTarget(
   const explicitThreadId = isNonEmptyThreadId(jobPayload.threadId)
     ? jobPayload.threadId
     : undefined;
-  const failTarget = (error: Error): DeliveryTargetResolution => ({
+  const failTarget = (error: Error): Extract<DeliveryTargetResolution, { ok: false }> => ({
     ok: false,
     channel,
     to: undefined,
@@ -450,6 +490,19 @@ export async function resolveDeliveryTarget(
     });
   const threadId =
     explicitThreadId ?? route?.threadId ?? (canUseSessionThread ? resolved.threadId : undefined);
+  if (
+    jobPayload.directPolicy === "block" &&
+    (resolvedTarget.kind === "user" ||
+      route?.chatType === "direct" ||
+      route?.peer.kind === "direct")
+  ) {
+    return {
+      ...failTarget(
+        new Error("Automation delivery to direct messages is blocked by delivery.directPolicy"),
+      ),
+      deliverySuppressionReason: "channel_transform",
+    };
+  }
   return {
     ok: true,
     channel,

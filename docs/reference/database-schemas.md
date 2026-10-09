@@ -23,6 +23,11 @@ CLI, Doctor, cron, and plugin child processes must route mutations through the
 Gateway or acquire exclusive ownership while it is stopped. First admission,
 migration, repair, and final live-authority checks retain their existing owners.
 
+Current shared state uses [schema 21](/reference/database-schemas/state-schema-history#state-schema-21),
+which fences ordinary automation policies after Heartbeat retirement without adding
+tables. The agent schema remains 24. Deferred physical cleanup is recorded in the
+[state storage README](https://github.com/openclaw/openclaw/blob/main/src/state/README.md).
+
 Native SQLite initialization reads the loaded library's version and extension
 capability in one query before admitting real state databases. Auth-profile
 readers install their lock-wait timeout at connection open.

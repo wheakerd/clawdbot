@@ -5,6 +5,7 @@ import type {
   CronJob,
   CronRunErrorClassification,
 } from "../types.js";
+import { isDeferredCronAdmission } from "./admission-deferred.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { finishCronRun } from "./run-history.js";
 import {
@@ -104,6 +105,7 @@ export async function emitCronRunFinished(
     errorClassification?: CronRunErrorClassification;
     failureNotificationDetail?: CronFailureNotificationDetail;
     historySource?: CronRunHistorySource;
+    admissionDeferred?: true;
   },
 ): Promise<void> {
   const event = {
@@ -112,15 +114,17 @@ export async function emitCronRunFinished(
       evt.completionStatus ??
       resolveCronCompletionStatus({ status: evt.status, deliveryStatus: evt.deliveryStatus }),
   };
-  await finishCronRun(state, {
-    taskRunId,
-    job: evt.job,
-    event,
-    historySource: details?.historySource,
-    errorClassification: details?.errorClassification,
-    ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
-    ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
-  });
+  if (!details?.admissionDeferred) {
+    await finishCronRun(state, {
+      taskRunId,
+      job: evt.job,
+      event,
+      historySource: details?.historySource,
+      errorClassification: details?.errorClassification,
+      ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
+      ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
+    });
+  }
   details?.historySource?.assertCurrent();
   emit(state, event, cronFailureNotificationEventContext(details?.failureNotificationDetail));
   if (tracker) {
@@ -174,6 +178,7 @@ export async function emitMissingRequestedCronRunTerminal(
     {
       errorClassification: quiet ? undefined : result.errorClassification,
       failureNotificationDetail: quiet ? undefined : result.failureNotificationDetail,
+      ...(isDeferredCronAdmission(result.job, result) ? { admissionDeferred: true } : {}),
     },
   );
 }

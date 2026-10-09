@@ -1,5 +1,11 @@
 import "./isolated-agent.mocks.js";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { resolveDefaultSessionStorePath } from "../config/sessions.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   peekSystemEventEntries,
@@ -13,7 +19,6 @@ import {
   makeCfg,
   makeJob,
   withTempCronHome,
-  writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
@@ -31,15 +36,20 @@ async function withAnnounce(
   ) => void = () => {},
 ) {
   await withTempCronHome(async (home) => {
-    const storePath = await writeSessionStoreEntries(home, options.entries ?? {});
+    const storePath = resolveDefaultSessionStorePath("main");
     const deps = createCliDeps();
     mockAgentPayloads(options.texts.map((text) => ({ text })));
+    const cfg = makeCfg(home, storePath, {
+      ...options.cfg,
+      ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
+    });
+    setRuntimeConfigSnapshot(cfg);
+    for (const [sessionKey, entry] of Object.entries(options.entries ?? {})) {
+      await replaceSessionEntry({ agentId: "main", storePath, sessionKey }, entry);
+    }
     const result = await runCronIsolatedAgentTurn({
       deliveryAttemptFence: null,
-      cfg: makeCfg(home, storePath, {
-        ...options.cfg,
-        ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
-      }),
+      cfg,
       deps,
       job: {
         ...makeJob({ kind: "agentTurn", message: "do it" }),
@@ -54,10 +64,12 @@ async function withAnnounce(
 }
 
 describe("isolated cron delivery awareness", () => {
+  afterEach(clearRuntimeConfigSnapshot);
   beforeAll(async () => {
     setupIsolatedAgentTurnMocks();
     resetSystemEventsForTest();
     await withAnnounce({ texts: ["warm runtime"] });
+    clearRuntimeConfigSnapshot();
   });
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();

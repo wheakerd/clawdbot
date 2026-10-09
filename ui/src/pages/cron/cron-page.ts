@@ -1,7 +1,7 @@
 import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { AgentsListResult, CronJob, CronScratchGetResult } from "../../api/types.ts";
+import type { AgentsListResult, CronJob } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -80,7 +80,6 @@ class CronPage extends OpenClawLightDomElement {
   @state() private modelSuggestionsError: string | null = null;
   @state() private listTab: CronListTab = "tasks";
   @state() private detailTab: CronDetailTab = "settings";
-  @state() private heartbeatScratch = "";
 
   private readonly runTranscript = new CronRunTranscript(this, () => {
     const scope = this.gateway.capture();
@@ -104,7 +103,6 @@ class CronPage extends OpenClawLightDomElement {
     isCurrentConnection: (scope) => this.gateway.isCurrent(scope),
     notify: (cronState) => this.requestCronUpdate(cronState),
   });
-  private heartbeatScratchRequest = 0;
   private pageHidden = document.visibilityState === "hidden";
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -113,7 +111,6 @@ class CronPage extends OpenClawLightDomElement {
       if (change.initial) {
         this.resetGatewayState(change.snapshot);
       } else if (!readGatewayOperatorAccess(change.snapshot).canAdmin) {
-        this.clearHeartbeatScratch();
         this.deliveryDirectory.clear();
       }
       if (!change.initial && change.becameAvailable && !change.becameConnected) {
@@ -202,7 +199,6 @@ class CronPage extends OpenClawLightDomElement {
 
   private resetGatewayState(snapshot?: ApplicationContext["gateway"]["snapshot"]) {
     this.runTranscript.close();
-    this.clearHeartbeatScratch();
     invalidateCronRefresh(this.cron);
     const connected = snapshot?.phase === "connected";
     const cron = createInitialCronState({
@@ -423,7 +419,6 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private selectJob(job: CronJob, runId: string | null = null) {
-    this.clearHeartbeatScratch();
     this.pendingRouteData = null;
     this.highlightedRunId = runId;
     this.pendingRunScroll = Boolean(runId);
@@ -434,9 +429,6 @@ class CronPage extends OpenClawLightDomElement {
     startCronEdit(this.cron, job);
     this.deliveryDirectory.openEditor();
     this.requestCronUpdate();
-    if (job.payload?.kind === "heartbeat") {
-      void this.loadHeartbeatScratch(this.cron, job.id, this.heartbeatScratchRequest);
-    }
     void this.runCronTask(async (cronState) => {
       // Claim the run pane before awaiting: loadCronRuns drops responses whose
       // job no longer matches, so a slower earlier selection cannot overwrite
@@ -451,44 +443,7 @@ class CronPage extends OpenClawLightDomElement {
     return loadCronRuns(cronState);
   }
 
-  private clearHeartbeatScratch() {
-    this.heartbeatScratchRequest += 1;
-    this.heartbeatScratch = "";
-  }
-
-  private async loadHeartbeatScratch(cronState: CronState, jobId: string, requestId: number) {
-    const client = cronState.client;
-    if (!this.canManageCron || !client || !cronState.connected) {
-      return;
-    }
-    const connectionScope = this.gateway.capture();
-    if (!connectionScope) {
-      return;
-    }
-    // Scratch is admin-only and selection-owned. Revalidate every owner after
-    // the request so a stale response cannot survive a scope or panel change.
-    const isCurrent = () =>
-      this.cron === cronState &&
-      this.heartbeatScratchRequest === requestId &&
-      this.gateway.isCurrent(connectionScope) &&
-      this.canManageCron &&
-      cronState.cronEditingJob?.id === jobId &&
-      cronState.cronForm.payloadKind === "heartbeat";
-    try {
-      const result = await client.request<CronScratchGetResult>("cron.scratch.get", { id: jobId });
-      if (isCurrent()) {
-        this.heartbeatScratch = result.scratch?.content ?? "";
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        cronState.cronError = formatUiError(error);
-        this.requestCronUpdate(cronState);
-      }
-    }
-  }
-
   private resetEditor(createOpen: boolean) {
-    this.clearHeartbeatScratch();
     this.pendingRouteData = null;
     // Retire the outgoing editor's discovery before resetting its form so
     // late saves, deletions, and directory failures cannot affect its successor.
@@ -513,7 +468,6 @@ class CronPage extends OpenClawLightDomElement {
     if (!this.canManageCron) {
       return;
     }
-    this.clearHeartbeatScratch();
     this.pendingRouteData = null;
     // A clone is a prefilled create: the editor submits cron.add, not update.
     startCronClone(this.cron, job);
@@ -697,7 +651,6 @@ class CronPage extends OpenClawLightDomElement {
             this.modelSuggestionsError,
           busy: this.cron.cronBusy,
           form: this.cron.cronForm,
-          heartbeatScratch: canManage ? this.heartbeatScratch : "",
           channels: channels.channelsSnapshot?.channelMeta?.length
             ? channels.channelsSnapshot.channelMeta.map((entry) => entry.id)
             : (channels.channelsSnapshot?.channelOrder ?? []),

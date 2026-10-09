@@ -45,7 +45,6 @@ it("emits usage diagnostics for a deliberate silent reply", async () => {
     commandBody: followupRun.prompt,
     defaultModel: "gpt-5.6-luna",
     followupRun,
-    isHeartbeat: true,
     pendingToolTasks: new Set(),
     preflightCompactionApplied: false,
     queueKey: sessionKey,
@@ -88,7 +87,6 @@ it("emits usage diagnostics for a deliberate silent reply", async () => {
     typingSignals: createTypingSignaler({
       typing: createMockTypingController(),
       mode: "never",
-      isHeartbeat: true,
     }),
   };
 

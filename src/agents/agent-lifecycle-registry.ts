@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
 import type { PersistedClawInstall } from "../claws/provenance-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureActiveCronJobAgentDeletion } from "../cron/active-jobs.js";
@@ -36,7 +37,10 @@ import {
   type AgentDeletionJournalCleanupPath,
   type AgentDeletionJournalEntry,
 } from "../state/agent-deletion-journal.js";
-import type { AgentDeletionWorkerPredicate } from "../state/agent-deletion-worker-contract.js";
+import type {
+  AgentDeletionWorkerGuard,
+  AgentDeletionWorkerPredicate,
+} from "../state/agent-deletion-worker-contract.js";
 import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import {
   readAgentLifecycleStoreFacts,
@@ -62,6 +66,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import type { OpenClawStateWorkerLeaseContext } from "../state/openclaw-state-lease-context.js";
 import { verifyOpenClawStateLeaseOwnership } from "../state/openclaw-state-lease-storage.js";
 import {
+  withOpenClawStateLeaseRemoteAdmission,
   withOpenClawStateLeaseWorkerAdmission,
   withOpenClawStateLeasesWorkerAdmission,
 } from "../state/openclaw-state-lease-worker-owner.js";
@@ -101,6 +106,12 @@ type AgentDeletionBeginOptions = {
 export type AgentDeletionOperation = AgentDeletionWorkerAuthority & {
   entry: AgentDeletionJournalEntry;
   previousEntry?: AgentDeletionJournalEntry;
+  runWithRemoteAdmission<T>(
+    operation: (
+      authority: Parameters<AgentDeletionJournalTransport>[1] & { databasePath: string },
+      guard: AgentDeletionWorkerGuard,
+    ) => Promise<Result<T, Error>>,
+  ): Promise<T>;
   assertCurrentAsync(this: void): Promise<void>;
   assertCurrentFinal(this: void): void;
   runDatabaseCleanup: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
@@ -413,6 +424,22 @@ export function withAgentDeletion<T>(
               ...authority,
               entry: journal,
               previousEntry,
+              runWithRemoteAdmission: (runRemote) => {
+                assertCurrentHost();
+                return withOpenClawStateLeaseRemoteAdmission(lease, statePath, async (remote) => {
+                  const assertCurrent = () => {
+                    assertCurrentHost();
+                    remote.assertCurrent();
+                  };
+                  assertCurrent();
+                  const result = await runRemote(
+                    { ...remote, databasePath: statePath, assertCurrent },
+                    { lease: remote.identity, predicate },
+                  );
+                  assertCurrent();
+                  return result;
+                });
+              },
               assertCurrentAsync,
               assertCurrentFinal,
               runDatabaseCleanup: createAgentDeletionDatabaseCleanup({

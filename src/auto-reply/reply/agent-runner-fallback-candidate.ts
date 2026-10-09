@@ -71,7 +71,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
   const runLane =
-    turn.isHeartbeat || turn.followupRun.run.internalEventExecution
+    turn.followupRun.run.scheduledAutomation || turn.followupRun.run.internalEventExecution
       ? CommandLane.CronNested
       : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
@@ -86,8 +86,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     offAnnounced: false,
     resetAnnounced: false,
   };
-  const bootstrapContextRunKind = turn.opts?.isHeartbeat
-    ? ("heartbeat" as const)
+  const bootstrapContextRunKind = turn.followupRun.run.scheduledAutomation
+    ? ("cron" as const)
     : ("default" as const);
 
   params.timing.logMilestoneIfSlow({
@@ -268,10 +268,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             }
             runStart.signalExecutionPhaseForTyping(info);
           };
-        const messageActionTurnCapability = mintReplyMessageActionTurnCapability(
-          turn,
-          params.runId,
-        );
+        const messageActionTurnCapability = turn.followupRun.run.scheduledAutomation
+          ? params.scheduledMessageActionTurnCapability
+          : mintReplyMessageActionTurnCapability(turn, params.runId);
         try {
           const common = {
             ...runOptions,
@@ -337,7 +336,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           return result;
         } finally {
           runStart.close();
-          revokeMessageActionTurnCapability(messageActionTurnCapability);
+          if (!params.scheduledMessageActionTurnCapability) {
+            revokeMessageActionTurnCapability(messageActionTurnCapability);
+          }
         }
       },
     }),

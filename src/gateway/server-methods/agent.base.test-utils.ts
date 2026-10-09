@@ -1897,8 +1897,12 @@ describe("gateway agent handler", () => {
         idempotencyKey: `test-idem-terminal-main-${runKind}-reuse`,
       } as AgentParams);
 
-      const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+      const call = await waitForAgentCommandCall<{
+        sessionId?: string;
+        bootstrapContextRunKind?: string;
+      }>();
       expect(call.sessionId).toBe("terminal-main-session");
+      expect(call.bootstrapContextRunKind).toBe("cron");
       expect(capturedEntry?.sessionId).toBe("terminal-main-session");
       expectSqliteSessionFileMarkerForEntry(capturedEntry);
     },

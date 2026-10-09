@@ -15,10 +15,7 @@ import {
 import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import {
-  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-} from "../../agents/failover/user-copy.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import {
   runFallbackModelAttempt,
@@ -1521,33 +1518,11 @@ describe("runReplyAgent MCP App channel action", () => {
   });
 });
 
-describe("runReplyAgent heartbeat followup guard", () => {
-  it("drops heartbeat runs when reply-lane admission finds an active owner", async () => {
-    const runState: ReplyOperationRunState = {};
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "active-session",
-      resetTriggered: false,
-    });
-    const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: true, [REPLY_OPERATION_RUN_STATE]: runState },
-      isActive: false,
-      shouldFollowup: false,
-    });
-
-    const result = await run();
-
-    expect(result).toBeUndefined();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).toHaveBeenCalledTimes(1);
-    expect(runState.admission).toEqual({ status: "skipped", reason: "active-run" });
-    active.complete();
-  });
-
-  it("records the operation owned by an admitted heartbeat run", async () => {
+describe("runReplyAgent admission and terminal accounting", () => {
+  it("records the operation owned by an admitted run", async () => {
     const runState: ReplyOperationRunState = {};
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: true, [REPLY_OPERATION_RUN_STATE]: runState },
+      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
     });
 
     await run();
@@ -1556,18 +1531,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(resolveReplyOperationAgentTurn(runState)).toBe("ok");
   });
 
-  it("kicks queued followups without handing them a heartbeat runner", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const { run } = createMinimalRun({ opts: { isHeartbeat: true } });
-
-    await expect(run()).resolves.toBeUndefined();
-
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    expect(vi.mocked(kickFollowupDrainIfIdle)).toHaveBeenCalledExactlyOnceWith("main");
-    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
-  });
-
-  it("records a failed heartbeat turn when a visible reply replaces its synthetic failure", async () => {
+  it("preserves the visible failure reply and records terminal failure", async () => {
     const runState: ReplyOperationRunState = {};
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Visible terminal failure." }],
@@ -1579,7 +1543,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
       },
     });
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: true, [REPLY_OPERATION_RUN_STATE]: runState },
+      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
     });
 
     const result = await run();
@@ -1617,46 +1581,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(runState.admission).toEqual({ status: "skipped", reason: "aborted" });
   });
 
-  it("drops heartbeat runs when another run is active", async () => {
-    const runState: ReplyOperationRunState = {};
-    const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: true, [REPLY_OPERATION_RUN_STATE]: runState },
-      isActive: true,
-      shouldFollowup: true,
-      resolvedQueueMode: "collect",
-    });
-
-    const result = await run();
-
-    expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).toHaveBeenCalledTimes(1);
-    expect(runState.admission).toEqual({ status: "skipped", reason: "active-run" });
-  });
-
-  it("drops heartbeat runs before steering active streams", async () => {
-    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
-    const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: true },
-      isActive: true,
-      shouldSteer: true,
-      shouldFollowup: true,
-      resolvedQueueMode: "collect",
-    });
-
-    const result = await run();
-
-    expect(result).toBeUndefined();
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).toHaveBeenCalledTimes(1);
-  });
-
-  it("still enqueues non-heartbeat runs when another run is active", async () => {
+  it("enqueues ordinary runs when another run is active", async () => {
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: false },
+      opts: {},
       isActive: true,
       shouldFollowup: true,
       resolvedQueueMode: "collect",
@@ -1713,7 +1640,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     });
     const runState: ReplyOperationRunState = {};
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: false, [REPLY_OPERATION_RUN_STATE]: runState },
+      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: true,
       isRunActive: () => true,
       shouldFollowup: true,
@@ -1737,7 +1664,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
       resetTriggered: false,
     });
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: false },
+      opts: {},
       isActive: true,
       isRunActive: () => true,
       shouldFollowup: true,
@@ -1758,7 +1685,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
   it("starts draining after enqueue when the reply lane owner is already gone", async () => {
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: false },
+      opts: {},
       isActive: true,
       isRunActive: () => false,
       shouldFollowup: true,
@@ -1782,7 +1709,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
       resetTriggered: false,
     });
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: false },
+      opts: {},
       isActive: true,
       isRunActive: () => true,
       shouldFollowup: true,
@@ -1975,32 +1902,6 @@ describe("runReplyAgent heartbeat followup guard", () => {
     }
   });
 
-  it("rethrows heartbeat failures after a delivered partial", async () => {
-    const accounting = await import("./session-usage.js");
-    const persistSpy = vi
-      .spyOn(accounting, "persistSessionUsageUpdate")
-      .mockRejectedValueOnce(new Error("persist exploded"));
-    const onPartialReply = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onPartialReply?.({ text: "heartbeat detail" });
-      return {
-        payloads: [{ text: "HEARTBEAT_OK" }],
-        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-      };
-    });
-
-    try {
-      const { run } = createMinimalRun({
-        blockStreamingEnabled: false,
-        opts: { isHeartbeat: true, onPartialReply },
-      });
-
-      await expect(run()).rejects.toThrow("persist exploded");
-    } finally {
-      persistSpy.mockRestore();
-    }
-  });
-
   it("keeps user aborts silent after a delivered partial", async () => {
     const replyOperation = createReplyOperation({
       sessionKey: "main",
@@ -2172,7 +2073,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     }
   });
 
-  it("does not persist message-tool-only final replies for heartbeat replay", async () => {
+  it("does not persist message-tool-only final replies for replay", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "private final" }],
@@ -2193,7 +2094,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.pendingFinalDelivery).toBeUndefined();
   });
 
-  it("does not persist sendPolicy-denied final replies for heartbeat replay", async () => {
+  it("does not persist sendPolicy-denied final replies for replay", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       sendPolicy: "deny",
     });
@@ -3568,7 +3469,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(events).toEqual(["adopted", "agent-run"]);
   });
 
-  it("keeps heartbeat replies with real content in pending final delivery", async () => {
+  it("keeps replies with real content in pending final delivery", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Sent daily summary to channel." }],
@@ -3576,7 +3477,6 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
 
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: true },
       sessionEntry,
       sessionStore,
       sessionKey: "main",
@@ -3604,7 +3504,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
 
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: true },
+      opts: {},
       sessionEntry,
       sessionStore,
       sessionKey: "main",
@@ -3632,7 +3532,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 });
 
-describe("runReplyAgent typing (heartbeat)", () => {
+describe("runReplyAgent typing and silence", () => {
   it("signals typing for normal runs", async () => {
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -3641,7 +3541,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
 
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply },
+      opts: { onPartialReply },
     });
     await run();
 
@@ -3650,7 +3550,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(typing.startTypingLoop).toHaveBeenCalled();
   });
 
-  it("never signals typing for heartbeat runs", async () => {
+  it("honors the resolved typing suppression mode", async () => {
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "hi" });
@@ -3658,7 +3558,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
 
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: true, onPartialReply },
+      opts: { onPartialReply },
+      typingMode: "never",
     });
     await run();
 
@@ -3667,33 +3568,36 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
-  it("does not persist heartbeat ack text as pending final delivery", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "openclaw-heartbeat-pending-"));
-    const storePath = join(dir, "sessions.json");
-    await replaceSessionEntry(
-      { storePath, sessionKey: "main" },
-      { sessionId: "session", updatedAt: 1 },
-    );
-    try {
-      state.runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "HEARTBEAT_OK" }],
-        meta: {},
-      });
+  it.each(["NO_REPLY", "HEARTBEAT_OK"])(
+    "does not persist %s from a silent turn as pending delivery",
+    async (text) => {
+      const dir = tempDirs.make("openclaw-silent-pending-");
+      const storePath = join(dir, "sessions.json");
+      await replaceSessionEntry(
+        { storePath, sessionKey: "main" },
+        { sessionId: "session", updatedAt: 1 },
+      );
+      try {
+        state.runEmbeddedAgentMock.mockResolvedValueOnce({
+          payloads: [{ text }],
+          meta: {},
+        });
 
-      const { run } = createMinimalRun({
-        opts: { isHeartbeat: true },
-        sessionCtx: { Provider: "heartbeat" },
-        sessionKey: "main",
-        storePath,
-      });
-      await run();
+        const { run } = createMinimalRun({
+          opts: {},
+          runOverrides: { terminalReplyExpectation: "optional" },
+          sessionKey: "main",
+          storePath,
+        });
+        await run();
 
-      const stored = requireStoredSessionEntry(storePath);
-      expect(stored.pendingFinalDelivery).toBeUndefined();
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
+        const stored = requireStoredSessionEntry(storePath);
+        expect(stored.pendingFinalDelivery).toBeUndefined();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("suppresses NO_REPLY partials but allows normal No-prefix partials", async () => {
     const cases = [
@@ -3733,7 +3637,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
 
       const { run, typing } = createMinimalRun({
-        opts: { isHeartbeat: false, onPartialReply },
+        opts: { onPartialReply },
         runOverrides: { terminalReplyExpectation: "optional" },
         typingMode: "message",
       });
@@ -4392,8 +4296,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
     {
       label: "heartbeat acknowledgement",
       payload: { text: "HEARTBEAT_OK" },
-      opts: { isHeartbeat: true as const },
-      expectedText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+      opts: undefined,
+      expectedText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
     },
     {
       label: "reasoning-only output",

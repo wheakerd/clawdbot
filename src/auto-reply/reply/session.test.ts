@@ -3026,12 +3026,8 @@ describe("drainFormattedSystemEvents", () => {
     }
   });
 
-  it("leaves tagged cron events queued during heartbeat runs instead of re-rendering them (#44922)", async () => {
+  it("drains only the selected occurrence while preserving other queued events", async () => {
     try {
-      // A `sessionTarget: "main"` cron systemEvent is enqueued tagged `cron:<jobId>`
-      // and is surfaced by the heartbeat's dedicated reminder prompt. The generic
-      // render must not also emit it as a raw `System:` line during that heartbeat
-      // run, or the model sees the same text twice.
       enqueueSystemEvent("Reminder: rotate API keys", {
         sessionKey: "agent:main:main",
         contextKey: "cron:rotate-keys",
@@ -3052,7 +3048,6 @@ describe("drainFormattedSystemEvents", () => {
 
       expect(result).toContain("Model switched.");
       expect(result).not.toContain("rotate API keys");
-      // The cron event stays queued so the heartbeat path remains its single owner.
       expect(peekSystemEvents("agent:main:main")).toEqual(["Reminder: rotate API keys"]);
     } finally {
       resetSystemEventsForTest();
@@ -3141,10 +3136,10 @@ describe("persistSessionUsageUpdate", () => {
       absent: ["agentHarnessId"],
     },
     {
-      name: "preserves the displayed session model when heartbeat usage uses a heartbeat model",
+      name: "preserves the displayed session model when a turn-local model is used",
       seed: { modelProvider: "openai", model: "gpt-5.4" },
       update: {
-        isHeartbeat: true,
+        preserveRuntimeModel: true,
         usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
         lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
         providerUsed: "openai",
@@ -3653,11 +3648,13 @@ describe("initSessionState internal channel routing preservation", () => {
 
     const result = await initSessionState({
       ctx: {
-        Body: "heartbeat tick",
+        Body: "session event",
         SessionKey: sessionKey,
-        Provider: "heartbeat",
-        From: "heartbeat",
-        To: "heartbeat",
+        Provider: "internal",
+        InternalTurnSource: "event",
+        InputProvenance: { kind: "internal_system", sourceTool: "session-event" },
+        From: "internal",
+        To: "internal",
       },
       cfg,
     });

@@ -76,7 +76,6 @@ function createPluginReloadHandler(
   let reloadState: ReturnType<ReloadParams["getState"]> = {
     hooksConfig: null,
     hookClientIpConfig: {},
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: fixture.state.path("cron.sqlite"),
@@ -84,7 +83,6 @@ function createPluginReloadHandler(
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
-      reconcileSystemJobs: vi.fn(async () => "converged" as const),
     },
   };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
