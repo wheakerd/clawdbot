@@ -190,6 +190,7 @@ describe("createGatewayRuntimeState", () => {
     const getGatewayRequestContext = vi.fn(() => requestContext);
     const runtimeState = await createGatewayRuntimeStateForTest(registry, {
       getGatewayRequestContext,
+      httpRequestLifetime: requestContext,
     });
     runtimeState.wss.once("connection", (socket) => socket.close());
     const server = runtimeState.httpServers[0];
@@ -209,7 +210,7 @@ describe("createGatewayRuntimeState", () => {
         status: 404,
       });
       expect(mocks.pluginsHttpModuleLoaded).not.toHaveBeenCalled();
-      expect(getGatewayRequestContext).toHaveBeenCalledOnce();
+      expect(getGatewayRequestContext).not.toHaveBeenCalled();
       expect(trackExecution).toHaveBeenCalledOnce();
 
       gatewaySocket = new WebSocket(`ws://127.0.0.1:${address.port}/`, {
@@ -220,7 +221,7 @@ describe("createGatewayRuntimeState", () => {
         gatewaySocket?.once("error", reject);
       });
       expect(mocks.pluginsHttpModuleLoaded).not.toHaveBeenCalled();
-      expect(getGatewayRequestContext).toHaveBeenCalledOnce();
+      expect(getGatewayRequestContext).not.toHaveBeenCalled();
       expect(trackExecution).toHaveBeenCalledOnce();
       expect(pluginUpgrade).not.toHaveBeenCalled();
 
