@@ -152,7 +152,9 @@ async function cleanupCronTestRun(params: {
 }) {
   params.ws?.close();
   await params.server?.close();
-  params.cronState?.cron.stop();
+  if (params.cronState) {
+    await expectDefined(params.cronState.cron.stopAndDrain?.(), "direct cron drain");
+  }
   testState.cronStorePath = undefined;
   testState.cronEnabled = undefined;
   testState.cronTriggersEnabled = undefined;
@@ -194,6 +196,7 @@ async function setupCronTestRun(
 }
 
 type DirectCronState = GatewayCronState & {
+  schedulerClock: ReturnType<typeof createGatewaySchedulerClock>;
   getRuntimeConfig: () => import("../config/types.openclaw.js").OpenClawConfig;
 };
 
@@ -213,12 +216,11 @@ async function createDirectCronState(params?: {
     import("../config/config.js"),
     import("./server-cron.js"),
   ]);
+  const schedulerClock = createGatewaySchedulerClock(Date.now());
   const cronState = {
+    schedulerClock,
     ...buildGatewayCronService({
-      scheduler: createTestGatewayScheduler({
-        ...createGatewaySchedulerClock().clock,
-        now: () => Date.now(),
-      }),
+      scheduler: createTestGatewayScheduler(schedulerClock.clock),
       cfg: getRuntimeConfig(),
       deps: {} as never,
       broadcast: params?.broadcast ?? vi.fn(),
@@ -710,21 +712,36 @@ describe("gateway server cron", () => {
       storePath: expect.stringContaining("openclaw.sqlite"),
     });
 
+    const disabled = await directCronReq(cronState, "cron.update", {
+      id: jobId,
+      patch: { enabled: false },
+    });
+    expect(disabled.ok).toBe(true);
+    const startupAtMs = cronState.schedulerClock.clock.now();
     const autoRes = await directCronReq(cronState, "cron.add", {
       name: "auto run test",
       enabled: true,
-      schedule: { kind: "at", at: new Date(Date.now() - 1).toISOString() },
+      schedule: { kind: "at", at: new Date(startupAtMs - 1).toISOString() },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "auto" },
     });
     const autoJobId = expectCronJobIdFromResponse(autoRes);
 
+    await cronState.cron.start();
+    const deferred = expectDefined(
+      (await loadCronStore(cronState.storePath)).jobs.find((job) => job.id === autoJobId),
+      "durable startup receiver",
+    );
+    const deferredAtMs = expectDefined(deferred.state.nextRunAtMs, "deferred startup slot");
+    expect(deferredAtMs).toBe(startupAtMs + 120_000);
+    await cronState.schedulerClock.advanceTo(deferredAtMs - 1);
+    expect(readCronRunRecordsForTests(autoJobId)).toEqual([]);
     const autoFinished = events.wait(
       (payload) => payload?.jobId === autoJobId && payload?.action === "finished",
     );
-    await cronState.cron.start();
-    await autoFinished;
+    await cronState.schedulerClock.advanceTo(deferredAtMs);
+    await expect(autoFinished).resolves.toMatchObject({ jobId: autoJobId, status: "ok" });
     const autoEntries = (await directCronReq(cronState, "cron.runs", { id: autoJobId, limit: 10 }))
       .payload as { entries?: Array<{ jobId?: unknown }> } | undefined;
     expect(Array.isArray(autoEntries?.entries)).toBe(true);

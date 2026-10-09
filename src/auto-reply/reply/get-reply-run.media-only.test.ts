@@ -237,11 +237,9 @@ vi.mock("../../config/sessions/group.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", async (importOriginal) => {
-  const { resolveExplicitSessionStorePathForScope, resolveSessionArtifactDirectory } =
-    await importOriginal<typeof import("../../config/sessions/paths.js")>();
+  const actual = await importOriginal<typeof import("../../config/sessions/paths.js")>();
   return {
-    resolveExplicitSessionStorePathForScope,
-    resolveSessionArtifactDirectory,
+    ...actual,
     resolveSessionFilePathCore: vi.fn().mockReturnValue("/tmp/session.jsonl"),
     resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
     resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/session-store"),

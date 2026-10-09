@@ -18,7 +18,6 @@ import {
   type CompactNodeTestShard,
   type NodeTestShardGroup,
   createNodeTestShardBundles,
-  createSelectedNodeTestShardBundles,
   isExclusiveCompactShardName,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { rebalanceRuntimeTestJobs } from "../../scripts/lib/ci-runtime-test-placement.mts";
@@ -837,10 +836,20 @@ describe("runtime placement observations", () => {
         ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
         fullSuiteVitestShards,
       }));
-      vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({ ...testTimings }));
-      vi.doMock("../../scripts/lib/local-check-runtime.mts", () => ({ ...localCheckRuntime }));
-      vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", () => ({
-        ...buildPrerequisites,
+      vi.doMock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../../scripts/lib/ci-test-timings.mts")>()),
+        readCompactGroupTimings: testTimings.readCompactGroupTimings,
+        readRuntimePlacementTimings: testTimings.readRuntimePlacementTimings,
+      }));
+      vi.doMock("../../scripts/lib/local-check-runtime.mts", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../../scripts/lib/local-check-runtime.mts")>()),
+        isExclusiveCiTestConfig: localCheckRuntime.isExclusiveCiTestConfig,
+      }));
+      vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
+        ...(await importOriginal<
+          typeof import("../../scripts/lib/vitest-build-prerequisites.mts")
+        >()),
+        resolveVitestPretestBuildMode: buildPrerequisites.resolveVitestPretestBuildMode,
       }));
       try {
         fullSuiteVitestShards.splice(
