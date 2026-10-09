@@ -106,6 +106,7 @@ function createStalledRun(
     sessionKey: queueKey,
     messageProvider: "telegram",
     senderId: "traveler",
+    inputProvenance: options.inputProvenance,
   });
   followupRun.originatingChannel = options.originatingChannel ?? "telegram";
   followupRun.originatingTo = options.originatingChannel ? undefined : "12345";

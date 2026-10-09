@@ -414,16 +414,11 @@ describe("session override precedence and persistence", () => {
           },
         },
       };
+      // Ordinary repair rejects a user pin; complete automatic fallback pins remain usable.
       const entry = makeEntry({
         providerOverride: "openai",
         modelOverride: "gpt-4o-mini",
-        ...(automatic
-          ? {
-              modelOverrideSource: "auto",
-              modelOverrideFallbackOriginProvider: "openai",
-              modelOverrideFallbackOriginModel: "stale-primary",
-            }
-          : {}),
+        modelOverrideSource: "user",
       });
       const concurrentEntry = makeEntry({
         updatedAt: entry.updatedAt + 1,
@@ -461,6 +456,7 @@ describe("session override precedence and persistence", () => {
         initialEntry: expect.objectContaining({
           providerOverride: "openai",
           modelOverride: "gpt-4o-mini",
+          modelOverrideSource: "user",
         }),
       });
       expect(request?.entry.providerOverride).toBeUndefined();

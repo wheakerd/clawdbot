@@ -38,8 +38,9 @@ export async function executeJobCore(
   state: CronServiceState,
   job: CronStoredJob,
   abortSignal?: AbortSignal,
-  options?: ExecuteJobCoreOptions,
+  initialOptions?: ExecuteJobCoreOptions,
 ): Promise<CronJobExecutionResult> {
+  let options = initialOptions;
   const resolveAbortError = () => ({
     status: "error" as const,
     error: abortErrorMessage(abortSignal),

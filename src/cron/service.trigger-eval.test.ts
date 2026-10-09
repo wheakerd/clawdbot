@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
@@ -878,13 +881,39 @@ describe("cron trigger cadence", () => {
       ],
     });
     const evaluateCronTrigger = vi.fn(async () => ({ kind: "evaluated" as const, fire: false }));
-    const cron = new CronService(createTriggerDeps(storePath, evaluateCronTrigger));
+    const clock = createGatewaySchedulerClock(nowMs);
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const deps = {
+      ...createTriggerDeps(storePath, evaluateCronTrigger),
+      scheduler,
+      nowMs: clock.clock.now,
+    };
+    const cron = new CronService(deps);
     try {
       await cron.start();
+      const catchupAt = nowMs + 120_000;
+      expect(evaluateCronTrigger).not.toHaveBeenCalled();
+      expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject({
+        nextRunAtMs: catchupAt,
+        startupCatchupAtMs: catchupAt,
+        lastRunAtMs: nowMs - 60_000,
+      });
+      vi.setSystemTime(catchupAt - 1);
+      await clock.advanceTo(catchupAt - 1);
+      expect(evaluateCronTrigger).not.toHaveBeenCalled();
+      vi.setSystemTime(catchupAt);
+      await clock.advanceTo(catchupAt);
       expect(evaluateCronTrigger).toHaveBeenCalledOnce();
-      expect(cron.getJob("missed-watcher")?.state.nextRunAtMs).toBe(nowMs + 30_000);
+      expect(cron.getJob("missed-watcher")?.state).toMatchObject({
+        nextRunAtMs: catchupAt + 30_000,
+        lastTriggerEvalAtMs: catchupAt,
+        triggerEvalCount: 1,
+      });
+      expect(deps.runSessionEvent).not.toHaveBeenCalled();
     } finally {
       cron.stop();
+      await cron.waitForIdle();
+      await scheduler.stop();
     }
   });
 });

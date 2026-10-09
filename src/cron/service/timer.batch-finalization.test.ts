@@ -369,6 +369,7 @@ describe("cron batch outcome finalization", () => {
         agentId: "main",
         sessionKey: undefined,
         contextKey: `cron:${job.id}:auto-disabled`,
+        createIfMissing: true,
         deliveryContext,
       },
     );

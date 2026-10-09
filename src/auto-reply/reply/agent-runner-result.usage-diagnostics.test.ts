@@ -23,6 +23,7 @@ it("emits usage diagnostics for a deliberate silent reply", async () => {
       sessionKey,
       sessionId,
       config: cfg,
+      terminalReplyExpectation: "optional",
       provider: "openai",
       model: "gpt-5.6-luna",
     },

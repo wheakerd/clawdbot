@@ -75,10 +75,12 @@ describe("ReefMessageFlow send recovery", () => {
       expect(getSessionEntry(sessionScope)).toBeUndefined();
       const keys = reefKeys();
       const relay = new ReefTransportClient("https://reef.example", "bob", keys);
-      vi.spyOn(relay, "sendEnvelope").mockImplementation(async (_peer, envelope) => ({
-        id: envelope.id,
-        status: "queued",
-      }));
+      const sendEnvelope = vi
+        .spyOn(relay, "sendEnvelope")
+        .mockImplementation(async (_peer, envelope) => ({
+          id: envelope.id,
+          status: "queued",
+        }));
       const onIngress = vi.fn(async () => {});
       const flow = new ReefMessageFlow({
         config: cfg,
@@ -99,7 +101,7 @@ describe("ReefMessageFlow send recovery", () => {
       } finally {
         clock.mockRestore();
       }
-      expect(relay.sendEnvelope).toHaveBeenCalledOnce();
+      expect(sendEnvelope).toHaveBeenCalledOnce();
       expect(onIngress).not.toHaveBeenCalled();
       expect(getSessionEntry(sessionScope)).toBeUndefined();
       if (revoked) {

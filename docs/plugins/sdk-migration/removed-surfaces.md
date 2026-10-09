@@ -61,6 +61,21 @@ these APIs before upgrading the host.
 | `agent-harness-runtime.HeartbeatToolResponse`, `HEARTBEAT_RESPONSE_TOOL_NAME`, and `normalizeHeartbeatToolResponse`                                                             | Remove heartbeat response tool registration and response normalization. Scheduled runs use ordinary assistant replies.                                                                                                                                                                                                                       |
 | `provider-model-shared.GPT5_HEARTBEAT_PROMPT_OVERLAY` and `GPT5_FRIENDLY_PROMPT_OVERLAY`                                                                                        | Use the ordinary chat overlay when appropriate; no heartbeat prompt overlay remains.                                                                                                                                                                                                                                                         |
 
+The following published signatures also change:
+
+| Surface (`openclaw/plugin-sdk/` prefix)                    | Migration                                                                                                                                                                                                                       |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent-harness-runtime.HarnessContextEngine`               | Remove `isHeartbeat` from calls and implementations of `ingest`, `ingestBatch`, `afterTurn`, and `commitTurn`. These callbacks use their ordinary session, message, and turn inputs; no replacement trigger parameter is added. |
+| `agent-harness-runtime.buildEmbeddedAttemptToolRunContext` | Stop passing or reading `continuesConversation`. The existing `trigger` field identifies scheduled work as `cron` and ordinary event follow-ups as `event`.                                                                     |
+| `agent-harness-runtime.finalizeHarnessContextEngineTurn`   | Omit `isHeartbeat`. Finalize with the existing session binding, message snapshot, and terminal/attempt facts.                                                                                                                   |
+| `channel-config-schema.buildChannelAccountSchemaParts`     | Stop reading or composing `accountShape.heartbeatVisibility`, including entries in the helper's `omit` list. Run Doctor for existing heartbeat configuration, then review the migrated jobs' delivery settings.                 |
+
+Heartbeat-only reply options (`isHeartbeat`, `useHeartbeatFailureCopy`,
+`heartbeatModelOverride`, `enableHeartbeatTool`, `forceHeartbeatTool`, and
+`continuesConversation`) are removed from `reply-runtime.GetReplyOptions` too.
+Use the ordinary reply options; scheduled model and delivery settings belong to
+the Automation job.
+
 A service that previously woke a heartbeat can use
 `await context.getCron()?.wake({ mode: "now", text })`. This starts ordinary session
 work under the service capability; it does not run a separate heartbeat engine.
@@ -70,8 +85,12 @@ follow-up, and keep the captured target so completion cannot drift into a
 replacement session.
 
 Host-owned scheduling and event authority cannot be supplied through public
-reply options. The `heartbeat_prompt_contribution` hook remains supported for
-receipt-owned migrated and default proactive jobs. Transport keepalives are
+reply options. The nondeprecated `heartbeat_prompt_contribution` hook remains
+supported for receipt-owned migrated and default proactive jobs. The separate
+`PluginHookAgentTrigger` contract retains all four members: `cron`, `event`,
+`heartbeat`, and `user`. Built-in migrated jobs use `cron` for scheduled lifecycle
+hooks. The public harness hook runner still supports `heartbeat` contexts, and
+standing-intent maintenance accepts both scheduled tags. Transport keepalives are
 unaffected.
 
 ### Retroactively recorded shipped exports

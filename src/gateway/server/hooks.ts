@@ -570,7 +570,7 @@ export function createGatewayHookDispatcher(params: {
                 } satisfies CronExecutionIdentityAdmission,
                 abortSignal: startupAbortController.signal,
                 onLaneWait: (info) => {
-                  if (info?.waiting === false) {
+                  if (info?.stage === "execution" && info.waiting === false) {
                     settleSuccessfulAdmission();
                   }
                 },

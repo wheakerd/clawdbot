@@ -126,15 +126,30 @@ describe("scheduled hook notice admission", () => {
             text,
             text,
           ]);
-          const unrelated = await prepareAutomationSystemEvents(sessionKey, "other-automation");
+          const unrelated = await prepareAutomationSystemEvents(
+            sessionKey,
+            "other-automation",
+            nextRunAtMs,
+          );
           try {
             expect(unrelated.events).toEqual([]);
           } finally {
             unrelated.release();
           }
+          const early = await prepareAutomationSystemEvents(
+            sessionKey,
+            `hook-receiver-${agentId}`,
+            nextRunAtMs - 1,
+          );
+          try {
+            expect(early.events).toEqual([]);
+          } finally {
+            early.release();
+          }
           const selected = await prepareAutomationSystemEvents(
             sessionKey,
             `hook-receiver-${agentId}`,
+            nextRunAtMs,
           );
           try {
             expect(selected.events.map((event) => event.text)).toEqual([text]);

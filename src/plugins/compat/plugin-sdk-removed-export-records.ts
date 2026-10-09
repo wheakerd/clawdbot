@@ -110,7 +110,7 @@ function buildRemovedExportRecord(seed: (typeof REMOVED_EXPORT_SEEDS)[number]) {
   } satisfies PluginCompatRecord;
 }
 
-export const PLUGIN_SDK_REMOVED_EXPORT_RECORDS: PluginCompatRecord[] = [
+export const PLUGIN_SDK_REMOVED_EXPORT_RECORDS = [
   ...REMOVED_EXPORT_SEEDS.map(buildRemovedExportRecord),
   {
     code: "plugin-sdk-heartbeat-reply-runtime",
@@ -159,4 +159,4 @@ export const PLUGIN_SDK_REMOVED_EXPORT_RECORDS: PluginCompatRecord[] = [
     releaseNote:
       "Maintainer-approved breaking removal on 2026-10-03: agent harnesses no longer register or normalize heartbeat response tools; no deprecated aliases remain.",
   },
-];
+] as const satisfies readonly PluginCompatRecord[];

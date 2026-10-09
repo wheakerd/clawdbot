@@ -176,12 +176,12 @@ export function withAgentDeletion<T>(
           }
           lifetime.assertCurrent();
         };
-        const execute = <Result>(
+        const execute = <TResult>(
           apply: (
             scope: DomainScope,
             identity: typeof lifetime.identity,
             additionalIdentities: readonly OpenClawStateLeaseIdentity[],
-          ) => Promise<Result>,
+          ) => Promise<TResult>,
           publication?: {
             mutation?: CronReceiptAuthorityMutation;
             assertCurrent?: () => void;
@@ -189,7 +189,7 @@ export function withAgentDeletion<T>(
             onAdmission?: (request: SqliteWorkerAdmissionRequest, stateIdentityKey: string) => void;
             additionalLeases?: readonly OpenClawStateWorkerLeaseContext[];
           },
-        ): Promise<Result> => {
+        ): Promise<TResult> => {
           assertCurrentHost();
           const invoke = (
             admission: Pick<typeof lifetime, "assertCurrent" | "createAdmission">,

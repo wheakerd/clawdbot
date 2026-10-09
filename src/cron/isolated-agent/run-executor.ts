@@ -626,7 +626,9 @@ function createCronPromptExecutor(
           allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
           assistantErrorTranscript: runOptions.assistantErrorTranscript,
           abortSignal: params.abortSignal,
-          onLaneWait: params.onLaneWait,
+          onLaneWait: params.onLaneWait
+            ? (info) => params.onLaneWait?.({ ...info, stage: "execution" })
+            : undefined,
         });
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,

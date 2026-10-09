@@ -38,35 +38,10 @@ const runId = "channel-message-authority";
 const currentChannelId = "100000000000000003";
 
 beforeEach(() => {
-  state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
-  state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
-    result: await params.run(
-      "claude-cli",
-      "claude-sonnet-4-6",
-      initialFallbackAttemptOptions(params),
-    ),
-    provider: "claude-cli",
-    model: "claude-sonnet-4-6",
-    attempts: [],
-  }));
   state.mintReplyMessageActionTurnCapabilityMock.mockImplementation(
     mintReplyMessageActionTurnCapability,
   );
-  externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-      },
-    ],
-    resolvePluginSetupCliBackend: () => undefined,
-  });
 });
-
-afterEach(() => externalAuthTesting.resetResolveExternalAuthProfilesForTest());
 
 function channelTurn() {
   const followupRun = createFollowupRun();
@@ -108,6 +83,34 @@ function resolveCapability(token: string | undefined, key = sessionKey) {
 }
 
 describe("channel reply message authority", () => {
+  beforeEach(() => {
+    state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
+      result: await params.run(
+        "claude-cli",
+        "claude-sonnet-4-6",
+        initialFallbackAttemptOptions(params),
+      ),
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      attempts: [],
+    }));
+    externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+  });
+
+  afterEach(() => externalAuthTesting.resetResolveExternalAuthProfilesForTest());
+
   it.each(["failure", "policy-session"] as const)(
     "retains the CLI source authority until %s settlement",
     async (outcome) => {
@@ -276,6 +279,8 @@ describe("background completion delivery authority", () => {
       await vi
         .mocked(registry.registerAgentRunContext)
         .withImplementation(actualRegistry.registerAgentRunContext, () => executeAgentTurn(params));
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(state.runCliAgentMock).not.toHaveBeenCalled();
       expect(target).toMatchObject({ deliver: row.deliver });
       if (row.source === "scheduled") {
         expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "scheduled embedded run params", {

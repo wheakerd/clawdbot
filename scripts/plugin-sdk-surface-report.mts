@@ -215,7 +215,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -8: retired Skill Workshop proposal hook types.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
-      3648,
+      // -9: retired heartbeat reply and harness exports.
+      3639,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -230,7 +231,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved async upstream-link writes with released sync compatibility.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +4: the same four CLI state-owner and transport functions.
-      2118,
+      // -4: retired heartbeat reply and harness functions.
+      2114,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

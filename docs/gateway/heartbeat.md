@@ -253,7 +253,7 @@ intent explicitly. Use explicit automation scheduling for delayed work.
 Removal of these wire names is deferred to an owner-approved protocol v5 change
 with client follow-through. Heartbeat plugin SDK execution aliases and reply
 helpers have been removed as an approved breaking change. Update affected plugins
-before upgrading the host; see the [SDK migration](/plugins/sdk-migration/removed-surfaces#heartbeat-execution-and-reply-helpers).
+before upgrading the host; see the [SDK migration](/plugins/sdk-migration/removed-surfaces#heartbeat-runtime-and-reply-helpers).
 Bundled callers use canonical APIs.
 See the [heartbeat retirement design](https://github.com/openclaw/openclaw/issues/134994).
 

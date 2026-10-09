@@ -110,9 +110,9 @@ describe("ordinary session event execution", () => {
       }
       const runId = `scheduled-${runtime}-${outcome}`;
       const lifecycleEvents: AgentEventPayload[] = [];
-      const unsubscribe = onAgentEvent((event) => {
-        if (event.runId === runId && event.stream === "lifecycle") {
-          lifecycleEvents.push(event);
+      const unsubscribe = onAgentEvent((lifecycleEvent) => {
+        if (lifecycleEvent.runId === runId && lifecycleEvent.stream === "lifecycle") {
+          lifecycleEvents.push(lifecycleEvent);
         }
       });
       const pending = executeAgentTurn(
@@ -128,7 +128,9 @@ describe("ordinary session event execution", () => {
         expect(bind).not.toHaveBeenCalled();
         expect(providerWork).not.toHaveBeenCalled();
         expect(event.onStarted).not.toHaveBeenCalled();
-        expect(lifecycleEvents.some((event) => event.data.phase === "start")).toBe(false);
+        expect(
+          lifecycleEvents.some((lifecycleEvent) => lifecycleEvent.data.phase === "start"),
+        ).toBe(false);
         current = outcome === "start";
         release.resolve();
         const result = await pending;
@@ -157,13 +159,15 @@ describe("ordinary session event execution", () => {
             "failed",
             undefined,
           );
-          expect(lifecycleEvents.some((event) => event.data.phase === "start")).toBe(false);
-          expect(lifecycleEvents.find((event) => event.data.phase === "error")?.data).toMatchObject(
-            {
-              executionStarted: false,
-              providerStarted: false,
-            },
-          );
+          expect(
+            lifecycleEvents.some((lifecycleEvent) => lifecycleEvent.data.phase === "start"),
+          ).toBe(false);
+          expect(
+            lifecycleEvents.find((lifecycleEvent) => lifecycleEvent.data.phase === "error")?.data,
+          ).toMatchObject({
+            executionStarted: false,
+            providerStarted: false,
+          });
         }
       } finally {
         release.resolve();

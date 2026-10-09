@@ -103,7 +103,9 @@ export function registerPendingRequesterAuthorityCases({
         const provenance =
           kind === "inter-session"
             ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
-            : undefined;
+            : kind === "event"
+              ? { kind: "internal_system" as const, sourceTool: "background-task" }
+              : undefined;
         const params = baseParams();
         params.command.senderIsOwner = kind === "fresh-owner";
         await runPrepared({

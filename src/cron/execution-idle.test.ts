@@ -54,7 +54,7 @@ afterEach(() => {
     clearActiveEmbeddedRun(sessionId, handle, sessionKey);
   }
 });
-const job = makeCronJob({ agentId: "main", idleOnly: true, sessionTarget: "isolated" });
+const idleJob = makeCronJob({ agentId: "main", idleOnly: true, sessionTarget: "isolated" });
 
 describe("idle-only execution admission", () => {
   it("resumes distinct same-agent on-exit reply owners serially after foreground work settles", async ({
@@ -206,12 +206,12 @@ describe("idle-only execution admission", () => {
         turnKind: "background",
       });
       operations.push(own, peer);
-      const ownMarker = markCronJobActive(job.id, { agentId: "main" });
+      const ownMarker = markCronJobActive(idleJob.id, { agentId: "main" });
       const peerMarker = markCronJobActive("peer", { agentId: "main" });
       const endOwnWait = markCronJobWaitingForIdle(ownMarker, own);
       const endPeerWait = markCronJobWaitingForIdle(peerMarker, peer);
       try {
-        expect(isCronExecutionIdle({}, job, "main", own.key, own)).toBe(true);
+        expect(isCronExecutionIdle({}, idleJob, "main", own.key, own)).toBe(true);
         if (replacement === "native") {
           registerEmbeddedRun(peer.key);
         } else {
@@ -226,7 +226,7 @@ describe("idle-only execution admission", () => {
             }),
           );
         }
-        expect(isCronExecutionIdle({}, job, "main", own.key, own)).toBe(false);
+        expect(isCronExecutionIdle({}, idleJob, "main", own.key, own)).toBe(false);
         expect(hasActiveCronJobsForAgent("main")).toBe(true);
       } finally {
         endPeerWait();
@@ -236,7 +236,7 @@ describe("idle-only execution admission", () => {
   );
 
   it("observes foreground admission before backend registration, including another conversation", () => {
-    expect(isCronExecutionIdle({}, job, "main")).toBe(true);
+    expect(isCronExecutionIdle({}, idleJob, "main")).toBe(true);
     operations.push(
       createReplyOperation({
         sessionKey: "agent:main:chat:foreground",
@@ -245,31 +245,31 @@ describe("idle-only execution admission", () => {
         turnKind: "visible",
       }),
     );
-    expect(isCronExecutionIdle({}, job, "main")).toBe(false);
+    expect(isCronExecutionIdle({}, idleJob, "main")).toBe(false);
     expect(operations[0]!.abortSignal.aborted).toBe(false);
   });
 
   it("waits for other same-agent automation work without treating itself or siblings as busy", () => {
-    const own = markCronJobActive(job.id, { agentId: "main" });
+    const own = markCronJobActive(idleJob.id, { agentId: "main" });
     markCronJobActive("sibling-job", { agentId: "other" });
-    expect(isCronExecutionIdle({}, job, "main")).toBe(true);
+    expect(isCronExecutionIdle({}, idleJob, "main")).toBe(true);
     const script = markCronJobActive("script-job", { agentId: "main" });
-    expect(isCronExecutionIdle({}, job, "main")).toBe(false);
+    expect(isCronExecutionIdle({}, idleJob, "main")).toBe(false);
     clearCronJobActive("script-job", script);
-    expect(isCronExecutionIdle({}, job, "main")).toBe(true);
-    clearCronJobActive(job.id, own);
+    expect(isCronExecutionIdle({}, idleJob, "main")).toBe(true);
+    clearCronJobActive(idleJob.id, own);
   });
 
   it("keeps idle waiters drain-visible without making them block another idle admission", () => {
     const waiting = markCronJobActive("waiting-exit", { agentId: "main" });
-    expect(isCronExecutionIdle({}, job, "main")).toBe(false);
+    expect(isCronExecutionIdle({}, idleJob, "main")).toBe(false);
     const ready = markCronJobWaitingForIdle(waiting);
-    expect(isCronExecutionIdle({}, job, "main")).toBe(true);
+    expect(isCronExecutionIdle({}, idleJob, "main")).toBe(true);
     expect(hasActiveCronJobsForAgent("main")).toBe(true);
     ready();
-    expect(isCronExecutionIdle({}, job, "main")).toBe(false);
+    expect(isCronExecutionIdle({}, idleJob, "main")).toBe(false);
     clearCronJobActive("waiting-exit", waiting);
-    expect(isCronExecutionIdle({}, job, "main")).toBe(true);
+    expect(isCronExecutionIdle({}, idleJob, "main")).toBe(true);
     expect(hasActiveCronJobsForAgent("main")).toBe(false);
   });
 
@@ -277,8 +277,8 @@ describe("idle-only execution admission", () => {
     const ownSessionKey = "agent:main:cron:check:run:one";
     registerEmbeddedRun(ownSessionKey);
     registerEmbeddedRun("agent:other:main");
-    expect(isCronExecutionIdle({}, job, "main", ownSessionKey)).toBe(true);
+    expect(isCronExecutionIdle({}, idleJob, "main", ownSessionKey)).toBe(true);
     registerEmbeddedRun("agent:main:chat:foreground");
-    expect(isCronExecutionIdle({}, job, "main", ownSessionKey)).toBe(false);
+    expect(isCronExecutionIdle({}, idleJob, "main", ownSessionKey)).toBe(false);
   });
 });

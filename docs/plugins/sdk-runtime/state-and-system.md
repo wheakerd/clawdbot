@@ -87,7 +87,7 @@ closing the connection.
     The option never recreates a captured session that was reset or deleted.
 
     Use ordinary automations for recurring work. The heartbeat execution aliases
-    have been removed; see the [SDK migration](/plugins/sdk-migration/removed-surfaces#heartbeat-execution-and-reply-helpers).
+    have been removed; see the [SDK migration](/plugins/sdk-migration/removed-surfaces#heartbeat-runtime-and-reply-helpers).
 
     The `openclaw/plugin-sdk/system-event-runtime` helpers resolve legacy session
     aliases at the SDK boundary. Pass a resolved `agentId` alongside `sessionKey`

@@ -13,6 +13,7 @@ import {
 } from "../../agents/tools/gateway-caller-context.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import {
   getCronManagementAuthority,
@@ -31,6 +32,7 @@ import {
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner-run.js";
@@ -234,11 +236,17 @@ vi.mock("../../config/sessions/group.js", () => ({
   resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
 }));
 
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveSessionFilePathCore: vi.fn().mockReturnValue("/tmp/session.jsonl"),
-  resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
-  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/session-store"),
-}));
+vi.mock("../../config/sessions/paths.js", async (importOriginal) => {
+  const { resolveExplicitSessionStorePathForScope, resolveSessionArtifactDirectory } =
+    await importOriginal<typeof import("../../config/sessions/paths.js")>();
+  return {
+    resolveExplicitSessionStorePathForScope,
+    resolveSessionArtifactDirectory,
+    resolveSessionFilePathCore: vi.fn().mockReturnValue("/tmp/session.jsonl"),
+    resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
+    resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/session-store"),
+  };
+});
 
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 vi.mock("../../gateway/session-sharing-preparation.js", async (importOriginal) => {
@@ -537,7 +545,9 @@ describe("runPreparedReply media-only handling", () => {
             InputProvenance:
               kind === "inter-session"
                 ? { kind: "inter_session", sourceTool: "sessions_send" }
-                : undefined,
+                : kind === "event"
+                  ? { kind: "internal_system", sourceTool: "background-task" }
+                  : undefined,
             InboundEventKind: kind === "room-event" ? "room_event" : undefined,
           }),
           sessionEntry:
@@ -1526,72 +1536,86 @@ describe("runPreparedReply media-only handling", () => {
     }
   });
   it("refreshes goal context after interrupt admission waits", async () => {
-    const queueSettings = await import("./queue/settings-runtime.js");
-    const inboundMeta = await import("./inbound-meta.js");
-    const activeEntry: SessionEntry = {
-      sessionId: "session-goal-interrupt",
-      updatedAt: 1,
-      goal: {
-        schemaVersion: 1,
-        id: "goal-interrupt",
-        objective: "Finish the interrupted work",
-        status: "active",
-        createdAt: 1,
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const queueSettings = await import("./queue/settings-runtime.js");
+      const inboundMeta = await import("./inbound-meta.js");
+      const sessionKey = "agent:default:slack:channel:goal-interrupt";
+      const scope = {
+        agentId: "default",
+        sessionKey,
+        storePath: state.statePath("agents", "default", "sessions", "sessions.json"),
+      };
+      const activeEntry: SessionEntry = {
+        sessionId: "session-goal-interrupt",
         updatedAt: 1,
-        tokenStart: 0,
-        tokenStartFresh: true,
-        tokensUsed: 0,
-        continuationTurns: 0,
-      },
-    };
-    const completeEntry: SessionEntry = {
-      ...activeEntry,
-      goal: { ...activeEntry.goal!, status: "complete" },
-    };
-    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
-    vi.mocked(inboundMeta.formatActiveGoalContext).mockImplementation((entry) =>
-      entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : undefined,
-    );
-    vi.mocked(inboundMeta.buildInboundUserContextPrefix).mockImplementation(
-      (_ctx, _envelope, entry) =>
-        entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : "",
-    );
-    loadSessionEntryMock.mockReturnValue(completeEntry);
-    const activeRun = createReplyOperation({
-      sessionId: "session-goal-interrupt",
-      sessionKey: "session-key",
-      resetTriggered: false,
-    });
-    activeRun.setPhase("running");
-
-    const runPromise = runPrepared({
-      cfg: {
-        session: {},
-        channels: {},
-        agents: { defaults: {} },
-        skills: { workshop: { autonomous: { mode: "off" } } },
-      },
-      isNewSession: false,
-      sessionId: "session-goal-interrupt",
-      sessionEntry: activeEntry,
-      sessionStore: { "session-key": activeEntry },
-      storePath: "/tmp/openclaw-session-store.json",
-    });
-    while (!activeRun.abortSignal.aborted) {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
+        goal: {
+          schemaVersion: 1,
+          id: "goal-interrupt",
+          objective: "Finish the interrupted work",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      };
+      const completeEntry: SessionEntry = {
+        ...activeEntry,
+        goal: { ...activeEntry.goal!, status: "complete" },
+      };
+      await replaceSessionEntry(scope, activeEntry);
+      vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+      vi.mocked(inboundMeta.formatActiveGoalContext).mockImplementation((entry) =>
+        entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : undefined,
+      );
+      vi.mocked(inboundMeta.buildInboundUserContextPrefix).mockImplementation(
+        (_ctx, _envelope, entry) =>
+          entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : "",
+      );
+      const activeRun = createReplyOperation({
+        sessionId: activeEntry.sessionId,
+        sessionKey,
+        resetTriggered: false,
       });
-    }
-    activeRun.complete();
+      activeRun.setPhase("running");
+      const interrupted = createDeferred();
+      activeRun.abortSignal.addEventListener("abort", () => interrupted.resolve(), { once: true });
 
-    await expect(runPromise).resolves.toEqual({ text: "ok" });
-    expect(loadSessionEntryMock).toHaveBeenCalledWith({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "session-key",
-      readConsistency: "latest",
+      const runPromise = runPrepared({
+        cfg: {
+          session: {},
+          channels: {},
+          agents: { defaults: {} },
+          skills: { workshop: { autonomous: { mode: "off" } } },
+        },
+        isNewSession: false,
+        sessionId: activeEntry.sessionId,
+        sessionKey,
+        sessionEntry: activeEntry,
+        sessionStore: { [sessionKey]: activeEntry },
+        storePath: scope.storePath,
+      });
+      try {
+        await awaitGateBeforeSettlement(interrupted.promise, runPromise, "interrupt admission");
+        expect(inboundMeta.formatActiveGoalContext).toHaveBeenCalledWith(
+          expect.objectContaining({ goal: expect.objectContaining({ status: "active" }) }),
+        );
+        await replaceSessionEntry(scope, completeEntry);
+        activeRun.complete();
+
+        await expect(runPromise).resolves.toEqual({ text: "ok" });
+        expect(inboundMeta.formatActiveGoalContext).toHaveBeenLastCalledWith(
+          expect.objectContaining({ goal: expect.objectContaining({ status: "complete" }) }),
+        );
+        const call = requireRunReplyAgentCall(-1);
+        expect(call.followupRun.currentInboundContext?.text ?? "").not.toContain("Active goal:");
+      } finally {
+        activeRun.complete();
+        await Promise.allSettled([runPromise]);
+      }
     });
-    const call = requireRunReplyAgentCall(-1);
-    expect(call.followupRun.currentInboundContext?.text ?? "").not.toContain("Active goal:");
   });
 
   it.each([false, true])(
@@ -1654,6 +1678,10 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPrepared({
       opts: { ...internalEventOptions },
+      ...turn("Inspect the completed background task.", {
+        InternalTurnSource: "event",
+        InputProvenance: { kind: "internal_system", sourceTool: "background-task" },
+      }),
     });
 
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
@@ -2035,7 +2063,7 @@ describe("runPreparedReply media-only handling", () => {
     ["event", "background-task"],
     ["event", "exec-event"],
   ] as const)(
-    "keeps %s metadata in per-turn context and preserves %s provenance",
+    "retains %s routing and %s provenance without user-role context",
     async (source, sourceTool) => {
       const eventPrompt = "Inspect the completed operation and report useful results.";
       const syntheticConversationInfo =
@@ -2063,14 +2091,10 @@ describe("runPreparedReply media-only handling", () => {
       expect(call?.commandBody).toContain(eventPrompt);
       expect(call?.followupRun.prompt).toContain(eventPrompt);
       expect(call?.followupRun.prompt).not.toContain(syntheticConversationInfo);
-      if (source === "event") {
-        expect(buildInboundUserContextPrefix).not.toHaveBeenCalled();
-        expect(call.followupRun.currentInboundContext?.text ?? "").not.toContain(
-          syntheticConversationInfo,
-        );
-      } else {
-        expect(call.followupRun.currentInboundContext?.text).toContain(syntheticConversationInfo);
-      }
+      expect(buildInboundUserContextPrefix).not.toHaveBeenCalled();
+      expect(call.followupRun.currentInboundContext?.text ?? "").not.toContain(
+        syntheticConversationInfo,
+      );
       expect(call?.sessionCtx).toMatchObject({
         OriginatingChannel: "discord",
         OriginatingTo: "discord:channel-123",
@@ -2209,7 +2233,10 @@ describe("runPreparedReply media-only handling", () => {
           ...turn(
             isWake ? "scheduled wake" : "@bot check this",
             isWake
-              ? { InternalTurnSource: kind }
+              ? {
+                  InternalTurnSource: kind,
+                  InputProvenance: { kind: "internal_system", sourceTool: kind },
+                }
               : { ...createProviderSurface("telegram"), ChatType: "group", MessageSid: messageId },
             kind === "room_event" ? { InboundEventKind: kind } : {},
             isWake ? { SessionKey: "agent:main:telegram:-100123" } : {},
@@ -2276,7 +2303,10 @@ describe("runPreparedReply media-only handling", () => {
           : telegramGroupSession(),
         ...turn(
           "scheduled wake",
-          { InternalTurnSource: "event" },
+          {
+            InternalTurnSource: "event",
+            InputProvenance: { kind: "internal_system", sourceTool: "background-task" },
+          },
           originless ? { ChatType: "direct" } : {},
           { SessionKey: originless ? "agent:main:main" : "agent:main:telegram:-100123" },
         ),

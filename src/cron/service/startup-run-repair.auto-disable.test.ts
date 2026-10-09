@@ -146,6 +146,7 @@ describe("startup run repair auto-disable", () => {
       agentId: "main",
       sessionKey: testCase.creatorSessionKey,
       contextKey: "cron:restart-auto-disable-notification:auto-disabled",
+      ...(testCase.creatorSessionKey ? {} : { createIfMissing: true }),
     });
     const notice = enqueueSessionEvent.mock.calls[0]?.[0];
     expect(notice).toContain('Automation "Important report" was auto-disabled');

@@ -366,10 +366,14 @@ describe("cron service timer seam coverage", () => {
     const enqueueSystemEvent = vi.fn();
     const enqueueSessionEvent = vi.fn();
     const resolveDefaultAgentId = vi.fn(() => undefined);
+    const resolveOriginDeliveryContext = vi.fn();
+    const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronServiceState({
       storePath,
       defaultAgentId: undefined,
       resolveDefaultAgentId,
+      resolveOriginDeliveryContext,
+      runSessionEvent,
       cronConfig: { triggers: { enabled: true } },
       enqueueSystemEvent,
       enqueueSessionEvent,
@@ -387,8 +391,16 @@ describe("cron service timer seam coverage", () => {
         ...createDueScriptJob({ now, sessionTarget: "main" }),
         agentId: undefined,
       }),
-    ).resolves.toMatchObject({ status: "ok", scriptStateChanged: true });
-    expect(resolveDefaultAgentId).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({
+      status: "ok",
+      scriptStateChanged: true,
+      scriptState: { revision: 2 },
+      delivered: false,
+      deliveryAttempted: false,
+    });
+    expect(resolveDefaultAgentId).toHaveBeenCalledOnce();
+    expect(resolveOriginDeliveryContext).not.toHaveBeenCalled();
+    expect(runSessionEvent).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(enqueueSessionEvent).not.toHaveBeenCalled();
   });

@@ -47,14 +47,12 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { registerGatewayCronContextTests } from "./server-cron.context.test-support.js";
+import { registerGatewayCronHandoffTests } from "./server-cron.handoff.test-support.js";
 import {
   registerGatewayCronMutationAuthorityTests,
   registerGatewayCronStreamMutationTests,
 } from "./server-cron.mutation-lifecycle.test-support.js";
-import {
-  registerGatewayCronHandoffTests,
-  registerGatewayCronReceiptTests,
-} from "./server-cron.receipts.test-support.js";
+import { registerGatewayCronReceiptTests } from "./server-cron.receipts.test-support.js";
 import { registerGatewayCronWakeTests } from "./server-cron.wake.test-support.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
@@ -1399,7 +1397,7 @@ describe("buildGatewayCronService", () => {
           await retirementEntered.promise;
         }
         const drained = expect(
-          expectDefined(state.cron.stopAndDrain, "Gateway scheduler drain")(),
+          expectDefined(state.cron.stopAndDrain?.(), "Gateway scheduler drain"),
         ).resolves.toBeUndefined();
         releaseLock.resolve();
         if (blocker) {
@@ -1447,6 +1445,13 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
       vi.useRealTimers();
     }
+  });
+
+  registerGatewayCronMutationAuthorityTests({
+    createCronConfig,
+    loadCronService,
+    createCronService,
+    addCronJob,
   });
 
   registerGatewayCronStreamMutationTests({

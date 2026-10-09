@@ -476,9 +476,9 @@ describe("authenticated immediate hook wake admission", () => {
   ])(
     "refuses oversized $name deferrals before acceptance and keeps immediate wakes intact",
     async ({ text }) => {
-      mocks.defer.mockImplementation(async ({ text, commitGuard }) => {
+      mocks.defer.mockImplementation(async ({ text: deferredText, commitGuard }) => {
         const eventOutcome = enqueueAutomationSystemEvent(
-          text,
+          deferredText,
           { sessionKey },
           {
             jobId: "scheduled-receiver",
