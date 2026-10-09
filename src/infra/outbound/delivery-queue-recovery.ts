@@ -646,13 +646,6 @@ async function drainQueuedEntry(
   let platformSendStarted = false;
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
-  const collectResults = (results: readonly OutboundDeliveryResult[]): void => {
-    for (const result of results) {
-      if (!deliveredResults.includes(result)) {
-        deliveredResults.push(result);
-      }
-    }
-  };
   const collectPayloadOutcome = (outcome: OutboundPayloadDeliveryOutcome): void => {
     if (!payloadOutcomes.includes(outcome)) {
       payloadOutcomes.push(outcome);
@@ -769,7 +762,9 @@ async function drainQueuedEntry(
         platformSendStarted = true;
       },
       onDeliveryResult: async (deliveryResult) => {
-        collectResults([deliveryResult]);
+        if (!deliveredResults.includes(deliveryResult)) {
+          deliveredResults.push(deliveryResult);
+        }
         postSendState ??= await persistPostSendState();
       },
       onPlatformSendDispatch: async () => {

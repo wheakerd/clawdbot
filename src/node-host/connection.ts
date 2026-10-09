@@ -107,14 +107,6 @@ export function startNodeHostConnection({
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
   >();
-  const retireOptionalPublications = () => {
-    for (const state of optionalPublicationStates.values()) {
-      if (state.retryTimer) {
-        clearTimeout(state.retryTimer);
-      }
-    }
-    optionalPublicationStates.clear();
-  };
   const retireGatewayConnection = () => {
     gatewayConnectionGeneration += 1;
     gatewayHelloReceived = false;
@@ -124,7 +116,12 @@ export function startNodeHostConnection({
       clearInterval(hostStatsTimer);
       hostStatsTimer = undefined;
     }
-    retireOptionalPublications();
+    for (const state of optionalPublicationStates.values()) {
+      if (state.retryTimer) {
+        clearTimeout(state.retryTimer);
+      }
+    }
+    optionalPublicationStates.clear();
   };
 
   const startHostStatsPublication = () => {

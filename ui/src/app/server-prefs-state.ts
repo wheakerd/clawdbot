@@ -1,4 +1,9 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeBackgroundPreference,
+  type BackgroundPreference,
+} from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
@@ -28,7 +33,9 @@ type SyncedPrefSpec<T> = {
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
 
-const optionalPrefSpec = <K extends "accent" | "fontUi" | "fontChat" | "chatFollowUpMode">(
+const optionalPrefSpec = <
+  K extends "accent" | "fontUi" | "fontChat" | "tabIcon" | "chatFollowUpMode",
+>(
   key: K,
   normalize: (value: unknown) => UiSettings[K],
   configSync = true,
@@ -38,6 +45,12 @@ const optionalPrefSpec = <K extends "accent" | "fontUi" | "fontChat" | "chatFoll
     extract: normalize,
     local: (settings) => normalize(settings[key]),
     write: (value) => ({ [key]: value }),
+  });
+
+const booleanPrefSpec = (local: SyncedPrefSpec<boolean>["local"]) =>
+  prefSpec<boolean>({
+    extract: (value) => (typeof value === "boolean" ? value : undefined),
+    local,
   });
 
 /**
@@ -61,23 +74,21 @@ export const SYNCED_PREFS = {
   accent: optionalPrefSpec("accent", normalizeAccentColor),
   fontUi: optionalPrefSpec("fontUi", normalizeTypefaceOverride, false),
   fontChat: optionalPrefSpec("fontChat", normalizeTypefaceOverride, false),
+  tabIcon: optionalPrefSpec("tabIcon", normalizeTabIconPreference, false),
+  background: prefSpec<BackgroundPreference>({
+    configSync: false,
+    extract: normalizeBackgroundPreference,
+    local: (settings) => normalizeBackgroundPreference(settings.background),
+    write: (value) => ({ background: value }),
+  }),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
     local: (settings) => settings.locale,
     write: (value) => ({ locale: value }),
   }),
-  chatShowThinking: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatShowThinking,
-  }),
-  chatShowToolCalls: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatShowToolCalls,
-  }),
-  chatPersistCommentary: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatPersistCommentary !== false,
-  }),
+  chatShowThinking: booleanPrefSpec((settings) => settings.chatShowThinking),
+  chatShowToolCalls: booleanPrefSpec((settings) => settings.chatShowToolCalls),
+  chatPersistCommentary: booleanPrefSpec((settings) => settings.chatPersistCommentary !== false),
   chatSendShortcut: prefSpec<ChatSendShortcut>({
     extract: (value) => (value === "enter" || value === "modifier-enter" ? value : undefined),
     local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),
@@ -98,6 +109,8 @@ export type ResettableServerUiPrefKey =
   | "accent"
   | "fontUi"
   | "fontChat"
+  | "tabIcon"
+  | "background"
   | "locale"
   | "chatSendShortcut"
   | "chatFollowUpMode";
@@ -117,6 +130,18 @@ export const SYNCED_PREF_KEYS = Object.keys(SYNCED_PREFS) as SyncedPrefKey[];
 export function prefValuesEqual(left: unknown, right: unknown): boolean {
   if (Array.isArray(left) && Array.isArray(right)) {
     return left.length === right.length && left.every((value, index) => value === right[index]);
+  }
+  const leftRecord = asRecord(left);
+  const rightRecord = asRecord(right);
+  if (leftRecord && rightRecord) {
+    const keys = Object.keys(leftRecord);
+    return (
+      keys.length === Object.keys(rightRecord).length &&
+      keys.every(
+        (key) =>
+          Object.hasOwn(rightRecord, key) && prefValuesEqual(leftRecord[key], rightRecord[key]),
+      )
+    );
   }
   return left === right;
 }

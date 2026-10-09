@@ -19,6 +19,8 @@ import {
   readSessionEntriesFromStoreInWorker,
   readSessionEntryReadOnlyInWorker,
 } from "../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { preparePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -130,8 +132,32 @@ type PublicationSessionRead = Pick<
   "agentId" | "canonicalKey" | "storePath" | "entry"
 >;
 
+/** Publication uses only current identity, archive, and workspace metadata. */
+export function readGitHubPublicationSession(
+  sessionKey: string,
+  options: Parameters<typeof loadGatewaySessionEntryReadOnly>[1] = {},
+): PublicationSessionRead {
+  const binding = captureIncognitoSessionBinding({ sessionKey, agentId: options?.agentId });
+  if (!binding) {
+    return loadGatewaySessionEntryReadOnly(sessionKey, options);
+  }
+  const { actor } = binding;
+  const source = captureSessionEntryMetadataRead({
+    sessionKey,
+    agentId: actor.agentId,
+    storePath: actor.path,
+  });
+  const metadata = source?.readCurrent();
+  return {
+    canonicalKey: sessionKey,
+    agentId: actor.agentId,
+    storePath: actor.path,
+    entry: metadata,
+  };
+}
+
 function readPublicationSessionOwner(params: PublicationSessionIdentity, allowArchived = false) {
-  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const loaded = readGitHubPublicationSession(params.sessionKey, { agentId: params.agentId });
   return requirePublicationSessionOwner(params, loaded, allowArchived);
 }
 
@@ -313,7 +339,22 @@ export async function prepareGitHubPublicationWorkspaceOwner(
   const target = options.sessionTarget ? { ...options.sessionTarget } : undefined;
   const readSession = async (identity: PublicationSessionIdentity = params) => {
     let snapshot: PublicationSessionRead;
-    if (target) {
+    const binding = captureIncognitoSessionBinding({ ...identity, storePath: target?.storePath });
+    if (binding) {
+      snapshot = readGitHubPublicationSession(identity.sessionKey, { agentId: identity.agentId });
+      if (
+        target &&
+        (target.agentId !== identity.agentId ||
+          target.sessionId !== identity.sessionId ||
+          target.sessionKey !== identity.sessionKey ||
+          (target.expectedLifecycleRevision !== undefined &&
+            snapshot.entry?.lifecycleRevision !== target.expectedLifecycleRevision) ||
+          (target.expectedWriterRunId !== undefined &&
+            snapshot.entry?.activeWriterRunId !== target.expectedWriterRunId))
+      ) {
+        throw new GitHubPublicationSessionChangedError();
+      }
+    } else if (target) {
       // Reuse the admitted store locator rather than rediscovering it from current config.
       if (
         !target.storePath ||
@@ -616,13 +657,15 @@ export async function hasSupportedGitHubPublicationTarget(
   const context = captureOpenClawStateWorkerContext();
   const initial = requirePublicationSessionOwner(
     session,
-    await loadGatewaySessionEntryReadOnlyInWorker({
-      cfg: getRuntimeConfig(),
-      key: session.sessionKey,
-      agentId: session.agentId,
-      assertActive: assertCurrent,
-      projection: [],
-    }),
+    captureIncognitoSessionBinding(session)
+      ? readGitHubPublicationSession(session.sessionKey, { agentId: session.agentId })
+      : await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg: getRuntimeConfig(),
+          key: session.sessionKey,
+          agentId: session.agentId,
+          assertActive: assertCurrent,
+          projection: [],
+        }),
     true,
   );
   context.admission.assertCurrent();
