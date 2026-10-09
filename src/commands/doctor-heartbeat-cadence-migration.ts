@@ -37,6 +37,7 @@ import {
   resolveHeartbeatAgents,
   resolveHeartbeatConfig,
   resolveHeartbeatIntervalMs,
+  resolveHeartbeatVisibility,
   migrateHeartbeatPrompt,
   validateLegacyHeartbeatConfig,
 } from "./doctor-heartbeat-legacy.js";
@@ -52,7 +53,6 @@ import {
 } from "./doctor-heartbeat-schedule.js";
 import { resolveLegacyHeartbeatSessionKey } from "./doctor-heartbeat-session.js";
 import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
-import { resolveHeartbeatVisibility } from "./doctor/shared/channel-legacy-config-migrate.js";
 
 const CHECK_ID = "core/doctor/heartbeat-cadence-migration";
 

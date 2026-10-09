@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import {
@@ -13,6 +13,7 @@ import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owne
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { LegacyHeartbeatConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   LegacyHeartbeatVisibilitySchema,
@@ -21,6 +22,77 @@ import {
 } from "./doctor/shared/channel-legacy-config-migrate.js";
 
 export type HeartbeatConfig = LegacyHeartbeatConfig;
+
+/** Resolved heartbeat presentation toggles after defaults/channel/account precedence. */
+export type ResolvedHeartbeatVisibility = {
+  /** Whether successful heartbeat content should be sent as visible chat text. */
+  showOk: boolean;
+  /** Whether warning/error heartbeat content should be sent as visible chat text. */
+  showAlerts: boolean;
+  /** Whether heartbeat status should emit indicator events for UI surfaces. */
+  useIndicator: boolean;
+};
+
+const DEFAULT_VISIBILITY: ResolvedHeartbeatVisibility = {
+  showOk: false, // Silent by default
+  showAlerts: true, // Show content messages
+  useIndicator: true, // Emit indicator events
+};
+
+/** Resolves heartbeat visibility for a channel, applying account > channel > defaults precedence. */
+export function resolveHeartbeatVisibility(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  accountId?: string;
+}): ResolvedHeartbeatVisibility {
+  const { cfg, channel, accountId } = params;
+
+  // Webchat has no channel/account config branch, so only shared channel defaults apply.
+  if (channel === "webchat") {
+    const channelDefaults = cfg.channels?.defaults?.heartbeatVisibility;
+    return {
+      showOk: channelDefaults?.showOk ?? DEFAULT_VISIBILITY.showOk,
+      showAlerts: channelDefaults?.showAlerts ?? DEFAULT_VISIBILITY.showAlerts,
+      useIndicator: channelDefaults?.useIndicator ?? DEFAULT_VISIBILITY.useIndicator,
+    };
+  }
+
+  // Layer 1: Global channel defaults
+  const channelDefaults = cfg.channels?.defaults?.heartbeatVisibility;
+
+  // Layer 2: Per-channel config (at channel root level)
+  const channelCfg = asOptionalRecord(cfg.channels?.[channel]);
+  const perChannel = LegacyHeartbeatVisibilitySchema.parse(
+    selectLegacyHeartbeatVisibility(channel, channelCfg)?.value,
+  );
+
+  // Layer 3: Per-account config (most specific)
+  const accounts = asOptionalRecord(channelCfg?.accounts);
+  const accountCfg = accountId
+    ? asOptionalRecord(resolveChannelAccountEntry(accounts, accountId, channel, (id) => id))
+    : undefined;
+  const perAccount = LegacyHeartbeatVisibilitySchema.parse(
+    selectLegacyHeartbeatVisibility(channel, accountCfg)?.value,
+  );
+
+  return {
+    showOk:
+      perAccount?.showOk ??
+      perChannel?.showOk ??
+      channelDefaults?.showOk ??
+      DEFAULT_VISIBILITY.showOk,
+    showAlerts:
+      perAccount?.showAlerts ??
+      perChannel?.showAlerts ??
+      channelDefaults?.showAlerts ??
+      DEFAULT_VISIBILITY.showAlerts,
+    useIndicator:
+      perAccount?.useIndicator ??
+      perChannel?.useIndicator ??
+      channelDefaults?.useIndicator ??
+      DEFAULT_VISIBILITY.useIndicator,
+  };
+}
 
 type HeartbeatAgent = {
   agentId: string;
