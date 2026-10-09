@@ -48,7 +48,6 @@ import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
-import type { GetReplyOptions } from "../get-reply-options.types.js";
 import {
   markReplyPayloadForSourceSuppressionDelivery,
   type ReplyPayload,
