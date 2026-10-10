@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
+import { parseSidebarEntry, serializeSidebarEntry, SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
@@ -45,6 +45,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
+import { restoreSnapshotSession, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -296,7 +297,23 @@ export function buildReconciledSidebarZone(input: {
   rows: SidebarRecentSession[];
   pluginNavigation: readonly ControlUiRegistration<ControlUiNavigationItem>[];
   pluginTabs: readonly GatewayControlUiPluginTab[] | undefined;
+  snapshot?: { model: SidebarSnapshotModel; selectedKey: string };
+  pendingPlugins?: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
 }) {
+  if (input.snapshot) {
+    const { model, selectedKey } = input.snapshot;
+    const restoredRows = model.sessions.map((row) => restoreSnapshotSession(row, selectedKey));
+    return {
+      entries: model.entries.flatMap((entry) => {
+        const parsed = parseSidebarEntry(entry);
+        return parsed ? [parsed] : [];
+      }),
+      sidebarEntries: model.entries,
+      sessionRows: new Map(restoredRows.map((row) => [row.key, row])),
+      pluginTabs: new Map(model.plugins.map(({ key, ...tab }) => [key, tab])),
+      defaultPluginNavigationKeys: new Set(model.plugins.map((tab) => tab.key)),
+    };
+  }
   const navigation = input.pluginNavigation;
   const occupiedPlacements = new Set(input.sidebarEntries);
   const pluginTabs = new Map(
@@ -329,12 +346,37 @@ export function buildReconciledSidebarZone(input: {
     new Set([...pluginTabs.keys(), ...navigation.map((entry) => entry.key)]),
     defaultPluginNavigationKeys,
   );
-  return {
+  const live = {
     ...reconciled,
     sessionRows: new Map(pinnedRows.map((row) => [row.key, row])),
     pluginTabs,
     defaultPluginNavigationKeys,
   };
+  const retained = input.pendingPlugins;
+  if (retained) {
+    const visible = new Set(live.entries.map(serializeSidebarEntry));
+    for (const [index, key] of retained.entries.entries()) {
+      const entry = parseSidebarEntry(key);
+      if (entry?.type !== "plugin" || visible.has(key)) {
+        continue;
+      }
+      const tab = retained.plugins.find((plugin) => plugin.key === entry.key);
+      if (!tab) {
+        continue;
+      }
+      live.pluginTabs.set(entry.key, tab);
+      live.defaultPluginNavigationKeys.add(entry.key);
+      const following = retained.entries
+        .slice(index + 1)
+        .find((candidate) => visible.has(candidate));
+      const position = following
+        ? live.entries.findIndex((candidate) => serializeSidebarEntry(candidate) === following)
+        : live.entries.length;
+      live.entries.splice(position, 0, entry);
+      visible.add(key);
+    }
+  }
+  return live;
 }
 
 type SidebarSessionSelection = {
