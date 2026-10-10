@@ -662,6 +662,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     searchTranscripts: (
       params: SessionTranscriptSearchWorkerInput["params"],
       readIndexStatus: (signal: AbortSignal) => Promise<boolean>,
+      prepareWriter?: (signal: AbortSignal) => Promise<void>,
     ) => Promise<SessionTranscriptSearchResult>;
     generation: number;
     assertCurrent: () => void;

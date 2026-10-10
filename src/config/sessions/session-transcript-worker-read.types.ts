@@ -67,6 +67,7 @@ export type SessionTranscriptSearchWorkerInput = {
   kind: "transcript-search";
   database: { agentId: string; path: string };
   params: SessionTranscriptSearchParams;
+  prepareWriter?: boolean;
 };
 
 export type SessionProjectionStatusWorkerInput = {

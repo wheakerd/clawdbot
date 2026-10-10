@@ -241,16 +241,24 @@ export function createSessionHistoryWorkerReaders(
       "cold storage inventory",
       (value) => value,
     ),
-    searchTranscripts: (params, readIndexStatus) =>
+    searchTranscripts: (params, readIndexStatus, prepareWriter) =>
       runRequest(
-        () => ({ kind: "transcript-search", params }),
+        () => ({
+          kind: "transcript-search",
+          params,
+          ...(prepareWriter ? { prepareWriter: true } : {}),
+        }),
         JSON.stringify(params).length * 2,
         (value) => {
           assertResultKind(value, "transcript-search", "search");
           return value.result;
         },
         undefined,
-        async (request, signal) => {
+        async (request, signal): Promise<WorkerTaskResponse> => {
+          if (request === "transcript-search-prepare" && prepareWriter) {
+            await prepareWriter(signal);
+            return { input: null, timeoutMs: 60_000 };
+          }
           if (request !== "transcript-index-status") {
             throw new Error("Unexpected transcript search status request");
           }

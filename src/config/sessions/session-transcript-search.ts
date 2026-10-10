@@ -75,7 +75,8 @@ function readSearchRevision(database: DatabaseSync): string | undefined {
         unregister();
       });
     }
-    return `${connection}:${revision.schema.revision}:${revision.writeRevision}:${revision.mutationRevision}`;
+    // Read-only requalification can replace admission facts without changing the catalog.
+    return `${connection}:${revision.schema.schemaVersion}:${revision.schema.userVersion}:${revision.writeRevision}:${revision.mutationRevision}`;
   });
 }
 
@@ -276,7 +277,7 @@ export async function searchSessionTranscripts(
   try {
     try {
       // Status reads must not idle-close and checkpoint the writer between the hit
-      // snapshot and its revision check. Native opening remains lazy and off-thread.
+      // snapshot and its revision check. Native admission stays off-thread.
       if (supportsOpenClawAgentDatabaseExecution(options)) {
         execution = captureOpenClawAgentDatabaseExecution(options);
       }
@@ -286,8 +287,32 @@ export async function searchSessionTranscripts(
     return await withSessionHistoryWorkerDatabase(
       options,
       async (owner) => {
-        const result = await owner.searchTranscripts(request, (signal) =>
-          readIndexStatus(owner.assertCurrent, signal),
+        const preparedExecution = execution;
+        const prepareWriter =
+          preparedExecution && !preparedExecution.capturePreparedGenerationClaim()
+            ? async (signal: AbortSignal) => {
+                try {
+                  // Finish cold schema installation before the worker captures search hits.
+                  await readSessionTranscriptIndexStatus(
+                    options,
+                    () => {
+                      owner.assertCurrent();
+                      preparedExecution.assertCurrent();
+                    },
+                    signal,
+                  );
+                } catch (error) {
+                  statusOwnerFailure = { error };
+                }
+                signal.throwIfAborted();
+                owner.assertCurrent();
+                preparedExecution.assertCurrent();
+              }
+            : undefined;
+        const result = await owner.searchTranscripts(
+          request,
+          (signal) => readIndexStatus(owner.assertCurrent, signal),
+          prepareWriter,
         );
         owner.assertCurrent();
         return {

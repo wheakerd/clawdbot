@@ -104,6 +104,10 @@ serveOwnedWorkerTasks(
           ...request.database,
           env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
         };
+        if (request.prepareWriter) {
+          const prepared = await channel.request("transcript-search-prepare");
+          prepared.consumed();
+        }
         const { found, revision, ...result } = searchSessionTranscriptsReadOnlySync(
           request.params,
           options,
