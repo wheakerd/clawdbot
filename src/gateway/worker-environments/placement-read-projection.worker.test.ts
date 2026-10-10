@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SqliteSessionMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
@@ -307,7 +308,9 @@ describe("worker placement read projection", () => {
           if (settlement === "cancel") {
             // Abandoning this reader cannot settle the independent accepted writer.
             expect(() => previous.assertCurrent()).toThrow(
-              kind === "inventory" ? "placement inventory changed" : "placement authority changed",
+              kind === "inventory"
+                ? SqliteSessionMutationConflictError
+                : "placement authority changed",
             );
             publication.rollback();
             previous.assertCurrent();
@@ -334,7 +337,7 @@ describe("worker placement read projection", () => {
         sessionKey: "agent:main:new-placement",
         agentId: "main",
       });
-      expect(() => empty.assertCurrent()).toThrow("placement inventory changed");
+      expect(() => empty.assertCurrent()).toThrow(SqliteSessionMutationConflictError);
       const current = await store.prepareMaintenancePlacements();
       try {
         expect(current.placements).toEqual([placement]);
@@ -343,6 +346,7 @@ describe("worker placement read projection", () => {
         current.release();
       }
       expect(() => current.assertCurrent()).toThrow("placement inventory changed");
+      expect(() => current.assertCurrent()).not.toThrow(SqliteSessionMutationConflictError);
     } finally {
       empty.release();
     }
@@ -384,14 +388,17 @@ describe("worker placement read projection", () => {
           if (kind === "local") {
             prepared.assertCurrent();
           } else {
-            expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
+            expect(() => prepared.assertCurrent()).toThrow(SqliteSessionMutationConflictError);
           }
           expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
           publication[settlement]();
           if (kind === "local" || settlement === "rollback") {
             prepared.assertCurrent();
+          } else if (settlement === "commit") {
+            expect(() => prepared.assertCurrent()).toThrow(SqliteSessionMutationConflictError);
           } else {
             expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
+            expect(() => prepared.assertCurrent()).not.toThrow(SqliteSessionMutationConflictError);
           }
           if (settlement === "rollback") {
             sessionRead.assertCurrent();
@@ -408,6 +415,7 @@ describe("worker placement read projection", () => {
       try {
         await closeOpenClawStateDatabaseAsync();
         expect(() => closing.assertCurrent()).toThrow();
+        expect(() => closing.assertCurrent()).not.toThrow(SqliteSessionMutationConflictError);
       } finally {
         closing.release();
       }
