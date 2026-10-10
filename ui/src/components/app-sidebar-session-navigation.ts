@@ -627,12 +627,13 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   knownSessionGroups(): string[] {
     return collectKnownSessionGroups(
-      this.context?.sessions.state.groups ?? [],
+      this.sessionData.sessionsResult ? (this.context?.sessions.state.groups ?? []) : [],
       this.sessionData.sessionsResult?.sessions ?? [],
     );
   }
 
-  readonly knownSectionOrder = () => [...(this.context?.sessions.state.sectionOrder ?? [])];
+  readonly knownSectionOrder = () =>
+    this.sessionData.sessionsResult ? [...(this.context?.sessions.state.sectionOrder ?? [])] : [];
 
   knownSessionCatalogIds(): string[] {
     return collectKnownSidebarSessionCatalogIds({
