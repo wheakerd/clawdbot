@@ -1,12 +1,18 @@
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronScratchGetResult } from "../../api/types.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { createContext, createGateway, operatorHello } from "./cron-page.test-support.ts";
-import "./scratch-editor.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { createGateway, operatorHello } from "./cron-page.test-support.ts";
+import "./scratch-editor.tsx";
 
-type ScratchEditor = HTMLElement & { jobId: string; updateComplete: Promise<boolean> };
+type ScratchEditor = HTMLElement & { jobId: string; gateway: ApplicationContext["gateway"] };
+
+async function settle() {
+  await Promise.resolve();
+  flush();
+}
 const snapshot = (
   content: string | null,
   currentRevision: number,
@@ -19,18 +25,17 @@ const snapshot = (
 
 async function mount(request: (method: string, params?: unknown) => Promise<unknown>) {
   const gateway = createGateway({ request } as GatewayBrowserClient, true);
-  const host = createApplicationContextProvider(createContext(gateway));
   const editor = document.createElement("openclaw-cron-scratch-editor") as ScratchEditor;
   editor.jobId = "ordinary-job";
-  host.append(editor);
-  document.body.append(host);
-  await editor.updateComplete;
+  editor.gateway = gateway;
+  document.body.append(editor);
+  await settle();
   return { editor, gateway };
 }
 
 async function click(editor: ScratchEditor, label: string) {
   getButtonByText(editor, label).click();
-  await editor.updateComplete;
+  await settle();
 }
 
 function getButtonByText(editor: Element, label: string): HTMLButtonElement {
@@ -90,7 +95,7 @@ describe("ordinary automation scratch editor", () => {
     expect(editor.textContent).toContain("No scratch saved.");
   });
 
-  it.each(["job", "access"] as const)(
+  it.each(["job", "access", "source", "reconnect", "disconnect"] as const)(
     "rejects a pending read after its %s owner changes",
     async (change) => {
       const pending = createDeferred<CronScratchGetResult>();
@@ -100,13 +105,21 @@ describe("ordinary automation scratch editor", () => {
       expect(request).toHaveBeenCalledOnce();
       if (change === "job") {
         editor.jobId = "another-job";
-      } else {
+      } else if (change === "access") {
         gateway.emitSnapshot({ hello: operatorHello(["operator.read"]) });
+      } else if (change === "source") {
+        editor.gateway = createGateway(gateway.snapshot.client!, true);
+      } else if (change === "reconnect") {
+        gateway.emitSnapshot({ phase: "reconnecting" });
+        gateway.emitSnapshot({ phase: "connected" });
+      } else {
+        editor.remove();
+        document.body.append(editor);
       }
-      await editor.updateComplete;
+      await settle();
       pending.resolve(snapshot("Private old notes", 1));
       await pending.promise;
-      await editor.updateComplete;
+      await settle();
       expect(editor.querySelector("textarea")).toBeNull();
       expect(editor.textContent).not.toContain("Private old notes");
       if (change === "access") {
@@ -135,7 +148,7 @@ describe("ordinary automation scratch editor", () => {
       } else {
         textarea.value = "é".repeat(8);
         textarea.dispatchEvent(new Event("input", { bubbles: true }));
-        await editor.updateComplete;
+        await settle();
       }
       expect(getButtonByText(editor, "Save scratch").disabled).toBe(true);
       await click(editor, "Remove scratch");

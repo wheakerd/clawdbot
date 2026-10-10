@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import { expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -24,16 +23,19 @@ export type TestDebugPage = HTMLElement & {
   loadDiagnostics: () => Promise<void>;
 };
 
-export type TestDebugOverlay = LitElement & {
+type RenderedTestElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
+
+export type TestDebugOverlay = RenderedTestElement & {
   context: ApplicationContext;
   toggle: () => void;
 };
 
-export type TestSparkline = LitElement & { samples: readonly SparklineSample[] };
+export type TestSparkline = RenderedTestElement & { samples: readonly SparklineSample[] };
 
 export async function updateOverlayVitals(overlay: TestDebugOverlay): Promise<void> {
   await overlay.updateComplete;
-  await overlay.querySelector<LitElement>("openclaw-debug-overlay-content")?.updateComplete;
+  await overlay.querySelector<RenderedTestElement>("openclaw-debug-overlay-content")
+    ?.updateComplete;
   for (const tile of overlay.querySelectorAll<TestSparkline>("openclaw-sparkline")) {
     await tile.updateComplete;
   }

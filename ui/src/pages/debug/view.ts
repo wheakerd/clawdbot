@@ -156,7 +156,7 @@ export function renderDebug(props: DebugProps) {
 
   const rawSection = renderSettingsSection(
     { title: t("debug.rawProtocolTitle"), description: t("debug.rawProtocolSubtitle") },
-    html`${(["status", "health"] as const).map((key) => {
+    (["status", "health"] as const).map((key) => {
       const title = t(`debug.${key}`);
       const value = props[key];
       return renderSettingsRow({
@@ -164,7 +164,7 @@ export function renderDebug(props: DebugProps) {
         stacked: true,
         control: renderCodeBlock(title, value, () => JSON.stringify(value ?? {}, null, 2)),
       });
-    })}`,
+    }),
   );
 
   const lanesSection = renderSettingsSection(
@@ -295,8 +295,7 @@ ${props.callError}</pre>
   );
 
   return renderSettingsPage(
-    html`${snapshotsSection} ${rawSection} ${lanesSection} ${rpcSection} ${modelsSection}
-    ${eventLogSection}`,
+    [snapshotsSection, rawSection, lanesSection, rpcSection, modelsSection, eventLogSection],
     { wide: true },
   );
 }

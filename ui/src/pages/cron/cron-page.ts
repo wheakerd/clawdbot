@@ -624,6 +624,7 @@ class CronPage extends OpenClawLightDomElement {
       ${this.runTranscript.render()}
       ${renderSettingsWorkspace(
         renderCron({
+          gateway: this.context.gateway,
           loading: this.cron.cronLoading,
           hasLoaded: this.cron.cronJobsSnapshotRevision !== null,
           listError: this.cron.cronJobsError,

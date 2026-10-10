@@ -22,6 +22,7 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
 
 function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
   return {
+    gateway: null,
     loading: false,
     hasLoaded: true,
     listError: null,
