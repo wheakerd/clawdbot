@@ -107,15 +107,16 @@ export async function runPreparedEmbeddedLoop(
     getApiKeyInfo,
   } = preparedRuntime;
   const initialHarness = preparedRuntime.snapshot().agentHarness;
-  if (initialHarness.id === "openclaw" && params.openclawFallbackPrompt) {
-    const fallback = params.openclawFallbackPrompt;
+  const openclawFallback =
+    initialHarness.id === "openclaw" ? params.openclawFallbackPrompt : undefined;
+  if (openclawFallback) {
     params = {
       ...params,
-      prompt: fallback.prompt,
-      execApprovalContinuationPromptRange: fallback.execApprovalContinuationPromptRange,
+      prompt: openclawFallback.prompt,
+      execApprovalContinuationPromptRange: openclawFallback.execApprovalContinuationPromptRange,
       runtimeContextFragments: [
         ...(params.runtimeContextFragments ?? []),
-        ...fallback.runtimeContextFragments,
+        ...openclawFallback.runtimeContextFragments,
       ],
     };
   }
@@ -188,6 +189,7 @@ export async function runPreparedEmbeddedLoop(
   let emptyErrorRetries = 0;
   const sessionPromptState = await createEmbeddedRunSessionPromptState({
     runParams: params,
+    reusePersistedUserTurn: openclawFallback !== undefined,
     sessionAgentId,
     resolvedSessionKey,
     lifecycleGeneration,
