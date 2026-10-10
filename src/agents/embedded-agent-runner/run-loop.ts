@@ -96,9 +96,6 @@ export async function runPreparedEmbeddedLoop(
     preparedRuntime.admittedRunContext,
     abortSignal,
   );
-  // Admission and cancellation travel together: recovery must observe queue expiry
-  // after the physical attempt closes, even when the caller signal remains live.
-  const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
   ({ provider, modelId } = preparedRuntime);
   const {
     model,
@@ -110,6 +107,21 @@ export async function runPreparedEmbeddedLoop(
     getApiKeyInfo,
   } = preparedRuntime;
   const initialHarness = preparedRuntime.snapshot().agentHarness;
+  if (initialHarness.id === "openclaw" && params.openclawFallbackPrompt) {
+    const fallback = params.openclawFallbackPrompt;
+    params = {
+      ...params,
+      prompt: fallback.prompt,
+      execApprovalContinuationPromptRange: fallback.execApprovalContinuationPromptRange,
+      runtimeContextFragments: [
+        ...(params.runtimeContextFragments ?? []),
+        ...fallback.runtimeContextFragments,
+      ],
+    };
+  }
+  // Admission and cancellation travel together: recovery must observe queue expiry
+  // after the physical attempt closes, even when the caller signal remains live.
+  const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
   const traceAttempts: TraceAttempt[] = [];
   // Same-model retry diagnostics inform exhaustion, not model-routing authority.
   const resolveRuntimeFallbackReason = (): string | null =>

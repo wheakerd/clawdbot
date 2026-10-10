@@ -83,7 +83,9 @@ function seedStoppedWalDatabase(filename: string, sql: string): void {
   }
   // Preserve a stopped writer's WAL family, including uncheckpointed schema and row changes.
   for (const artifact of family) {
-    fs.writeFileSync(artifact.filename, artifact.bytes);
+    const replacement = `${artifact.filename}.previous-process`;
+    fs.writeFileSync(replacement, artifact.bytes);
+    fs.renameSync(replacement, artifact.filename);
   }
 }
 

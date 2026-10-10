@@ -157,13 +157,6 @@ async function createExistingInboxJob(fixture: Awaited<ReturnType<typeof createF
   await saveCronJobsStore(fixture.storePath, { ...store, jobs: [...store.jobs, job] });
   return job;
 }
-function taskMessage(job: CronJob) {
-  if (job.payload.kind !== "agentTurn") {
-    throw new Error(`Task ${job.id} was not converted`);
-  }
-  return job.payload.message;
-}
-
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
 
 function migrate(

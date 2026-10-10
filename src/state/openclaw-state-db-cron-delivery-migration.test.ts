@@ -7,6 +7,7 @@ import { ensureCronRunReceiptSchema } from "../cron/store/run-receipt-store.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   openOpenClawStateReadConnection,
   openOpenClawStateReadOnlyLocation,
@@ -62,7 +63,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
           receipt_id: "legacy-receipt",
         });
         const writer = openOpenClawStateDatabase(options);
-        expect(readStateSchemaContentVersion(writer.db)).toBe(20);
+        expect(readStateSchemaContentVersion(writer.db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         const observation = observeSqliteReadSql(StatementSync.prototype);
         try {
           expect(readStateSchemaContentVersion(db)).toBe(19);
@@ -81,7 +82,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
       }
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
-        expect(readStateSchemaContentVersion(db)).toBe(20);
+        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         expect(observation.queries).toEqual([]);
       } finally {
         observation.restore();
@@ -202,6 +203,10 @@ it("fences schema-20 schedulers without changing the catalog or stored automatio
     }
   })();
 
+  // Old-process bytes must not reuse this process's admission for the current schema.
+  const replacement = `${databasePath}.previous-process`;
+  copyFileSync(databasePath, replacement);
+  renameSync(replacement, databasePath);
   expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
     { kind: "automation-policy-fence-v21", path: databasePath },
   ]);
