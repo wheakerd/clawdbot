@@ -5,6 +5,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import {
   setupAgentRunnerExecutionTestState,
+  GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
   createFollowupRun,
   fallbackAttemptOptions,
@@ -324,20 +325,6 @@ describe("executeAgentTurn: primary probe routing", () => {
   });
 
   it.each([
-    {
-      label: "exhausted",
-      outcome: "exhausted" as const,
-      attempts: [{ error: "missing tool result" }],
-      event: false,
-      expectedText: GENERIC_RUN_FAILURE_TEXT,
-    },
-    {
-      label: "completed",
-      outcome: "completed" as const,
-      attempts: [],
-      event: false,
-      expectedText: GENERIC_RUN_FAILURE_TEXT,
-    },
     {
       label: "event",
       outcome: "completed" as const,

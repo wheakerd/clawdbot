@@ -16,11 +16,7 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { resolveAdmittedCronCompletionStatus } from "./completion-status.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import {
-  makeCfg,
-  makeJob,
-  withTempCronHome,
-} from "./isolated-agent.test-harness.js";
+import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
 type AnnounceOptions = {
