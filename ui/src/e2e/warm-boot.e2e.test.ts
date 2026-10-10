@@ -63,16 +63,24 @@ async function waitForPersistedWarmState(page: Page): Promise<void> {
           });
         }
         const [rosters, snapshots] = await Promise.all([
-          readRecords("openclaw-session-roster", "rosters"),
+          readRecords("openclaw-chat-snapshots", "sidebarSnapshots"),
           readRecords("openclaw-chat-snapshots", "snapshots"),
         ]);
         return {
           bootRecord: hasBootRecord,
           roster: rosters.some((record) => {
-            if (typeof record !== "object" || record === null || !("result" in record)) {
+            if (typeof record !== "object" || record === null || !("model" in record)) {
               return false;
             }
-            const result = record.result;
+            const model = record.model;
+            if (typeof model !== "object" || model === null || !("roster" in model)) {
+              return false;
+            }
+            const roster = model.roster;
+            if (typeof roster !== "object" || roster === null || !("result" in roster)) {
+              return false;
+            }
+            const result = roster.result;
             return (
               typeof result === "object" &&
               result !== null &&
@@ -143,6 +151,21 @@ suite.define(() => {
             },
           ],
           methodResponses: {
+            "sessions.list": {
+              cases: [
+                {
+                  match: { includeOwnerSessionCounts: true },
+                  response: {
+                    ts: timestamp,
+                    path: "",
+                    count: 0,
+                    sessions: [],
+                    defaults: { model: null, modelProvider: null, contextTokens: null },
+                    ownerSessionCounts: [],
+                  },
+                },
+              ],
+            },
             "chat.startup": {
               sessionId: "warm-reload-session",
               sessionInfo: currentRow,
@@ -262,6 +285,7 @@ suite.define(() => {
         });
 
         await gateway.setSessionsListResponse({
+          ownerSessionCounts: [],
           ts: timestamp + 1,
           path: "",
           count: 2,
