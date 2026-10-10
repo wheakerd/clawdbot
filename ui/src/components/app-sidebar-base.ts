@@ -48,8 +48,8 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarEntries: readonly string[] = DEFAULT_SIDEBAR_ENTRIES;
   @property({ attribute: false }) navigationVisible = true;
-  @state() sidebarSnapshot: SidebarSnapshotModel | null = null;
-  @state() sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
+  sidebarSnapshot: SidebarSnapshotModel | null = null;
+  sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
   private liveSidebarAgentsMode: "chip" | "roster" = "chip";
   @property({ attribute: false })
   get sidebarAgentsMode(): "chip" | "roster" {
