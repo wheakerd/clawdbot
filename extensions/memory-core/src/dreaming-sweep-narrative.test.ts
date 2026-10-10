@@ -163,7 +163,7 @@ async function createSweep(
     throw new Error("dreaming trigger hook was not registered");
   }
   const beforeReply = registration[1] as BeforeReply;
-  const run = async (trigger: "cron" = "cron") => {
+  const run = async () => {
     const sessionKey = "agent:main:main";
     enqueueSystemEvent(MEMORY_DREAMING_SYSTEM_EVENT_TEXT, {
       agentId: "main",
@@ -172,7 +172,7 @@ async function createSweep(
     });
     return await beforeReply(
       { cleanedBody: MEMORY_DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger, agentId: "main", workspaceDir, sessionKey },
+      { trigger: "cron", agentId: "main", workspaceDir, sessionKey },
     );
   };
   const readDreams = () =>
@@ -352,7 +352,7 @@ describe("dreaming sweep diary publication", () => {
     let stopped = false;
     let stopping: Promise<void> | undefined;
     try {
-      expect(await sweep.run("cron")).toEqual({
+      expect(await sweep.run()).toEqual({
         handled: true,
         reason: "memory-core: short-term dreaming processed",
       });

@@ -12,6 +12,7 @@ import {
   consumeUpdatePostInstallDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
 } from "../infra/update-doctor-result.js";
+import { prepareManagedHandoffLeaseDatabase } from "../infra/update-managed-service-handoff-database.js";
 import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
@@ -250,19 +251,20 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
               throw new Error("Could not initialize isolated fixture handoff");
             }
             const { pid, startIdentity } = store.processIdentity();
-            managedRow = {
+            const row = {
               owner: "shipped-owner",
               payload_json: JSON.stringify({ version: 1, pid, startIdentity }),
               updated_at: 7,
             };
-            const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-            try {
+            managedRow = row;
+            const handoffDatabase = await prepareManagedHandoffLeaseDatabase(
+              resolveManagedUpdateLeaseDatabasePath(),
+            );
+            handoffDatabase(true, (db) => {
               db.prepare(
                 "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
-              ).run(managedRoot, managedRow.owner, managedRow.payload_json, managedRow.updated_at);
-            } finally {
-              db.close();
-            }
+              ).run(managedRoot, row.owner, row.payload_json, row.updated_at);
+            });
             if (mode !== "managed pnpm missing metadata") {
               fs.writeFileSync(
                 metaPath,
@@ -279,11 +281,14 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
             }
           }
           if (mode === "managed handoff missing") {
-            const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-            db.prepare("DELETE FROM managed_update_handoffs WHERE install_root = ?").run(
-              managedRoot,
+            const handoffDatabase = await prepareManagedHandoffLeaseDatabase(
+              resolveManagedUpdateLeaseDatabasePath(),
             );
-            db.close();
+            handoffDatabase(true, (db) => {
+              db.prepare("DELETE FROM managed_update_handoffs WHERE install_root = ?").run(
+                managedRoot,
+              );
+            });
           }
           const resume = () =>
             runBuiltRuntime(
@@ -325,7 +330,9 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
             expect(sameSchema.code, `${sameSchema.stdout}\n${sameSchema.stderr}`).toBe(0);
           }
           if (managedRow) {
-            const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
+            const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath(), {
+              readOnly: true,
+            });
             try {
               expect(
                 db
@@ -351,10 +358,17 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
                   .get(`${managedRoot}/.openclaw-update-child-`)?.count,
               ).toBe(0);
             } finally {
-              db.prepare(
-                "DELETE FROM managed_update_handoffs WHERE install_root = ? AND owner = ?",
-              ).run(managedRoot, managedRow.owner);
               db.close();
+              const handoffDatabase = await prepareManagedHandoffLeaseDatabase(
+                resolveManagedUpdateLeaseDatabasePath(),
+              );
+              handoffDatabase(true, (writer) => {
+                writer
+                  .prepare(
+                    "DELETE FROM managed_update_handoffs WHERE install_root = ? AND owner = ?",
+                  )
+                  .run(managedRoot, managedRow.owner);
+              });
             }
           }
           expect(resumed.code, `${resumed.stdout}\n${resumed.stderr}`).toBe(success ? 0 : 1);
