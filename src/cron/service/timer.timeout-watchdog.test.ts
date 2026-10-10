@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
   createIsolatedRegressionJob,
@@ -22,6 +22,12 @@ import { stop } from "./ops-lifecycle.js";
 import type { CronServiceDeps, CronServiceState } from "./state.js";
 import { executeJobCoreWithTimeout, runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
+
+beforeAll(() => {
+  // SQLite admission compares monotonic deadlines across the host and workers.
+  vi.setConfig({ fakeTimers: { toNotFake: ["hrtime"] } });
+  return () => vi.resetConfig();
+});
 
 const SCHEDULED_AT = Date.parse("2026-05-10T09:00:00.000Z");
 const fixtures = setupCronRegressionFixtures({
