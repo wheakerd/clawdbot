@@ -28,6 +28,7 @@ import {
 } from "./dispatch-from-config.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import type { SourceReplyDeliveryRuntimeOptions } from "./source-reply-delivery-runtime.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -941,11 +942,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const onError = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, onError });
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      const internalOpts = opts as
-        | (GetReplyOptions & {
-            onSourceReplyDeliveryModeResolved?: (mode: "automatic") => void;
-          })
-        | undefined;
+      const internalOpts = opts as SourceReplyDeliveryRuntimeOptions | undefined;
       internalOpts?.onSourceReplyDeliveryModeResolved?.("automatic");
       return { text: "Rejected fallback final" } satisfies ReplyPayload;
     });

@@ -3,7 +3,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Result } from "@openclaw/normalization-core/result";
 import type { PersistedClawInstall } from "../claws/provenance-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureActiveCronJobAgentDeletion } from "../cron/active-jobs.js";
@@ -34,13 +33,8 @@ import type {
 import {
   readAgentDeletionJournal,
   readAgentDeletionJournalInDatabase,
-  type AgentDeletionJournalCleanupPath,
-  type AgentDeletionJournalEntry,
 } from "../state/agent-deletion-journal.js";
-import type {
-  AgentDeletionWorkerGuard,
-  AgentDeletionWorkerPredicate,
-} from "../state/agent-deletion-worker-contract.js";
+import type { AgentDeletionWorkerPredicate } from "../state/agent-deletion-worker-contract.js";
 import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import {
   readAgentLifecycleStoreFacts,
@@ -83,7 +77,9 @@ import {
   beginRemoteAgentDeletionJournal,
   rollbackRemoteAgentDeletionJournal,
 } from "./agent-deletion-journal-remote.js";
+import type { AgentDeletionOperation } from "./agent-deletion-operation.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
+export type { AgentDeletionOperation } from "./agent-deletion-operation.js";
 export {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
@@ -101,29 +97,6 @@ export type AgentLifecycleBinding = Readonly<{
 type AgentDeletionBeginOptions = {
   expectedClawInstall?: PersistedClawInstall | null;
   preserveDeleteFiles?: boolean;
-};
-
-export type AgentDeletionOperation = AgentDeletionWorkerAuthority & {
-  entry: AgentDeletionJournalEntry;
-  previousEntry?: AgentDeletionJournalEntry;
-  runWithRemoteAdmission<T>(
-    operation: (
-      authority: Parameters<AgentDeletionJournalTransport>[1] & { databasePath: string },
-      guard: AgentDeletionWorkerGuard,
-    ) => Promise<Result<T, Error>>,
-  ): Promise<T>;
-  assertCurrentAsync(this: void): Promise<void>;
-  assertCurrentFinal(this: void): void;
-  runDatabaseCleanup: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
-  fenceDatabasePaths(paths: readonly string[]): Promise<void>;
-  fenceCleanupPaths(paths: readonly AgentDeletionJournalCleanupPath[]): Promise<void>;
-  finish(options?: { unregisterDatabases?: boolean }): Promise<void>;
-  releaseClawRows(input: {
-    files: Array<{ path: string; action: string }>;
-    complete: boolean;
-  }): Promise<boolean>;
-  handoffClawRetry(): Promise<void>;
-  rollback(): Promise<void>;
 };
 
 /** Acquire before the config lock and retain ownership through cleanup and recovery. */

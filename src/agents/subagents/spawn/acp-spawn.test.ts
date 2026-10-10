@@ -309,12 +309,6 @@ function expectInitializeSessionFields(expected: Record<string, unknown>): Recor
   );
 }
 
-function expectBindingCallFields(expected: Record<string, unknown>): Record<string, unknown> {
-  const input = latestBindingInput();
-  expect(input).toMatchObject(expected);
-  return input;
-}
-
 function expectRelayCallFields(expected: Record<string, unknown>, callIndex = 0): void {
   expectRecordFields(
     hoisted.startAcpSpawnParentStreamRelayMock.mock.calls[callIndex]?.[0],
@@ -1070,7 +1064,7 @@ describe("spawnAcpDirect", () => {
     );
 
     expect(result.status, JSON.stringify(result)).toBe("accepted");
-    expectBindingCallFields({
+    expect(latestBindingInput()).toMatchObject({
       placement: "child",
       conversation: {
         channel: "matrix",
@@ -1153,7 +1147,7 @@ describe("spawnAcpDirect", () => {
     );
 
     expect(result.status).toBe("accepted");
-    expectBindingCallFields({
+    expect(latestBindingInput()).toMatchObject({
       placement: "child",
       conversation: {
         channel: "custom",
@@ -1228,7 +1222,7 @@ describe("spawnAcpDirect", () => {
         agentId: ownerAgentId,
         agent: agentId === "bot-alpha" ? "bot-alpha" : "codex",
       });
-      expectBindingCallFields({
+      expect(latestBindingInput()).toMatchObject({
         placement: "child",
         conversation: {
           channel: "matrix",

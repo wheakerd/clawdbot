@@ -3662,11 +3662,12 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.lastChannel).toBe("mattermost");
     expect(result.sessionEntry.lastTo).toBe("channel:CHAN1");
     expect(result.sessionEntry.lastThreadId).toBeUndefined();
-    expect(result.sessionEntry.deliveryContext).toEqual({
+    const expectedContext = {
       channel: "mattermost",
       to: "channel:CHAN1",
       accountId: "default",
-    });
+    };
+    expect(result.sessionEntry.deliveryContext).toEqual(expectedContext);
     expect(result.sessionEntry.route).toEqual({
       channel: "mattermost",
       accountId: "default",
@@ -3680,11 +3681,7 @@ describe("initSessionState internal channel routing preservation", () => {
 
     const persisted = readSessionStoreFast(storePath);
     expect(persisted[sessionKey]?.lastThreadId).toBeUndefined();
-    expect(persisted[sessionKey]?.deliveryContext).toEqual({
-      channel: "mattermost",
-      to: "channel:CHAN1",
-      accountId: "default",
-    });
+    expect(persisted[sessionKey]?.deliveryContext).toEqual(expectedContext);
     expect(persisted[sessionKey]?.route).toEqual({
       channel: "mattermost",
       accountId: "default",

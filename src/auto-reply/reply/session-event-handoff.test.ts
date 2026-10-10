@@ -14,7 +14,6 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
@@ -41,12 +40,8 @@ import {
 import * as gatewayWork from "../../process/gateway-work-admission.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { registerSessionEventDeletionEnvironmentTests } from "./session-event-deletion-environment.cases.js";
 import {
@@ -55,6 +50,12 @@ import {
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
 import { prepareSessionEventTargetForHost } from "./session-event-target.js";
+import {
+  continuation,
+  sessionKey,
+  route,
+  withTargetFixture,
+} from "./session-event-target.test-support.js";
 // These cases stop before turn admission. Unexpected dispatch is a failure,
 // never a synthetic adoption/settlement supplied by the fixture.
 const dispatch = vi.hoisted(() =>
@@ -77,54 +78,6 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 vi.mock("../dispatch.js", () => ({
   dispatchInboundMessageWithRoutedChannelDispatcher: dispatch,
 }));
-
-const continuation = vi.spyOn(gatewayWork, "runWithGatewayDetachedWorkContinuation");
-const sessionKey = "agent:main:event-origin";
-const route = {
-  channel: "telegram",
-  to: "-100001",
-  accountId: "event-account",
-  threadId: "42",
-};
-
-async function withTargetFixture(
-  run: (fixture: OpenClawTestState & { storePath: string }) => Promise<void>,
-  options: { empty?: boolean; native?: boolean } = {},
-) {
-  await withOpenClawTestState(
-    {
-      label: "session-event-target",
-      ...(options.native ? { env: { OPENCLAW_TEST_FAST: "0" } } : {}),
-    },
-    async (state) => {
-      setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
-      openOpenClawStateDatabase({ env: state.env });
-      if (!options.empty) {
-        const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-        writeSessionEntry(database, sessionKey, {
-          sessionId: "original-session",
-          lifecycleRevision: "original-revision",
-          updatedAt: 1,
-          delivery: normalizeSessionDeliveryState({ context: route }),
-          permissionMode: "full",
-        });
-      }
-      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env });
-      try {
-        await run({ ...state, storePath });
-      } finally {
-        resetSystemEventsForTest();
-        gatewayWork.resetGatewayWorkAdmission();
-        await Promise.allSettled(
-          continuation.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value] : [],
-          ),
-        );
-        expect(gatewayWork.getActiveGatewayRootWorkCount()).toBe(0);
-      }
-    },
-  );
-}
 
 beforeEach(() => {
   eventLogError.mockClear();

@@ -6,7 +6,6 @@ import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
-import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
@@ -21,8 +20,11 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
-import type { GatewayCronState } from "./server-cron.js";
-import type { GatewayClient } from "./server-methods/types.js";
+import {
+  createCronEventCollector,
+  directCronReq,
+  type DirectCronState,
+} from "./server.cron-rpc.test-support.js";
 import {
   agentCommandMock,
   connectOk,
@@ -195,21 +197,8 @@ async function setupCronTestRun(
   return { dir };
 }
 
-type DirectCronState = GatewayCronState & {
-  schedulerClock: ReturnType<typeof createGatewaySchedulerClock>;
-  getRuntimeConfig: () => import("../config/types.openclaw.js").OpenClawConfig;
-};
-
-type CronBroadcast = (event: string, payload: unknown) => void;
-
-type DirectCronResponse = {
-  ok: boolean;
-  payload?: unknown;
-  error?: { code?: string; message?: string; details?: unknown };
-};
-
 async function createDirectCronState(params?: {
-  broadcast?: CronBroadcast;
+  broadcast?: (event: string, payload: unknown) => void;
 }): Promise<DirectCronState> {
   resetConfigRuntimeState();
   const [{ getRuntimeConfig }, { buildGatewayCronService }] = await Promise.all([
@@ -229,95 +218,6 @@ async function createDirectCronState(params?: {
   };
   expectDefined(activeCronRun, "cron setup").cronState = cronState;
   return cronState;
-}
-
-function createCronEventCollector() {
-  const events: Record<string, unknown>[] = [];
-  const waiters: Array<{
-    check: (payload: Record<string, unknown>) => boolean;
-    resolve: (payload: Record<string, unknown>) => void;
-    reject: (error: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }> = [];
-  const flush = (payload: Record<string, unknown>) => {
-    for (let index = waiters.length - 1; index >= 0; index -= 1) {
-      const waiter = waiters[index];
-      if (!waiter) {
-        continue;
-      }
-      if (!waiter.check(payload)) {
-        continue;
-      }
-      clearTimeout(waiter.timer);
-      waiters.splice(index, 1);
-      waiter.resolve(payload);
-    }
-  };
-  return {
-    broadcast: (event: string, payload: unknown) => {
-      if (event !== "cron" || !payload || typeof payload !== "object" || Array.isArray(payload)) {
-        return;
-      }
-      const record = payload as Record<string, unknown>;
-      events.push(record);
-      flush(record);
-    },
-    wait(check: (payload: Record<string, unknown>) => boolean, timeoutMs = CRON_WAIT_TIMEOUT_MS) {
-      const existing = events.find(check);
-      if (existing) {
-        return Promise.resolve(existing);
-      }
-      return new Promise<Record<string, unknown>>((resolve, reject) => {
-        const waiter = {
-          check,
-          resolve,
-          reject,
-          timer: setTimeout(() => {
-            waiters.splice(waiters.indexOf(waiter), 1);
-            reject(new Error("timeout waiting for cron event"));
-          }, timeoutMs),
-        };
-        waiters.push(waiter);
-      });
-    },
-  };
-}
-
-async function directCronReq(
-  cronState: DirectCronState,
-  method: string,
-  params: Record<string, unknown>,
-  options: { client?: GatewayClient } = {},
-): Promise<DirectCronResponse> {
-  const { cronHandlers } = await import("./server-methods/cron.js");
-  let result: DirectCronResponse | undefined;
-  const respond = (ok: boolean, payload?: unknown, error?: DirectCronResponse["error"]) => {
-    result = { ok, payload, error };
-  };
-  try {
-    await expectDefined(
-      cronHandlers[method],
-      "cronHandlers[method] test invariant",
-    )({
-      req: {} as never,
-      params,
-      respond,
-      context: {
-        cron: cronState.cron,
-        cronStorePath: cronState.storePath,
-        logGateway: createInfoWarnErrorLogger(),
-        getRuntimeConfig: cronState.getRuntimeConfig,
-      } as never,
-      client: options.client ?? null,
-      isWebchatConnect: () => false,
-    });
-  } catch (err) {
-    respond(false, undefined, {
-      code: "unavailable",
-      message: err instanceof Error ? err.message : String(err),
-    });
-  }
-  return expectDefined(result, `${method} did not respond`);
 }
 
 function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown }) {

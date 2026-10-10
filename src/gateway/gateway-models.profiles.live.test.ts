@@ -130,6 +130,11 @@ import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import {
+  parseFilter,
+  toInt,
+  filterAttemptedGatewayLiveModels,
+} from "./gateway-models.live-input.test-support.js";
 import { enterIsolatedGatewayLiveDiscoveryState } from "./gateway-models.profiles.live.discovery.test-helpers.js";
 import {
   createExplicitLiveFallbackModel,
@@ -219,21 +224,6 @@ const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_L
 const QUIET_LIVE_LOGS = process.env.OPENCLAW_LIVE_TEST_QUIET !== "0";
 
 const describeLive = isLiveTestEnabled(["OPENCLAW_LIVE_GATEWAY"]) ? describe : describe.skip;
-
-function parseFilter(raw?: string): Set<string> | null {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") {
-    return null;
-  }
-  const ids: string[] = [];
-  for (const rawId of trimmed.split(",")) {
-    const id = rawId.trim();
-    if (id.length > 0) {
-      ids.push(id);
-    }
-  }
-  return ids.length ? new Set(ids) : null;
-}
 
 function listHighSignalLiveModelProviders(): string[] {
   return [...new Set(listPrioritizedHighSignalLiveModelRefs().map((ref) => ref.provider))].toSorted(
@@ -353,15 +343,6 @@ async function withSuppressedGatewayLiveWarnings<T>(run: () => Promise<T>): Prom
   }
 }
 
-function toInt(value: string | undefined, fallback: number): number {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
 function resolveGatewayLiveSetupTimeoutMs(
   raw = process.env.OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS,
 ): number {
@@ -412,13 +393,6 @@ function appendGatewayLiveFallbackCandidates<T>(params: {
       .filter((item) => !primaryKeys.has(params.key(item)))
       .slice(0, Math.max(0, params.maxItems - params.primary.length)),
   ];
-}
-
-function filterAttemptedGatewayLiveModels<T extends { id: string; provider: string }>(
-  models: T[],
-  attemptedModelKeys: ReadonlySet<string>,
-): T[] {
-  return models.filter((model) => attemptedModelKeys.has(`${model.provider}/${model.id}`));
 }
 
 function shouldStopGatewayLiveCandidatePool(params: {

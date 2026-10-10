@@ -7,6 +7,8 @@ import {
   approvalButtonBlocks,
   approvalContextOptions,
   createContext,
+  hasLoneSurrogate,
+  expectRecordFields,
   singleButtonBlocks,
 } from "./interactions.test-support.js";
 
@@ -123,22 +125,6 @@ function mockCallArg(mock: unknown, index: number, label: string, argIndex = 0):
 }
 
 const requireRecord = createRequireRecord("object", "expected-label-capitalized");
-
-function hasLoneSurrogate(value: string): boolean {
-  return Array.from(value).some((char) => {
-    const codePoint = char.codePointAt(0) ?? 0;
-    return codePoint >= 0xd800 && codePoint <= 0xdfff;
-  });
-}
-
-function expectRecordFields(
-  actual: Record<string, unknown>,
-  expected: Record<string, unknown>,
-): void {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-}
 
 function pluginDispatchCall(index = 0) {
   const call = dispatchPluginInteractiveHandlerMock.mock.calls[index]?.[0];

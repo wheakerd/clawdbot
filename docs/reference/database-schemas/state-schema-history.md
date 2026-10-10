@@ -72,8 +72,9 @@ Standing approvals retain their existing exact-definition and generation checks;
 converting a definition can require approval again. The migration preserves run
 authority and tool caps without rebinding an old standing grant to new job bytes.
 
-The agent schema stays at 24. Doctor moves still-relevant pending heartbeat
-outcomes idempotently into ordinary session context. The `heartbeat_outcomes`
+The cutover preserves agent schema 25 without an additional agent migration.
+Doctor moves still-relevant pending heartbeat outcomes idempotently into ordinary
+session context. The `heartbeat_outcomes`
 table remains structurally present and inert; its physical removal needs a later,
 separately approved migration. See the
 [deferred storage cleanup](https://github.com/openclaw/openclaw/blob/main/src/state/README.md).

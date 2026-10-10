@@ -27,6 +27,8 @@ import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js
 import { createCronTool } from "./cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
+type CronToolOptions = NonNullable<Parameters<typeof createCronTool>[0]>;
+
 describe("cron tool", () => {
   function runWithTestCronCreatorAuthority<T>(
     runId: string,
@@ -49,9 +51,7 @@ describe("cron tool", () => {
     threadId?: string | number;
   };
 
-  function createTestCronTool(
-    opts?: Parameters<typeof createCronTool>[0],
-  ): ReturnType<typeof createCronTool> {
+  function createTestCronTool(opts?: CronToolOptions) {
     return createCronTool(opts, {
       callGatewayTool: async (method, gatewayOpts, params) => {
         const result = await callGatewayMock({ method, params }, gatewayOpts);
@@ -70,7 +70,7 @@ describe("cron tool", () => {
     });
   }
 
-  function executeCron(args: Record<string, unknown>, opts?: Parameters<typeof createCronTool>[0]) {
+  function executeCron(args: Record<string, unknown>, opts?: CronToolOptions) {
     return createTestCronTool(opts).execute("cron", args);
   }
 
@@ -120,9 +120,7 @@ describe("cron tool", () => {
   async function executeAddAndReadDelivery(params: {
     callId: string;
     agentSessionKey?: string;
-    currentDeliveryContext?: NonNullable<
-      Parameters<typeof createCronTool>[0]
-    >["currentDeliveryContext"];
+    currentDeliveryContext?: CronToolOptions["currentDeliveryContext"];
     delivery?: TestDelivery | null;
   }) {
     const tool = createTestCronTool({
@@ -878,12 +876,10 @@ describe("cron tool", () => {
   });
 
   it("caps trigger-script systemEvent updates to the creator tool surface", async () => {
-    callGatewayMock
-      .mockResolvedValueOnce({
-        id: "job-trigger",
-        payload: { kind: "systemEvent", text: "changed" },
-      })
-      .mockResolvedValueOnce({ ok: true });
+    callGatewayMock.mockResolvedValueOnce({
+      id: "job-trigger",
+      payload: { kind: "systemEvent", text: "changed" },
+    });
 
     await executeCron(
       {
@@ -915,8 +911,6 @@ describe("cron tool", () => {
   });
 
   it("caps dormant systemEvent toolsAllow updates without relying on trigger state", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
     await executeCron(
       {
         action: "update",
@@ -963,8 +957,6 @@ describe("cron tool", () => {
   });
 
   it("does not stamp caller sessionKey when add targets isolated session", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
     await executeCron(
       {
         action: "add",
@@ -989,7 +981,7 @@ describe("cron tool", () => {
         ? textAssistant("Message 12")
         : { role: "user", content: [{ type: "text", text: `Message ${idx + 1}` }] },
     );
-    callGatewayMock.mockResolvedValueOnce({ messages }).mockResolvedValueOnce({ ok: true });
+    callGatewayMock.mockResolvedValueOnce({ messages });
 
     await executeAddWithContextMessages("call5", 20);
 
@@ -1026,8 +1018,6 @@ describe("cron tool", () => {
   });
 
   it("strips null clears from add jobs before the strict gateway create contract (#121606)", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
     await executeCron({
       action: "add",
       job: {
@@ -1107,8 +1097,6 @@ describe("cron tool", () => {
   });
 
   it("recovers flat text and toolsAllow as a systemEvent payload", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
     await executeCron({
       action: "add",
       name: "flat-system-event",
@@ -1176,8 +1164,6 @@ describe("cron tool", () => {
   });
 
   it("uses flat string scheduleKind without leaking it to cron update", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
     await executeCron({
       action: "update",
       id: "job-kind",
@@ -1202,12 +1188,10 @@ describe("cron tool", () => {
   });
 
   it("restores the wildcard cap when an agentTurn update clears toolsAllow", async () => {
-    callGatewayMock
-      .mockResolvedValueOnce({
-        id: "job-8",
-        payload: { kind: "agentTurn", message: "before" },
-      })
-      .mockResolvedValueOnce({ ok: true });
+    callGatewayMock.mockResolvedValueOnce({
+      id: "job-8",
+      payload: { kind: "agentTurn", message: "before" },
+    });
 
     await executeCron(
       {
@@ -1319,7 +1303,7 @@ describe("cron tool", () => {
     id: string;
     current: Record<string, unknown>;
     payload: Record<string, unknown>;
-    options: Parameters<typeof createCronTool>[0];
+    options: CronToolOptions;
     error: string;
   }>([
     {
@@ -1372,12 +1356,10 @@ describe("cron tool", () => {
   });
 
   it("adds a wildcard cap when converting an existing job to agentTurn", async () => {
-    callGatewayMock
-      .mockResolvedValueOnce({
-        id: "job-12",
-        payload: { kind: "systemEvent", text: "hello" },
-      })
-      .mockResolvedValueOnce({ ok: true });
+    callGatewayMock.mockResolvedValueOnce({
+      id: "job-12",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
 
     await executeCron(
       {

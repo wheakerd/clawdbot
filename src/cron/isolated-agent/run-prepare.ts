@@ -24,11 +24,8 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
-import { appendCronJobScratchPrompt, appendCronUnattendedRunPreamble } from "../run-prompt.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import { readCronScratchSnapshot } from "../scratch-read.js";
 import { isDetachedCronSessionTarget, resolveCronDeliverySessionKey } from "../session-target.js";
-import { resolveCronJobsStorePathFromConfig } from "../store/paths.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import {
   resolveCronModelSelection,
@@ -37,6 +34,7 @@ import {
 } from "./model-selection.js";
 import { resolveCronAutomationMessage } from "./run-automation-context.js";
 import { resolveCronCommandPromptPreflight } from "./run-command-preflight.js";
+import { prepareCronCommandPrompt } from "./run-command-prompt.js";
 import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-config.js";
 import {
   createCronToolsAllowPreflightDiagnostics,
@@ -45,7 +43,6 @@ import {
 import { resolveCronPreflight } from "./run-fallback-policy.js";
 import {
   resolveCronAuthSelection,
-  loadCronExternalContentRuntime,
   loadSessionAccessorRuntime,
   retireRolledCronSessionMcpRuntime,
   type RunCronAgentTurnParams,
@@ -64,9 +61,7 @@ import {
 import { resolveCronRunTimeoutOverrideMs } from "./run-timeout.js";
 import { prepareCronSessionWorkspace, type CronWorkspaceLease } from "./run-workspace.js";
 import {
-  isExternalHookSession,
   logWarn,
-  mapHookExternalContentSource,
   normalizeAgentId,
   resolveAgentConfig,
   resolveAgentDir,
@@ -527,52 +522,18 @@ export async function prepareCronRunContext(params: {
           }
         },
       });
-      const sourcePromptPrefix = `[cron:${input.job.id} ${input.job.name}]`;
-      const base = `${sourcePromptPrefix} ${message}`.trim();
-      const isExternalHook =
-        hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
-      const allowUnsafeExternalContent =
-        agentPayload?.allowUnsafeExternalContent === true ||
-        (isGmailHook && input.cfg.hooks?.gmail?.allowUnsafeExternalContent === true);
-      const shouldWrapExternal = isExternalHook && !allowUnsafeExternalContent;
-      let commandBody: string;
-
-      if (isExternalHook) {
-        const { detectSuspiciousPatterns } = await loadCronExternalContentRuntime();
-        const suspiciousPatterns = detectSuspiciousPatterns(message);
-        if (suspiciousPatterns.length > 0) {
-          logWarn(
-            `[security] Suspicious patterns detected in external hook content ` +
-              `(session=${baseSessionKey}, patterns=${suspiciousPatterns.length}): ${suspiciousPatterns.slice(0, 3).join(", ")}`,
-          );
-        }
-      }
-
-      if (shouldWrapExternal) {
-        const { buildSafeExternalPrompt } = await loadCronExternalContentRuntime();
-        const hookType = mapHookExternalContentSource(hookExternalContentSource ?? "webhook");
-        const safeContent = buildSafeExternalPrompt({
-          content: message,
-          source: hookType,
-          jobName: input.job.name,
-          jobId: input.job.id,
-          timestamp: formattedTime,
-        });
-        commandBody = `${safeContent}\n\n${timeLine}`.trim();
-      } else {
-        commandBody = `${base}\n${timeLine}`.trim();
-      }
-      commandBody = appendCronUnattendedRunPreamble(commandBody, {
-        externalHook: isExternalHook,
+      const { commandBody, isExternalHook, sourcePromptPrefix } = await prepareCronCommandPrompt({
+        input,
+        baseSessionKey,
+        hookExternalContentSource,
+        allowUnsafeExternalContent:
+          agentPayload?.allowUnsafeExternalContent === true ||
+          (isGmailHook && input.cfg.hooks?.gmail?.allowUnsafeExternalContent === true),
+        message,
+        formattedTime,
+        timeLine,
+        admittedConfig,
       });
-
-      const scratchSnapshot = await readCronScratchSnapshot(
-        resolveCronJobsStorePathFromConfig(admittedConfig),
-        { kind: "job", jobId: input.job.id, createdAtMsFallback: input.job.createdAtMs },
-        {},
-        { assertCurrent: input.assertCurrent, signal: input.abortSignal ?? input.signal },
-      );
-      commandBody = appendCronJobScratchPrompt(commandBody, scratchSnapshot?.state.scratch);
 
       const skillsSnapshot = await resolveCronSkillsSnapshot({
         workspaceDir,
