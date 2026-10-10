@@ -153,6 +153,7 @@ import type {
   SessionArchivedEvictionCandidatesWorkerInput,
   SessionTranscriptMatchWorkerInput,
   SessionTranscriptSearchWorkerInput,
+  SessionTranscriptQueryReaders,
   SessionProjectionStatusWorkerInput,
   SessionTranscriptAnchorsWorkerInput,
   SessionModelContextWorkerInput,
@@ -585,7 +586,8 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
-  SessionTranscriptHydrationReaders & {
+  SessionTranscriptHydrationReaders &
+  SessionTranscriptQueryReaders & {
     readRetirement: CancellableSessionHistoryReader<
       SessionRetirementReadWorkerInput,
       SessionRetirementReadResult
@@ -638,9 +640,6 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       boolean
     >;
     readLifecycleArtifactPlan: CancellableSessionHistoryReader<LifecycleArtifactCleanupRequest>;
-    findTranscriptEvent: (
-      request: SessionTranscriptMatchWorkerInput["request"],
-    ) => Promise<{ event: TranscriptEvent } | undefined>;
     readHistoricalEvictionCandidates: SessionHistoryReader<
       SessionHistoricalEvictionCandidatesWorkerInput,
       string[]
@@ -659,11 +658,6 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       SessionTranscriptWorkerValues["session-runtime-target"]["target"]
     >;
     readColdStorageInventory: SessionHistoryReader<SessionColdStorageInventoryWorkerInput>;
-    searchTranscripts: (
-      params: SessionTranscriptSearchWorkerInput["params"],
-      readIndexStatus: (signal: AbortSignal) => Promise<boolean>,
-      prepareWriter?: (signal: AbortSignal) => Promise<void>,
-    ) => Promise<SessionTranscriptSearchResult>;
     generation: number;
     assertCurrent: () => void;
     run: (

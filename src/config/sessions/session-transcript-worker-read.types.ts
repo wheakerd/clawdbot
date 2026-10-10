@@ -7,6 +7,7 @@ import type { ArchivedSessionEvictionQuery } from "./disk-budget.types.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptVisibleMessageDeltaLimits,
+  TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import type {
   ResolvedTranscriptReadScope,
@@ -21,7 +22,10 @@ import type {
   SessionTranscriptEventMatch,
 } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
-import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
+import type {
+  SessionTranscriptSearchParams,
+  SessionTranscriptSearchResult,
+} from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 type BoardReadWorkerInput<Kind extends string, Operation extends keyof BoardReadOperations> = {
@@ -68,6 +72,17 @@ export type SessionTranscriptSearchWorkerInput = {
   database: { agentId: string; path: string };
   params: SessionTranscriptSearchParams;
   prepareWriter?: boolean;
+};
+
+export type SessionTranscriptQueryReaders = {
+  findTranscriptEvent: (
+    request: SessionTranscriptMatchWorkerInput["request"],
+  ) => Promise<{ event: TranscriptEvent } | undefined>;
+  searchTranscripts: (
+    params: SessionTranscriptSearchWorkerInput["params"],
+    readIndexStatus: (signal: AbortSignal) => Promise<boolean>,
+    prepareWriter?: (signal: AbortSignal) => Promise<void>,
+  ) => Promise<SessionTranscriptSearchResult>;
 };
 
 export type SessionProjectionStatusWorkerInput = {
