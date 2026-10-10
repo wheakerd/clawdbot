@@ -14,7 +14,7 @@ import {
   replyRunRegistry,
   setNoAbort,
   messageAuditEvents,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildTestCtx } from "./test-ctx.js";
 
