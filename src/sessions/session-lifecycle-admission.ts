@@ -68,7 +68,7 @@ type SessionLifecycleAdmissionState = {
   mutationQueues: Map<string, StoreWriterQueue>;
   activeAdmissions: Map<string, Set<SessionWorkAdmission>>;
   activeMutations: Map<string, number>;
-  activeMutationRuns?: Set<SessionLifecycleMutationOwner>;
+  activeMutationRuns: Set<SessionLifecycleMutationOwner>;
   admissionClosures: Set<SessionWorkAdmissionClosure>;
   activeMutationKinds: Map<string, Map<SessionLifecycleMutationKind, number>>;
   idleWaiters: Map<string, Set<() => void>>;
@@ -109,6 +109,7 @@ const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
 const {
   activeAdmissions: ACTIVE_SESSION_WORK_ADMISSIONS,
   activeMutations: ACTIVE_SESSION_LIFECYCLE_MUTATIONS,
+  activeMutationRuns: ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS,
   activeMutationKinds: ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS,
   idleWaiters: SESSION_LIFECYCLE_IDLE_WAITERS,
   currentAdmissions: CURRENT_SESSION_WORK_ADMISSIONS,
@@ -129,10 +130,6 @@ export {
   getCompetingSessionWorkAdmissionRelease,
   getTerminalSessionWorkAdmissionRelease,
 };
-
-// Older runtime chunks can create the shared state without this newer index.
-const ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS =
-  (SESSION_LIFECYCLE_ADMISSION_STATE.activeMutationRuns ??= new Set());
 
 const runWithSessionIdentityLocks = createSessionIdentityLockRunner(
   SESSION_LIFECYCLE_ADMISSION_STATE,
@@ -473,11 +470,7 @@ export function getActiveSessionWorkAdmissionCount(): number {
 
 /** Unique active lifecycle mutations; one run can be indexed under several identities. */
 export function getActiveSessionLifecycleMutationCount(): number {
-  if (ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size > 0) {
-    return ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size;
-  }
-  // A mutation from an older loaded chunk may only populate the identity index.
-  return ACTIVE_SESSION_LIFECYCLE_MUTATIONS.size > 0 ? 1 : 0;
+  return ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size;
 }
 
 /** Snapshot the existing lifecycle identity index for off-thread maintenance planning. */
