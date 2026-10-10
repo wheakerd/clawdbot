@@ -678,7 +678,6 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       params: SessionRowBackfillWorkerInput["params"],
     ) => Promise<SessionRowTranscriptFields>;
     readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
-    readProjectionStatus: CancellableSessionHistoryReader<SessionProjectionStatusWorkerInput>;
     readIdentityEvidence: SessionHistoryReader<
       SessionIdentityEvidenceWorkerInput,
       SessionIdentityEvidenceResult[]

@@ -83,6 +83,10 @@ export type SessionTranscriptQueryReaders = {
     readIndexStatus: (signal: AbortSignal) => Promise<boolean>,
     prepareWriter?: (signal: AbortSignal) => Promise<void>,
   ) => Promise<SessionTranscriptSearchResult>;
+  readProjectionStatus: (
+    input: Omit<SessionProjectionStatusWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
 };
 
 export type SessionProjectionStatusWorkerInput = {
