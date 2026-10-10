@@ -84,6 +84,7 @@ import {
   isClaudeCliProvider,
   claudeCliSessionTranscriptHasContent,
   resolveCommandReplyExpectation,
+  resolveFallbackRetryContext,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
@@ -250,20 +251,16 @@ export function runAgentAttempt(
           cliSessionId: getCliSessionBinding(params.sessionEntry, "claude-cli")?.sessionId,
         })
       : "";
-  const resolvedPrompt = resolveFallbackRetryPrompt({
-    body: params.body,
+  const fallbackRetry = {
     isFallbackRetry: params.isFallbackRetry,
     sessionHasHistory: params.sessionHasHistory,
     priorContextPrelude: claudeCliFallbackPrelude,
-  });
+  };
+  const fallbackRetryContext = resolveFallbackRetryContext(fallbackRetry);
+  const resolvedPrompt = resolveFallbackRetryPrompt({ ...fallbackRetry, body: params.body });
   const effectivePrompt = isRawModelRun
     ? resolvedPrompt
     : annotateInterSessionPromptText(resolvedPrompt, params.opts.inputProvenance);
-  const embeddedExecApprovalContinuationPromptRange = rebaseExecApprovalContinuationPromptRange({
-    body: params.body,
-    prompt: effectivePrompt,
-    range: params.opts.execApprovalContinuationPromptRange,
-  });
   const continuationTranscriptBody = params.opts.execApprovalContinuationPromptRange
     ? (params.transcriptBody ?? params.body)
     : params.transcriptBody;
@@ -768,6 +765,17 @@ export function runAgentAttempt(
     );
   }
 
+  // Native harnesses retain their prompt adapter; OpenClaw owns the separate context carrier.
+  const useRuntimeRetryContext = !isRawModelRun && agentHarnessPolicy.runtime === "openclaw";
+  const embeddedPrompt =
+    useRuntimeRetryContext && fallbackRetryContext.length > 0
+      ? annotateInterSessionPromptText(params.body, params.opts.inputProvenance)
+      : effectivePrompt;
+  const embeddedExecApprovalContinuationPromptRange = rebaseExecApprovalContinuationPromptRange({
+    body: params.body,
+    prompt: embeddedPrompt,
+    range: params.opts.execApprovalContinuationPromptRange,
+  });
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     ...buildCommonRunParams(),
     sandboxSessionKey: params.sessionKey,
@@ -783,7 +791,7 @@ export function runAgentAttempt(
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
       agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
-    prompt: effectivePrompt,
+    prompt: embeddedPrompt,
     transcriptPrompt: continuationTranscriptBody,
     // CLI retries cannot replay a persisted turn after orphan-user repair removes it.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
@@ -814,7 +822,10 @@ export function runAgentAttempt(
       : undefined,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
     internalEvents: params.opts.internalEvents,
-    runtimeContextFragments: params.opts.runtimeContextFragments,
+    runtimeContextFragments:
+      useRuntimeRetryContext && fallbackRetryContext.length > 0
+        ? [...(params.opts.runtimeContextFragments ?? []), ...fallbackRetryContext]
+        : params.opts.runtimeContextFragments,
     requireExplicitMessageTarget: params.opts.requireExplicitMessageTarget,
     disableMessageTool: params.opts.disableMessageTool,
     swarmCollector: params.opts.swarmCollector,
