@@ -34,7 +34,7 @@ import type { CronFieldErrors, CronFieldKey, CronFormState } from "../../lib/cro
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
-import "./scratch-editor.tsx";
+import "./scratch-editor.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import {
   renderDisabledNote,

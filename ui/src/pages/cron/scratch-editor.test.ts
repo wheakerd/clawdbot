@@ -5,7 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronScratchGetResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createGateway, operatorHello } from "./cron-page.test-support.ts";
-import "./scratch-editor.tsx";
+import "./scratch-editor.ts";
 
 type ScratchEditor = HTMLElement & { jobId: string; gateway: ApplicationContext["gateway"] };
 

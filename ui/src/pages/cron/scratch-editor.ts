@@ -1,5 +1,5 @@
-import { render as renderSolid } from "@solidjs/web";
-import { createMemo, createSignal } from "solid-js";
+import { createComponent, insert, render as renderSolid, spread } from "@solidjs/web";
+import { createMemo, createSignal, Show } from "solid-js";
 import type { CronScratchGetResult, CronScratchSetResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
@@ -219,79 +219,139 @@ class CronScratchEditor extends HTMLElement {
       this.projection[0]();
       return t(key, params);
     };
-    return (
-      <>
-        {view().canManage && (
-          <section class="settings-section">
-            <details>
-              <summary class="settings-section__heading">{text("cron.scratch.title")}</summary>
-              <p class="settings-section__desc">{text("cron.scratch.help")}</p>
-              <button
-                class="btn btn--sm"
-                type="button"
-                disabled={view().busy || !view().connected}
-                onClick={() => void this.request()}
-              >
-                {text(view().snapshot ? "cron.scratch.reload" : "cron.scratch.load")}
-              </button>
-              {view().snapshot && (
-                <>
-                  {!view().snapshot?.scratch && (
-                    <p class="cron-help">{text("cron.scratch.empty")}</p>
-                  )}
-                  <label class="field">
-                    <span>{text("cron.scratch.content")}</span>
-                    <textarea
-                      class="settings-input mono"
-                      rows="8"
-                      value={view().draft}
-                      readonly={view().disabled || view().redacted}
-                      maxlength={view().snapshot?.maxBytes}
-                      onInput={(event) => {
-                        this.draft = event.currentTarget.value;
-                        this.publish();
-                      }}
-                    ></textarea>
-                  </label>
-                  <p class="cron-help">
-                    {text("cron.scratch.limit", {
-                      bytes: String(view().sizeBytes),
-                      max: String(view().snapshot?.maxBytes),
-                    })}
-                  </p>
-                  {view().redacted && <p class="cron-help">{text("cron.scratch.redacted")}</p>}
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    disabled={
-                      view().disabled ||
-                      view().redacted ||
-                      view().sizeBytes > (view().snapshot?.maxBytes ?? 0)
-                    }
-                    onClick={() => void this.request(this.draft)}
-                  >
-                    {text("cron.scratch.save")}
-                  </button>{" "}
-                  <button
-                    class="btn btn--sm danger"
-                    type="button"
-                    disabled={view().disabled || !view().snapshot?.scratch}
-                    onClick={() => void this.request(null)}
-                  >
-                    {text("cron.scratch.clear")}
-                  </button>
-                </>
-              )}
-              {view().message && (
-                <p class="cron-help" role="status">
-                  {view().message}
-                </p>
-              )}
-            </details>
-          </section>
-        )}
-      </>
-    );
+    const help = (content: () => string) => {
+      const paragraph = document.createElement("p");
+      paragraph.className = "cron-help";
+      insert(paragraph, content);
+      return paragraph;
+    };
+    const button = (
+      label: () => string,
+      disabled: () => boolean,
+      onClick: () => void,
+      danger = false,
+    ) => {
+      const element = document.createElement("button");
+      element.className = danger ? "btn btn--sm danger" : "btn btn--sm";
+      element.type = "button";
+      spread(
+        element,
+        {
+          get "prop:disabled"() {
+            return disabled();
+          },
+          onClick,
+        },
+        true,
+      );
+      insert(element, label);
+      return element;
+    };
+    // Show's accessor callbacks own the subtrees, retaining input DOM through field updates.
+    return createComponent(Show, {
+      get when() {
+        return view().canManage;
+      },
+      children: (_visible) => {
+        const section = document.createElement("section");
+        section.className = "settings-section";
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.className = "settings-section__heading";
+        insert(summary, () => text("cron.scratch.title"));
+        const description = document.createElement("p");
+        description.className = "settings-section__desc";
+        insert(description, () => text("cron.scratch.help"));
+        details.append(
+          summary,
+          description,
+          button(
+            () => text(view().snapshot ? "cron.scratch.reload" : "cron.scratch.load"),
+            () => view().busy || !view().connected,
+            () => void this.request(),
+          ),
+        );
+        insert(
+          details,
+          createComponent(Show, {
+            get when() {
+              return view().snapshot !== null;
+            },
+            children: (_loaded) => {
+              const label = document.createElement("label");
+              label.className = "field";
+              const caption = document.createElement("span");
+              insert(caption, () => text("cron.scratch.content"));
+              const textarea = document.createElement("textarea");
+              textarea.className = "settings-input mono";
+              textarea.rows = 8;
+              spread(
+                textarea,
+                {
+                  get "prop:value"() {
+                    return view().draft;
+                  },
+                  get "prop:readOnly"() {
+                    return view().disabled || view().redacted;
+                  },
+                  get "prop:maxLength"() {
+                    return view().snapshot?.maxBytes;
+                  },
+                  onInput: () => {
+                    this.draft = textarea.value;
+                    this.publish();
+                  },
+                },
+                true,
+              );
+              label.append(caption, textarea);
+              return [
+                createComponent(Show, {
+                  get when() {
+                    return !view().snapshot?.scratch;
+                  },
+                  children: (_empty) => help(() => text("cron.scratch.empty")),
+                }),
+                label,
+                help(() =>
+                  text("cron.scratch.limit", {
+                    bytes: String(view().sizeBytes),
+                    max: String(view().snapshot?.maxBytes),
+                  }),
+                ),
+                createComponent(Show, {
+                  get when() {
+                    return view().redacted;
+                  },
+                  children: (_redacted) => help(() => text("cron.scratch.redacted")),
+                }),
+                button(
+                  () => text("cron.scratch.save"),
+                  () =>
+                    view().disabled ||
+                    view().redacted ||
+                    view().sizeBytes > (view().snapshot?.maxBytes ?? 0),
+                  () => void this.request(this.draft),
+                ),
+                document.createTextNode(" "),
+                button(
+                  () => text("cron.scratch.clear"),
+                  () => view().disabled || !view().snapshot?.scratch,
+                  () => void this.request(null),
+                  true,
+                ),
+              ];
+            },
+          }),
+          null,
+        );
+        const status = help(() => view().message);
+        status.setAttribute("role", "status");
+        insert(details, () => (view().message ? status : null), null);
+        section.append(details);
+        return section;
+      },
+    });
   }
 }
 

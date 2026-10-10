@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SparklineSample } from "../../components/sparkline-tile.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import type { DebugOverlay } from "./debug-overlay.ts";
 import type { renderDebug } from "./view.ts";
 
 type DebugProps = Parameters<typeof renderDebug>[0];
@@ -25,10 +26,10 @@ export type TestDebugPage = HTMLElement & {
 
 type RenderedTestElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
 
-export type TestDebugOverlay = RenderedTestElement & {
-  context: ApplicationContext;
-  toggle: () => void;
-};
+export type TestDebugOverlay = HTMLElement &
+  Pick<DebugOverlay, "updateComplete" | "requestUpdate" | "toggle"> & {
+    context: ApplicationContext;
+  };
 
 export type TestSparkline = RenderedTestElement & { samples: readonly SparklineSample[] };
 
