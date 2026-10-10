@@ -137,7 +137,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             cronEnabled: true,
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
+            enqueueSessionEvent: vi.fn(),
             runIsolatedAgentJob,
             sendCronFailureAlert: async (params) =>
               await sendGatewayCronFailureAlert({
