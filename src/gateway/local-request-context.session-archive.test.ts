@@ -113,7 +113,7 @@ function withWriter<T>(
   client: ReturnType<typeof roleClient>,
   run: () => Promise<T>,
   scopes = ["operator.write"],
-  request = getPluginRuntimeGatewayRequestScope(),
+  request = expectDefined(getPluginRuntimeGatewayRequestScope(), "Gateway request scope"),
 ) {
   return withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
     withOperatorToolGatewayAuthority(
