@@ -69,10 +69,16 @@ describe("gateway plugin approvals QA", () => {
         throw new Error("OPENCLAW_STATE_DIR is required for gateway QA fixtures");
       }
       const reviewerIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(stateDir, "test-device-identities", "plugin-approval-reviewer.sqlite"),
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: path.join(stateDir, "test-device-identities", "reviewer"),
+        },
       });
       const requesterIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(stateDir, "test-device-identities", "plugin-approval-requester.sqlite"),
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: path.join(stateDir, "test-device-identities", "requester"),
+        },
       });
       expect(reviewerIdentity.deviceId).not.toBe(requesterIdentity.deviceId);
 

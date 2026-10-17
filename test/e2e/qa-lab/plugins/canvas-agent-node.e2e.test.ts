@@ -178,10 +178,10 @@ describe("Canvas agent tool over a paired macOS node", () => {
           }),
         );
         const operatorIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(state.home, "canvas-operator.sqlite"),
+          path: path.join(state.home, "proof-clients", "operator", "client", "credentials.sqlite"),
         });
         const nodeIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(state.home, "canvas-macos-node.sqlite"),
+          path: path.join(state.home, "proof-clients", "node", "client", "credentials.sqlite"),
         });
         operatorClient = await connectGatewayClient({
           url: `ws://127.0.0.1:${port}`,
