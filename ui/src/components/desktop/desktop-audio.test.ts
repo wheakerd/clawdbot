@@ -220,9 +220,12 @@ describe("desktop audio connection", () => {
     },
   );
 
-  it("does not open a socket when audio is absent", () => {
+  it("reports unsupported and absent audio without opening a socket", () => {
     audio.connect({}, "wss://gateway.test");
     expect(audio.state()).toBe("unavailable");
+    vi.stubGlobal("AudioContext", undefined);
+    audio.connect({ audio: desktopAudioStream }, "wss://gateway.test");
+    expect(audio.state()).toBe("unsupported");
     expect(AudioSocketMock.instances).toHaveLength(0);
   });
 });

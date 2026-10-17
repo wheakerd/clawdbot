@@ -29,7 +29,7 @@ export function ChatAttachmentAdmission(props: AttachmentAdmissionProps): JSX.El
 }
 
 function AdmissionContent(props: Pick<AttachmentAdmissionProps, "render">): JSX.Element {
-  let didAdmit = false;
+  let didAdmit = typeof IntersectionObserver !== "function";
   const [admitted, setAdmitted] = createSignal(didAdmit);
   let active = true;
   let stopObserving: (() => void) | undefined;

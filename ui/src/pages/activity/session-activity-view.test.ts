@@ -35,11 +35,12 @@ beforeEach(() => {
   );
 });
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("session activity semantics", () => {
   afterEach(() => {
     setAvatarGatewayOrigin(null);
     vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
   it("shows online identity when interaction age is unknown", () => {

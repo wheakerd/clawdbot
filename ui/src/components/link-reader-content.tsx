@@ -362,7 +362,7 @@ function DeferredSection(props: {
   createEffect(
     () => props.section === "files" && props.state === "idle",
     (observe) => {
-      if (!observe || !element) {
+      if (!observe || !element || typeof IntersectionObserver === "undefined") {
         return undefined;
       }
       const observer = new IntersectionObserver(

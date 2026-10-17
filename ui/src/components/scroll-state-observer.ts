@@ -62,7 +62,7 @@ export function observeScrollState(
   let entries = observations.get(element);
   if (!entries) {
     observations.set(element, (entries = new Set()));
-    if (!resizeObserver) {
+    if (!resizeObserver && typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver((resized) => {
         for (const { target } of resized) {
           if (target instanceof HTMLElement) {
@@ -71,7 +71,7 @@ export function observeScrollState(
         }
       });
     }
-    resizeObserver.observe(element);
+    resizeObserver?.observe(element);
     element.addEventListener("scroll", onScroll, { passive: true });
   }
   const entry = { horizontal, trackScroll, publish };

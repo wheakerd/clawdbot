@@ -378,12 +378,12 @@ function FramedMessageGroup(props: {
 }) {
   const frame = createMemo(() => prepareMessageGroupFrame(props.group, props.options));
   const options = () => frame().options;
-  const media = globalThis.matchMedia(
+  const media = globalThis.matchMedia?.(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   );
-  const [mobile, setMobile] = createSignal(media.matches);
-  const onLayoutChange = () => setMobile(media.matches);
-  onSettled(() => listen(media, "change", onLayoutChange));
+  const [mobile, setMobile] = createSignal(media?.matches ?? false);
+  const onLayoutChange = () => setMobile(media?.matches ?? false);
+  onSettled(() => media && listen(media, "change", onLayoutChange));
   return (
     <div
       class={frame().className}

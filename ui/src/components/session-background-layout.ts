@@ -2,7 +2,7 @@ import { onCleanup } from "solid-js";
 
 /** Observe layout changes, never scrolling or animation frames. */
 export function createBackgroundFadeLayout(host: HTMLElement) {
-  const observer = new ResizeObserver(measure);
+  const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
   let targets: Element[] = [];
 
   function update(enabled: boolean) {
@@ -17,7 +17,7 @@ export function createBackgroundFadeLayout(host: HTMLElement) {
     if (next.length !== targets.length || next.some((node, index) => node !== targets[index])) {
       disconnect();
       targets = next;
-      targets.forEach((node) => observer.observe(node));
+      targets.forEach((node) => observer?.observe(node));
     }
     measure();
   }
@@ -38,7 +38,7 @@ export function createBackgroundFadeLayout(host: HTMLElement) {
   }
 
   function disconnect() {
-    observer.disconnect();
+    observer?.disconnect();
     targets = [];
   }
   onCleanup(disconnect);

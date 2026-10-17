@@ -55,14 +55,14 @@ function mentionOverflow(readPeople: Accessor<readonly MentionPerson[]>) {
   };
   // Measure the current recipients after the keyed list and avatars have committed.
   createEffect(readPeople, sync);
-  const observer = new ResizeObserver(sync);
+  const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
   onCleanup(() => {
     disposed = true;
-    observer.disconnect();
+    observer?.disconnect();
   });
   return (node: HTMLElement) => {
     element = node;
-    observer.observe(node);
+    observer?.observe(node);
     queueMicrotask(() => {
       sync();
       if (document.fonts?.status === "loading") {

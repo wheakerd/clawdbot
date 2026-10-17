@@ -142,6 +142,9 @@ function ChatAudioPlayerContent(
     waveformResizeObserver = null;
     waveformElement = waveform;
     updateWaveformWidth(waveform.getBoundingClientRect().width);
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
     waveformResizeObserver = new ResizeObserver(([entry]) => {
       if (entry && waveformElement === entry.target) {
         updateWaveformWidth(entry.contentRect.width);

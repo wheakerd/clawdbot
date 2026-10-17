@@ -150,7 +150,8 @@ export class LinkReaderPrefetchOwner {
 
   private scan(): void {
     const root = this.root;
-    if (!root) {
+    // No eager fallback: lack of visibility observation must not fetch a transcript.
+    if (!root || typeof IntersectionObserver === "undefined") {
       return;
     }
     if (!this.observer) {

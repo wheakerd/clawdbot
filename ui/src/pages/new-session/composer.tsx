@@ -364,7 +364,9 @@ function createComposerPlaceholder(options: () => NewSessionComposerOptions) {
     ),
   );
   const hasMessage = createMemo(() => options().message.length > 0);
-  const reducedMotion = globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const reducedMotion =
+    !globalThis.requestAnimationFrame ||
+    (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
   const [frame, setFrame] = createSignal({ target: "", text: "" });
   let entered = false;
   // Restart the browser animation only when its text changes; typing cancels pending frames.
@@ -541,7 +543,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
               }}
               class="new-session-page__message"
               rows="1"
-              autofocus={globalThis.matchMedia("(max-width: 560px)").matches}
+              autofocus={globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
               disabled={options().submitting || options().messageLocked}
               readonly={options().dictationActive}
               placeholder={placeholder()}

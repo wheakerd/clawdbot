@@ -192,7 +192,11 @@ const BOARD_WIDGET_TOUCH_BAR_PX = 38;
 export const FINE_POINTER_QUERY = "(hover: hover) and (pointer: fine)";
 
 export function boardChromeRowPx(): number {
-  return !window.matchMedia(FINE_POINTER_QUERY).matches ? BOARD_WIDGET_TOUCH_BAR_PX : 0;
+  // jsdom lacks matchMedia; missing capability data defaults to the overlay
+  // (fine-pointer) layout where the bar reserves no row space.
+  return typeof window.matchMedia === "function" && !window.matchMedia(FINE_POINTER_QUERY).matches
+    ? BOARD_WIDGET_TOUCH_BAR_PX
+    : 0;
 }
 
 function autoBoardWidgetHeightPx(

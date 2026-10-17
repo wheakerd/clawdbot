@@ -106,7 +106,7 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
   };
 
   const handlePointerOver = (event: PointerEvent) => {
-    if (event.pointerType === "touch" || !globalThis.matchMedia("(hover: hover)").matches) {
+    if (event.pointerType === "touch" || !globalThis.matchMedia?.("(hover: hover)").matches) {
       return;
     }
     const target = sessionProgressHoverTargetFromEvent(event);

@@ -90,15 +90,12 @@ describe("openclaw-tooltip", () => {
   );
 
   it.each([
-    [false, "right-start"],
+    [undefined, "right-start"],
     [true, "bottom-start"],
   ] as const)(
-    "positions side cards when the narrow viewport query matches %s",
+    "positions side cards when narrow viewport support is %s",
     async (matches, placement) => {
-      vi.stubGlobal(
-        "matchMedia",
-        vi.fn(() => ({ matches })),
-      );
+      vi.stubGlobal("matchMedia", matches === undefined ? undefined : vi.fn(() => ({ matches })));
       try {
         const { tooltip, trigger } = createRichTooltip("Device details");
         tooltip.setAttribute("placement", "right-start");

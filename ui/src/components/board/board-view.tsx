@@ -177,9 +177,10 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
   );
   onSettled(() => {
     // Hybrid devices move the chrome in/out of flow when pointer capability changes.
-    const pointer = window.matchMedia(FINE_POINTER_QUERY);
-    pointer.addEventListener("change", invalidateLayout);
-    return () => pointer.removeEventListener("change", invalidateLayout);
+    const pointer =
+      typeof window.matchMedia === "function" ? window.matchMedia(FINE_POINTER_QUERY) : null;
+    pointer?.addEventListener("change", invalidateLayout);
+    return () => pointer?.removeEventListener("change", invalidateLayout);
   });
   onCleanup(() => {
     disposed = true;

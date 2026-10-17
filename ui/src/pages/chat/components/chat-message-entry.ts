@@ -97,7 +97,7 @@ export class ChatMessageEntryAnimations {
 
   private enter(element: HTMLElement): void {
     this.active.get(element)?.();
-    if (globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
       return;
     }
     const finish = () => {

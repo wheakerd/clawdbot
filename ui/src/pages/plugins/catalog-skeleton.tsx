@@ -71,12 +71,13 @@ export function PluginCatalogSkeleton(props: { label?: string }): JSX.Element {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(measure);
     };
-    const observer = new ResizeObserver(scheduleMeasure);
-    observer.observe(host.closest(".plugin-catalog-results") ?? host);
+    const observer =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(scheduleMeasure) : undefined;
+    observer?.observe(host.closest(".plugin-catalog-results") ?? host);
     const stopResize = listen(window, "resize", scheduleMeasure);
     scheduleMeasure();
     return () => {
-      observer.disconnect();
+      observer?.disconnect();
       cancelAnimationFrame(frame);
       stopResize();
     };

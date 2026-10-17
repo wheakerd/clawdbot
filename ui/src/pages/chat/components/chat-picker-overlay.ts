@@ -42,7 +42,7 @@ function bindChatPickerOverlay(
   overlay.bindTrigger(trigger);
   const anchor = createOverlayAnchor(surface, { sameRoot: true });
   const sync = () => {
-    const mobile = details.ownerDocument.defaultView?.matchMedia(
+    const mobile = details.ownerDocument.defaultView?.matchMedia?.(
       MOBILE_COMPOSER_OVERLAY_QUERY,
     ).matches;
     anchor.update(

@@ -52,7 +52,7 @@ export function ImageLightboxContent(props: ImageLightboxProps & { host: ImageLi
   const slide = () => (slideElement?.isConnected ? slideElement : undefined);
   const video = () => (videoElement?.isConnected ? videoElement : undefined);
   const direction = () => (getComputedStyle(host).direction === "rtl" ? -1 : 1);
-  const motionQuery = globalThis.matchMedia("(prefers-reduced-motion: reduce)");
+  const motionQuery = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
   let disposed = false;
   let panzoom: PanzoomObject | undefined;
   let panzoomImage: HTMLImageElement | undefined;
@@ -104,7 +104,7 @@ export function ImageLightboxContent(props: ImageLightboxProps & { host: ImageLi
     panzoomImage = target;
     panzoomStage = currentStage;
     panzoom = Panzoom(target, {
-      duration: motionQuery.matches ? 0 : 200,
+      duration: motionQuery?.matches ? 0 : 200,
       maxScale: MAX_SCALE,
       minScale: 1,
       panOnlyWhenZoomed: true,
@@ -293,7 +293,7 @@ export function ImageLightboxContent(props: ImageLightboxProps & { host: ImageLi
       return;
     }
     currentSlide.style.removeProperty("transform");
-    if (offset && !motionQuery.matches && host.isConnected && !disposed) {
+    if (offset && !motionQuery?.matches && host.isConnected && !disposed) {
       slideAnimation = currentSlide.animate(
         [{ transform: `translateX(${offset}px)` }, { transform: "translateX(0)" }],
         { duration: SLIDE_DURATION_MS, easing: "ease-out" },
@@ -501,13 +501,13 @@ export function ImageLightboxContent(props: ImageLightboxProps & { host: ImageLi
       }
     },
   );
-  motionQuery.addEventListener("change", handleMotionPreferenceChange);
+  motionQuery?.addEventListener("change", handleMotionPreferenceChange);
   onCleanup(() => {
     disposed = true;
     cancelSwipe();
     touchPointers.clear();
     slideAnimation?.cancel();
-    motionQuery.removeEventListener("change", handleMotionPreferenceChange);
+    motionQuery?.removeEventListener("change", handleMotionPreferenceChange);
     destroyPanzoom();
     originalUrlRequest += 1;
     revokeOriginalBlobUrl();

@@ -30,7 +30,7 @@ export function syncControlUiSystemChrome(paletteChanged = false): void {
   if (root.classList.contains("control-ui-chat-shell") !== chatShell) {
     root.classList.toggle("control-ui-chat-shell", chatShell);
   }
-  const narrow = globalThis.matchMedia(
+  const narrow = globalThis.matchMedia?.(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
   const revision = () =>

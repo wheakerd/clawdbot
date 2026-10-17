@@ -39,7 +39,10 @@ function themeBranding(settings: UiPreferences, catalogTheme?: CatalogTheme) {
   );
 }
 
-function subscribeMediaQuery(query: string, onChange: () => void): () => void {
+function subscribeMediaQuery(query: string, onChange: () => void): (() => void) | undefined {
+  if (typeof globalThis.matchMedia !== "function") {
+    return undefined;
+  }
   return listen(globalThis.matchMedia(query), "change", onChange);
 }
 
@@ -237,7 +240,10 @@ export function createApplicationTheme(
       refresh();
     }
   };
-  const stopStorage = listen(globalThis, "storage", onStorage);
+  const stopStorage =
+    typeof globalThis.addEventListener === "function"
+      ? listen(globalThis, "storage", onStorage)
+      : undefined;
   const stopGateway = gateway.subscribe(() => {
     void loadCatalog();
     if (settings.gatewayUrl !== gateway.connection.gatewayUrl) {
@@ -291,11 +297,11 @@ export function createApplicationTheme(
       disposed = true;
       catalog?.dispose();
       stopPreferences();
-      stopStorage();
+      stopStorage?.();
       stopGateway();
       presentationGeneration += 1;
       detachSystemThemeListener();
-      chromeBreakpointCleanup();
+      chromeBreakpointCleanup?.();
       listeners.clear();
     },
   };

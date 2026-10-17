@@ -45,7 +45,9 @@ defineSolidBridge<ResizableDividerProps>(
       }
       host.classList.add("dragging");
       activePointerId = e.pointerId;
-      host.setPointerCapture(e.pointerId);
+      if (typeof host.setPointerCapture === "function") {
+        host.setPointerCapture(e.pointerId);
+      }
 
       dragListeners = [
         listen(window, "pointermove", { handleEvent: handlePointerMove }),
@@ -124,7 +126,10 @@ defineSolidBridge<ResizableDividerProps>(
       dragListeners.forEach((stop) => stop());
       dragListeners = [];
       activePointerId = null;
-      if (host.hasPointerCapture(pointerId)) {
+      if (
+        typeof host.releasePointerCapture === "function" &&
+        (typeof host.hasPointerCapture !== "function" || host.hasPointerCapture(pointerId))
+      ) {
         host.releasePointerCapture(pointerId);
       }
       if (dragFrame) {

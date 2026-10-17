@@ -14,11 +14,11 @@ export function createCronEditorClearance() {
       scroller.style.scrollPaddingBlockEnd = `calc(${footer.getBoundingClientRect().height}px + ${padding})`;
     };
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(footer);
-    observer.observe(scroller);
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(footer);
+    observer?.observe(scroller);
     return () => {
-      observer.disconnect();
+      observer?.disconnect();
       scroller.style.scrollPaddingBlockEnd = previousPadding;
     };
   });

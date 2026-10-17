@@ -388,7 +388,7 @@ export function createPortaledHovercardOwner(
       if (
         exitDurationMs <= 0 ||
         !card.isConnected ||
-        globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches
+        globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches
       ) {
         unmountContents?.();
         card.remove();

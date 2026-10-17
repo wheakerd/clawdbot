@@ -2468,13 +2468,27 @@ describe("grouped chat rendering", () => {
 
     renderAssistantMessage({
       role: "assistant",
-      content: imageUrls.map((url, index) => ({
+      content: imageUrls.slice(0, 64).map((url, index) => ({
         type: "image",
         url,
         alt: `Missing image ${index + 1}`,
       })),
       timestamp: Date.now(),
     });
+    await waitForSolid(() =>
+      expect(view.querySelectorAll(".chat-image-frame--compact")).toHaveLength(64),
+    );
+    const overflowContainer = document.createElement("div");
+    renderAssistantMessage(
+      createAssistantMessage([
+        createMediaBlock({ url: imageUrls[64], alt: "Newest missing image" }),
+      ]),
+      {},
+      overflowContainer,
+    );
+    await waitForSolid(() =>
+      expect(overflowContainer.querySelector(".chat-image-frame--compact")).not.toBeNull(),
+    );
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length));
     await flushAssistantAttachmentAvailabilityChecks();
 

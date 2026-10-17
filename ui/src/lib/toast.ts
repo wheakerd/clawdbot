@@ -171,7 +171,7 @@ class ToastOwner {
     if (
       (reason !== "dismiss" && reason !== "timeout") ||
       !this.host.isConnected ||
-      globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+      globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ||
       !resolveToastAnchorRect(toast.anchor)
     ) {
       this.finishDismiss(reason);

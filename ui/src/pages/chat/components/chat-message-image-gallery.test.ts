@@ -424,6 +424,9 @@ describe("message attachment image gallery projection", () => {
     await waitForSolid(() =>
       expect(container.querySelectorAll(".chat-message-image-button")).toHaveLength(2),
     );
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-message-image")).toHaveLength(2),
+    );
     const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
     tiles[index]?.click();
     expect(onOpenImage.mock.calls[0]?.[0].gallery).toMatchObject({

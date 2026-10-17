@@ -79,6 +79,10 @@ export function createDesktopAudio(
       retire(true);
       return;
     }
+    if (typeof AudioContext !== "function") {
+      setState("unsupported");
+      return;
+    }
     const connection = generation;
     pendingStops = 0;
     try {

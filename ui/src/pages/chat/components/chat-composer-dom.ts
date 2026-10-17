@@ -85,14 +85,18 @@ function observeComposerPopoverAnchor(el: HTMLElement) {
       });
     },
   };
-  state.resizeObserver = new ResizeObserver(state.scheduleUpdate);
-  state.resizeObserver.observe(el);
-  state.toggleObserver = new MutationObserver(state.scheduleUpdate);
-  state.toggleObserver.observe(el, {
-    attributes: true,
-    attributeFilter: ["open"],
-    subtree: true,
-  });
+  if (typeof ResizeObserver === "function") {
+    state.resizeObserver = new ResizeObserver(state.scheduleUpdate);
+    state.resizeObserver.observe(el);
+  }
+  if (typeof MutationObserver === "function") {
+    state.toggleObserver = new MutationObserver(state.scheduleUpdate);
+    state.toggleObserver.observe(el, {
+      attributes: true,
+      attributeFilter: ["open"],
+      subtree: true,
+    });
+  }
   window.addEventListener("resize", state.scheduleUpdate);
   viewport?.addEventListener("resize", state.scheduleUpdate);
   viewport?.addEventListener("scroll", state.scheduleUpdate);
@@ -337,22 +341,28 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
   };
   let width = el.getBoundingClientRect().width;
   const onScroll = () => updateTextareaOverflow(el, false);
-  state.observer = new ResizeObserver(() => {
-    const nextWidth = el.getBoundingClientRect().width;
-    if (nextWidth !== width) {
-      width = nextWidth;
-      if (composerTextareaResizeObservers.get(el) === state && state.adjustmentFrame === null) {
-        state.adjustmentFrame = requestAnimationFrame(() => {
-          state.adjustmentFrame = null;
-          if (composerTextareaResizeObservers.get(el) === state) {
-            adjustTextareaHeight(el);
+  state.observer =
+    typeof ResizeObserver === "function"
+      ? new ResizeObserver(() => {
+          const nextWidth = el.getBoundingClientRect().width;
+          if (nextWidth !== width) {
+            width = nextWidth;
+            if (
+              composerTextareaResizeObservers.get(el) === state &&
+              state.adjustmentFrame === null
+            ) {
+              state.adjustmentFrame = requestAnimationFrame(() => {
+                state.adjustmentFrame = null;
+                if (composerTextareaResizeObservers.get(el) === state) {
+                  adjustTextareaHeight(el);
+                }
+              });
+            }
+            return;
           }
-        });
-      }
-      return;
-    }
-    updateTextareaOverflow(el, false);
-  });
+          updateTextareaOverflow(el, false);
+        })
+      : null;
   // Native caret scrolling can leave the active line inside the fade. Typing
   // and keyboard selection both need that line unfaded; only pointer browsing
   // or blur restores fades, not moving the caret within an already visible line.

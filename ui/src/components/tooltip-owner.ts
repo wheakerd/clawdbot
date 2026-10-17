@@ -132,7 +132,7 @@ export class TooltipOwner {
   get resolvedPlacement(): OverlayPlacement {
     const placement = this.options.props().placement ?? "top";
     return (placement === "right-start" || placement === "right") &&
-      this.host.ownerDocument.defaultView?.matchMedia("(max-width: 640px)").matches
+      this.host.ownerDocument.defaultView?.matchMedia?.("(max-width: 640px)").matches
       ? "bottom-start"
       : placement;
   }

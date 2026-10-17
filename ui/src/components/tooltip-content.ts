@@ -32,7 +32,9 @@ function collectTooltipText(element: Element, checkOpacity: boolean, root = true
   const rendersOwnText =
     style?.visibility !== "hidden" &&
     style?.visibility !== "collapse" &&
-    (style?.display === "contents" || element.checkVisibility({ checkVisibilityCSS: true }));
+    (style?.display === "contents" ||
+      typeof element.checkVisibility !== "function" ||
+      element.checkVisibility({ checkVisibilityCSS: true }));
   return [...element.childNodes]
     .map((node) => {
       if (isElementNode(node)) {

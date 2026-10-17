@@ -49,7 +49,7 @@ defineSolidBridge<Props>(
     };
     const drawPose = (pose: MascotPose) => {
       const element = canvas;
-      const context = element?.getContext("2d");
+      const context = typeof Path2D === "undefined" ? null : element?.getContext("2d");
       if (!element?.isConnected || !context) {
         return;
       }
@@ -101,18 +101,23 @@ defineSolidBridge<Props>(
       },
     );
     onSettled(() => {
-      const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-      reducedMotion = motionQuery.matches;
+      const motionQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+      reducedMotion = motionQuery?.matches ?? false;
       const stopVisibility = listen(document, "visibilitychange", syncPlayback);
-      const stopMotion = listen(motionQuery, "change", () => {
-        reducedMotion = motionQuery.matches;
-        syncPlayback();
-      });
-      const intersection = new IntersectionObserver((entries) => {
-        visible = entries.some((entry) => entry.isIntersecting);
-        syncPlayback();
-      });
-      intersection.observe(host);
+      const stopMotion =
+        motionQuery &&
+        listen(motionQuery, "change", () => {
+          reducedMotion = motionQuery.matches;
+          syncPlayback();
+        });
+      const intersection =
+        typeof IntersectionObserver === "undefined"
+          ? undefined
+          : new IntersectionObserver((entries) => {
+              visible = entries.some((entry) => entry.isIntersecting);
+              syncPlayback();
+            });
+      intersection?.observe(host);
       const themeObserver = new MutationObserver(() => setThemeRevision((value) => value + 1));
       themeObserver.observe(document.documentElement, {
         attributes: true,
@@ -122,8 +127,8 @@ defineSolidBridge<Props>(
       syncPlayback();
       return () => {
         stopVisibility();
-        stopMotion();
-        intersection.disconnect();
+        stopMotion?.();
+        intersection?.disconnect();
         themeObserver.disconnect();
       };
     });

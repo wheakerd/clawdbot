@@ -90,9 +90,11 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
   );
   onSettled(() => {
     props.onInputRef(textarea);
-    observer = new ResizeObserver(scheduleLayout);
-    observer.observe(entry);
-    observer.observe(actions);
+    if (typeof ResizeObserver === "function") {
+      observer = new ResizeObserver(scheduleLayout);
+      observer.observe(entry);
+      observer.observe(actions);
+    }
     scheduleLayout();
   });
   onCleanup(() => {

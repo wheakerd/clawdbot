@@ -93,7 +93,7 @@ export class SidebarPeopleRuntime {
       this.portal.explicitHold = true;
       this.show();
     } else if (event.type === "pointerover" && event instanceof PointerEvent) {
-      if (event.pointerType === "touch" || !globalThis.matchMedia("(hover: hover)").matches) {
+      if (event.pointerType === "touch" || !globalThis.matchMedia?.("(hover: hover)").matches) {
         return;
       }
       if (this.portal.explicitHold && this.active?.row !== row) {

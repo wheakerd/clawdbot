@@ -97,14 +97,14 @@ function hostContext(
   availableDisplayModes: Array<"inline" | "fullscreen">,
 ): HostContext {
   const rect = element?.getBoundingClientRect();
-  const touch = navigator.maxTouchPoints > 0 || window.matchMedia("(pointer: coarse)").matches;
+  const touch = navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches;
   const themeMode = document.documentElement.dataset.themeMode;
   // The SDK schema preserves optional style values while normalizing its complete key map.
   return McpUiHostContextSchema.parse({
     theme:
       themeMode === "light" || themeMode === "dark"
         ? themeMode
-        : window.matchMedia("(prefers-color-scheme: dark)").matches
+        : window.matchMedia?.("(prefers-color-scheme: dark)").matches
           ? "dark"
           : "light",
     displayMode,
@@ -118,7 +118,7 @@ function hostContext(
     platform: touch && window.innerWidth < 768 ? "mobile" : "web",
     deviceCapabilities: {
       touch,
-      hover: window.matchMedia("(hover: hover)").matches,
+      hover: window.matchMedia?.("(hover: hover)").matches,
     },
     safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
     // Additive alongside `theme`: the string says which appearance is active,
@@ -663,9 +663,11 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
       if (hostContextCleanup) {
         addResourceCleanup(createdResources, hostContextCleanup);
       }
-      const hostResizeObserver = new ResizeObserver(updateHostContext);
-      hostResizeObserver.observe(mount);
-      addResourceCleanup(createdResources, () => hostResizeObserver.disconnect());
+      if (typeof ResizeObserver !== "undefined") {
+        const hostResizeObserver = new ResizeObserver(updateHostContext);
+        hostResizeObserver.observe(mount);
+        addResourceCleanup(createdResources, () => hostResizeObserver.disconnect());
+      }
       await waitForMcpAppHandlerRegistration();
       signal.throwIfAborted();
       await bridge.sendToolInput({

@@ -288,8 +288,10 @@ function createDisclosure(
     summary.ownerDocument.defaultView?.addEventListener("resize", clampExtent, {
       signal,
     });
-    resizeObserver = new ResizeObserver(clampExtent);
-    resizeObserver.observe(body);
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(clampExtent);
+      resizeObserver.observe(body);
+    }
   }
 
   function disconnectHeader(): void {

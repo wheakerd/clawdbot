@@ -37,22 +37,22 @@ export function ReplyConnector() {
       return undefined;
     }
     let cancelled = false;
-    const observer = new ResizeObserver(draw);
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(draw) : undefined;
     queueMicrotask(() => {
       const group = element.closest(".chat-message--reply, .chat-group");
       if (cancelled || !element.isConnected || !group) {
         return;
       }
       draw();
-      observer.observe(group);
+      observer?.observe(group);
       const messages = group.querySelector(".chat-group-messages");
       if (messages) {
-        observer.observe(messages);
+        observer?.observe(messages);
       }
     });
     return () => {
       cancelled = true;
-      observer.disconnect();
+      observer?.disconnect();
     };
   });
   return (

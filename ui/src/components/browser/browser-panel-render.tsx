@@ -448,17 +448,20 @@ export function BrowserPanelChrome(
   const remoteInput = () => (controller.native.activeTab ? undefined : controller.input);
   onSettled(() => {
     const viewport = controller.input.elements.viewport!;
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) {
-        controller.handleViewportResize(entry.contentRect.width, entry.contentRect.height);
-      }
-    });
-    observer.observe(viewport);
+    const observer =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver(([entry]) => {
+            if (entry) {
+              controller.handleViewportResize(entry.contentRect.width, entry.contentRect.height);
+            }
+          })
+        : undefined;
+    observer?.observe(viewport);
     // SAFETY: Native wheel events are WheelEvents; cancel local scrolling before they bubble.
     const handleWheel = (event: Event) => remoteInput()?.handleWheel(event as WheelEvent);
     const stopWheel = listen(viewport, "wheel", handleWheel, { passive: false });
     return () => {
-      observer.disconnect();
+      observer?.disconnect();
       stopWheel();
     };
   });

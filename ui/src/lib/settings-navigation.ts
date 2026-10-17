@@ -37,9 +37,15 @@ let settingsSearchSegmenter: Intl.Segmenter | null = null;
 
 function settingsSearchHasWordPrefix(value: string, query: string): boolean {
   const locale = i18n.getLocale();
-  if (!settingsSearchSegmenter || settingsSearchSegmenterLocale !== locale) {
+  if (settingsSearchSegmenterLocale !== locale) {
     settingsSearchSegmenterLocale = locale;
-    settingsSearchSegmenter = new Intl.Segmenter(locale, { granularity: "word" });
+    settingsSearchSegmenter =
+      typeof Intl !== "undefined" && "Segmenter" in Intl
+        ? new Intl.Segmenter(locale, { granularity: "word" })
+        : null;
+  }
+  if (!settingsSearchSegmenter) {
+    return value.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(query));
   }
   for (const segment of settingsSearchSegmenter.segment(value)) {
     if (segment.isWordLike !== false && segment.segment.startsWith(query)) {

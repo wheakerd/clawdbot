@@ -18,18 +18,18 @@ export function composerScrollStateRef(revision: () => unknown, trackScroll = tr
       !scrollable || element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
     );
   };
-  const observer = new ResizeObserver(sync);
+  const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
   let stopScroll: (() => void) | undefined;
   // Scroll affordances measure the committed menu, outside the render phase.
   createEffect(revision, () => queueMicrotask(sync));
   onCleanup(() => {
-    observer.disconnect();
+    observer?.disconnect();
     stopScroll?.();
     element = undefined;
   });
   return (node: HTMLElement) => {
     element = node;
-    observer.observe(node);
+    observer?.observe(node);
     stopScroll = trackScroll ? listen(node, "scroll", sync) : undefined;
     queueMicrotask(sync);
   };

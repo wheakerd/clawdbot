@@ -46,7 +46,7 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   if (
     trigger === "pointer" &&
     ((event instanceof PointerEvent && event.pointerType === "touch") ||
-      !globalThis.matchMedia("(hover: hover)").matches)
+      !globalThis.matchMedia?.("(hover: hover)").matches)
   ) {
     return;
   }

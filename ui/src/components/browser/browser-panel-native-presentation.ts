@@ -185,21 +185,24 @@ export function createBrowserPanelNativePresentation(
     mountStage(element: HTMLElement): () => void {
       stage = element;
       intersecting = true;
-      const resize = new ResizeObserver(schedule);
-      const intersection = new IntersectionObserver(([entry]) => {
-        intersecting = entry?.isIntersecting ?? intersecting;
-        schedule();
-      });
-      resize.observe(stage);
-      intersection.observe(stage);
+      const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+      const intersection =
+        typeof IntersectionObserver === "function"
+          ? new IntersectionObserver(([entry]) => {
+              intersecting = entry?.isIntersecting ?? intersecting;
+              schedule();
+            })
+          : null;
+      resize?.observe(stage);
+      intersection?.observe(stage);
       const stopScroll = listen(document, "scroll", schedule, true);
       const stopResize = listen(window, "resize", schedule);
       presentation.update();
       return () => {
         presentation.hide();
         stage = null;
-        resize.disconnect();
-        intersection.disconnect();
+        resize?.disconnect();
+        intersection?.disconnect();
         stopScroll();
         stopResize();
       };

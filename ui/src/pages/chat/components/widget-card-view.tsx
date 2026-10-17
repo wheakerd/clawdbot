@@ -495,7 +495,7 @@ function widgetActionsPlacementRef(
   createEffect(
     () => [active(), options()] as const,
     ([isActive]) => {
-      if (!isActive || !element) {
+      if (!isActive || !element || typeof ResizeObserver === "undefined") {
         return undefined;
       }
       const target = element;

@@ -49,6 +49,8 @@ const enDesktop = {
       mute: "Mute desktop audio",
       blocked:
         "Audio playback was blocked. Allow sound for this site, then click Unmute desktop audio again.",
+      unsupported:
+        "Desktop audio requires a browser with Web Audio support. Try a current browser.",
       failed: "Desktop audio disconnected or could not start. Reconnect the desktop to try again.",
     },
     keyboard: "Keyboard",

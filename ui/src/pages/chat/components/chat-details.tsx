@@ -229,10 +229,11 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
           .closest("openclaw-chat-pane")
           ?.querySelector<HTMLElement>(".chat-main__conversation-frame") ??
         null;
-      const resize = new ResizeObserver(reposition);
+      const resize =
+        typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(reposition);
       for (const element of [pane, frame, frame?.querySelector(".chat-footer")]) {
         if (element) {
-          resize.observe(element);
+          resize?.observe(element);
         }
       }
       reposition();
@@ -252,7 +253,7 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
           : []),
       ];
       return () => {
-        resize.disconnect();
+        resize?.disconnect();
         stop.forEach((dispose) => dispose());
       };
     });

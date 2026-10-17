@@ -149,6 +149,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
   onSettled(() => {
     const styles = bindShadowStyles(group, [tabsStyles]);
     let disposed = false;
+    let resizeObserver: ResizeObserver | undefined;
     let observed = new Set<Element>();
     let frame: number | undefined;
     const schedule = () => {
@@ -164,12 +165,12 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
         const nextObserved = new Set<Element>([group, ...children, ...labels.values()]);
         for (const target of observed) {
           if (!nextObserved.has(target)) {
-            resizeObserver.unobserve(target);
+            resizeObserver?.unobserve(target);
           }
         }
         for (const target of nextObserved) {
           if (!observed.has(target)) {
-            resizeObserver.observe(target);
+            resizeObserver?.observe(target);
           }
         }
         observed = nextObserved;
@@ -196,13 +197,15 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     // Label text can overflow without changing its observed width.
     const mutationObserver = new MutationObserver(schedule);
     mutationObserver.observe(group, { childList: true, characterData: true, subtree: true });
-    const resizeObserver = new ResizeObserver(schedule);
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(schedule);
+    }
     schedule();
     return () => {
       disposed = true;
       styles.dispose();
       mutationObserver.disconnect();
-      resizeObserver.disconnect();
+      resizeObserver?.disconnect();
       if (frame !== undefined) {
         cancelAnimationFrame(frame);
       }
