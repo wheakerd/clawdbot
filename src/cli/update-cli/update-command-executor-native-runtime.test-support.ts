@@ -9,8 +9,8 @@ export const updateExecutorNativeEntrypoints = {
   },
   databaseGenerations: {
     currentModuleUrl,
-    sourceWorkerName: "../../infra/update-database-generations",
-    distWorkerPath: "infra/update-database-generations.js",
+    sourceWorkerName: "../../infra/update-physical-database-generations",
+    distWorkerPath: "infra/update-physical-database-generations.js",
   },
   postUpdate: {
     currentModuleUrl,
