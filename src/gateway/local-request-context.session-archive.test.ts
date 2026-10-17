@@ -1,4 +1,3 @@
-// Proves discovery -> caller-bound RPC -> deferred archive without a model or live Gateway.
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
@@ -55,10 +54,8 @@ function toolOptions(cfg: OpenClawConfig, sessionKey = TARGET, sessionId = TARGE
 }
 
 function sessionTool(tools: ReturnType<typeof createOpenClawCodingTools>, name = "sessions") {
-  return expectDefined(
-    tools.find((tool) => tool.name === name),
-    name,
-  );
+  const found = tools.find((tool) => tool.name === name);
+  return expectDefined(found, name);
 }
 
 function loopbackTools(options: ReturnType<typeof toolOptions> & { runId?: string }) {
@@ -133,10 +130,8 @@ function seedOwnedSession(sessionKey: string, sessionId: string, profileId: stri
   );
 }
 
-beforeAll(async () => {
-  // Keep the first Stop call's cold handler import outside its RPC deadline.
-  await import("./server-methods/sessions-abort.js");
-});
+// Keep the first Stop call's cold handler import outside its RPC deadline.
+beforeAll(() => import("./server-methods/sessions-abort.js"));
 
 it("keeps archive but withholds Stop from embedded and admitted MCP collectors", () =>
   withSessionToolsFixture(async (cfg) => {

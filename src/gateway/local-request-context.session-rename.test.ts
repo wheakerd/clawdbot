@@ -4,6 +4,7 @@ import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-conte
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import {
   appendTranscriptMessage,
@@ -39,19 +40,10 @@ const rename = (tool: SessionTool, label: string, extra: Record<string, unknown>
 function absent(tools: SessionTool[]) {
   expect(findSessionTool(tools)).toBeUndefined();
 }
-function lacks(tool: SessionTool, ...fields: string[]) {
-  for (const field of fields) {
-    expect(tool.parameters).not.toHaveProperty(`properties.${field}`);
-  }
-}
 function loopback(options: Parameters<typeof resolveGatewayScopedTools>[0]) {
   return resolveGatewayScopedTools({ ...options, surface: "loopback" }).then(({ tools }) => tools);
 }
-function guestAuthority(
-  profileId: string,
-  scopes: string[],
-  signal = new AbortController().signal,
-) {
+function authority(profileId: string, scopes: string[], signal = new AbortController().signal) {
   return createAdmittedRunOperatorAuthority({
     profileId,
     scopes,
@@ -91,11 +83,7 @@ it("renames only the creator's session without changing its running work or sett
     const beforeRename = loadSessionEntry(scope)!;
     expect(beforeRename.createdActor).toEqual(original.createdActor);
     const controller = new AbortController();
-    const operatorAuthority = guestAuthority(
-      profileId,
-      ["operator.sessions.write"],
-      controller.signal,
-    );
+    const operatorAuthority = authority(profileId, ["operator.sessions.write"], controller.signal);
     await withPersonalToolTurn(
       {
         owner: { profileId, senderId: "guest", name: "Guest", operatorAuthority },
@@ -111,7 +99,8 @@ it("renames only the creator's session without changing its running work or sett
         const tools = createOpenClawCodingTools(options);
         const tool = expectDefined(findSessionTool(tools), "guest session operation");
         expect(tool.parameters).toHaveProperty("properties.label");
-        lacks(tool, "model", "archived");
+        expect(tool.parameters).not.toHaveProperty("properties.model");
+        expect(tool.parameters).not.toHaveProperty("properties.archived");
         const gateway = await loopback({ ...options, cfg: options.config, admittedRunContext });
         expect(findSessionTool(gateway)?.parameters).toHaveProperty("properties.label");
         const result = await rename(tool, "Research plan");
@@ -191,7 +180,7 @@ it("respects required-sandbox default and explicit tool policy", () =>
       const scopes = [scope];
       cfg.gateway!.roles!.definitions.view!.scopes = scopes;
       const canRename = scopes[0] !== "operator.read";
-      const operatorAuthority = guestAuthority(profileId, scopes);
+      const operatorAuthority = authority(profileId, scopes);
       await withPersonalToolTurn(
         {
           owner: { profileId, senderId: "sandbox-guest", name: "Guest", operatorAuthority },
@@ -225,36 +214,26 @@ it("respects required-sandbox default and explicit tool policy", () =>
                 includeOpenClawTools: true,
                 includePluginTools: false,
               },
-              sandbox: {
-                enabled: true,
-                required: true as const,
-                backendId: sandboxConfig.backend,
-                sessionKey,
-                workspaceDir,
-                agentWorkspaceDir: workspaceDir,
-                workspaceAccess: "none" as const,
-                runtimeId: "rename-test",
-                runtimeLabel: "rename-test",
-                containerName: "rename-test",
-                containerWorkdir: "/workspace",
-                docker: sandboxConfig.docker,
-                tools: sandboxConfig.tools,
-                browserAllowHostControl: false,
-              },
+              sandbox: createSandboxTestContext({
+                overrides: {
+                  required: true,
+                  sessionKey,
+                  workspaceDir,
+                  agentWorkspaceDir: workspaceDir,
+                  workspaceAccess: "none",
+                  tools: sandboxConfig.tools,
+                },
+              }),
             };
             const preparedProfile = resolveConversationCapabilityProfile({
               ...options,
               sandboxToolPolicy: sandboxConfig.tools,
             });
+            const native = (conversationCapabilityProfile?: typeof preparedProfile) =>
+              createOpenClawCodingTools({ ...nativeOptions, conversationCapabilityProfile });
             const catalogs = [
-              ["native", createOpenClawCodingTools(nativeOptions)],
-              [
-                "prepared native",
-                createOpenClawCodingTools({
-                  ...nativeOptions,
-                  conversationCapabilityProfile: preparedProfile,
-                }),
-              ],
+              ["native", native()],
+              ["prepared native", native(preparedProfile)],
               ["loopback", await loopback({ ...options, cfg: config, admittedRunContext })],
             ] as const;
             for (const [surface, tools] of catalogs) {
@@ -269,7 +248,8 @@ it("respects required-sandbox default and explicit tool policy", () =>
               }
               expect(tool.parameters).toHaveProperty("properties.label");
               if (renameOnly) {
-                lacks(tool, "archived", "ownerType");
+                expect(tool.parameters).not.toHaveProperty("properties.archived");
+                expect(tool.parameters).not.toHaveProperty("properties.ownerType");
                 for (const args of [
                   { action: "assign_owner", ownerType: "human", ownerId: profileId },
                   { action: "patch", archived: true },
@@ -304,16 +284,16 @@ it("respects required-sandbox default and explicit tool policy", () =>
             if (name === "default") {
               absent(await loopback({ ...options, cfg: config }));
               const { allow, deny } = sandboxConfig.tools;
+              const narrowedPolicies = [
+                { allow, deny },
+                { ...sandboxConfig.tools, allow: ["read"] },
+              ];
               for (const overrides of [
                 { senderIsOwner: true },
                 { conversationCapabilityProfile: defaultsWithoutAdmission },
-                { sandbox: { ...nativeOptions.sandbox, tools: { allow, deny } } },
-                {
-                  sandbox: {
-                    ...nativeOptions.sandbox,
-                    tools: { ...sandboxConfig.tools, allow: ["read"] },
-                  },
-                },
+                ...narrowedPolicies.map((tools) => ({
+                  sandbox: { ...nativeOptions.sandbox, tools },
+                })),
               ]) {
                 absent(createOpenClawCodingTools({ ...nativeOptions, ...overrides }));
               }
