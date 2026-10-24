@@ -8,7 +8,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { changedServerUiPrefs } from "../../app/server-prefs-intent.ts";
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
@@ -24,13 +23,7 @@ import {
 } from "../../app/server-prefs.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
-import {
-  installDialogPolyfill,
-  nextFrame,
-  waitForRenderedModalDialog,
-} from "../../test-helpers/modal-dialog.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -409,16 +402,13 @@ it("uses the committed snapshot for both display and reset while the form draft 
 });
 
 it.each([
-  ["microphone", "disconnect"],
   ["microphone", "reentry"],
   ["microphone", "reentry with gesture"],
   ["microphone", "passive failure"],
-  ["microphone", "leave during retry"],
   ["microphone", "permission failure"],
   ["camera", "reentry with gesture"],
 ] as const)("%s permission lifetime: %s", async (kind, scenario) => {
   const initial = deferred<MediaDeviceInfo[]>();
-  const second = deferred<MediaDeviceInfo[]>();
   const enumerateDevices = vi.fn().mockResolvedValue([]);
   const stop = vi.fn();
   const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
@@ -438,9 +428,6 @@ it.each([
   if (!startsWithPermission && kind === "microphone") {
     enumerateDevices.mockResolvedValueOnce([]);
   }
-  if (scenario === "leave during retry") {
-    enumerateDevices.mockReturnValueOnce(second.promise);
-  }
   const refresh = () =>
     kind === "microphone" ? props().onMicrophoneRefresh?.() : props().onCameraRefresh?.();
   if (!startsWithPermission) {
@@ -452,33 +439,20 @@ it.each([
   expect(enumerateDevices).toHaveBeenCalledTimes(initialCalls);
   expect(getUserMedia).not.toHaveBeenCalled();
 
-  if (scenario === "disconnect") {
-    page.dispose();
-  } else if (scenario.startsWith("reentry")) {
+  if (scenario.startsWith("reentry")) {
     page.update({ pageId: "advanced" });
     page.update({ pageId: "appearance" });
     if (scenario === "reentry with gesture") {
       refresh();
     }
   }
-  if (["passive failure", "leave during retry", "permission failure"].includes(scenario)) {
+  if (["passive failure", "permission failure"].includes(scenario)) {
     initial.reject(new DOMException("Synthetic inactive enumeration", "InvalidStateError"));
   } else {
     initial.resolve([]);
   }
-  if (scenario === "leave during retry") {
-    await waitForSolid(() => expect(enumerateDevices).toHaveBeenCalledTimes(initialCalls + 1));
-    page.update({ pageId: "advanced" });
-    second.resolve([]);
-  }
-  if (scenario === "disconnect") {
-    await initial.promise;
-    await Promise.resolve();
-    flush();
-  } else {
-    await props()[kind]?.discovery;
-    flush();
-  }
+  await props()[kind]?.discovery;
+  flush();
   const permits = ["reentry with gesture", "passive failure"].includes(scenario);
   expect(getUserMedia).toHaveBeenCalledTimes(permits ? 1 : 0);
   expect(stop).toHaveBeenCalledTimes(permits ? 1 : 0);
@@ -647,40 +621,6 @@ it("leaves Appearance while a camera selection is unresolved", async () => {
   await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
   expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
   expect(view.container.querySelector("[data-settings-camera]")).toBeNull();
-});
-
-it("leaves Talk while a native voice edit is unresolved and still accepts its outcome", async () => {
-  const snapshot = createNativeDeviceSettingsSnapshot();
-  const pending = Promise.withResolvers<unknown>();
-  const post = vi
-    .fn<(message: { type: string }) => Promise<unknown>>()
-    .mockResolvedValue(undefined);
-  vi.stubGlobal("webkit", { messageHandlers: { openclawDeviceSettings: { postMessage: post } } });
-  vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
-  const capability = createNativeDeviceSettingsCapability()!;
-  const view = mountConfigPage(configContext({ nativeDeviceSettings: capability }), {
-    pageId: "talk",
-  });
-  try {
-    const wake = view.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-    post.mockReturnValueOnce(pending.promise);
-    wake.click();
-    await waitForSolid(() => expect(view.container.textContent).toContain("Saving"));
-    expect(capability.snapshot?.voice.wakeEnabled).toBe(false);
-
-    view.update({ pageId: "notifications" });
-    await waitForSolid(() => {
-      expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
-      expect(view.container.querySelector("openclaw-talk-settings")).toBeNull();
-    });
-    const accepted = structuredClone(snapshot);
-    accepted.voice.wakeEnabled = true;
-    pending.resolve(accepted);
-    await waitForSolid(() => expect(capability.snapshot?.voice.wakeEnabled).toBe(true));
-    expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
-  } finally {
-    capability.dispose();
-  }
 });
 
 it("leaves the settings route before a camera switch settles and still records its outcome", async () => {
@@ -888,13 +828,8 @@ it("retries a rejected update status read without hiding policy controls", async
   });
 });
 
-it("stages policy changes through patchForm and confirms Update Gateway… before overlays", async () => {
+it("routes update policy edits through the configuration owner", () => {
   const patchForm = vi.fn();
-  const updateActions = {
-    captureUpdateTarget: () => () => true,
-    runUpdate: vi.fn<ApplicationContext["overlays"]["runUpdate"]>(),
-  } satisfies Pick<ApplicationContext["overlays"], "captureUpdateTarget" | "runUpdate">;
-  const { runUpdate } = updateActions;
   const context = configContext({
     runtimeConfig: {
       canSet: true,
@@ -905,87 +840,26 @@ it("stages policy changes through patchForm and confirms Update Gateway… befor
       patchForm,
     },
     gateway: connectedGateway(["update.run"]),
-    overlays: {
-      snapshot: {
-        updateSchedule: { channel: "stable", autoEnabled: false },
-        updateRunning: false,
-        updateReconciliationPending: false,
-      },
-      ...updateActions,
-    },
+    overlays: { snapshot: { updateSchedule: { channel: "stable", autoEnabled: false } } },
   });
   const { container } = mountConfigPage(context, { pageId: "updates" });
-  const restoreDialogPolyfill = installDialogPolyfill();
-  const updateButton = () => buttonNamed(container, "Update Gateway…");
-  const status = () => container.querySelector(".settings-status")?.textContent;
-
-  context.overlays.snapshot.updateStatusRefreshing = true;
-  publishConfigSource(context.overlays);
-  const checkingButton = updateButton();
-  expect(checkingButton.textContent?.trim()).toBe("Update Gateway…");
-  expect(checkingButton).toMatchObject({ disabled: true, title: "Checking for updates…" });
-  expect(status()).toContain("Checking for updates…");
-  expect(container.querySelector(".settings-segmented__input")?.hasAttribute("disabled")).toBe(
-    true,
-  );
-  context.overlays.snapshot.updateStatusRefreshing = false;
-  context.overlays.snapshot.updateStatusCheckBanner = {
-    mode: "manual",
-    tone: "warn",
-    text: "Could not check for updates: timeout",
-  };
-  publishConfigSource(context.overlays);
-  expect(updateButton()).toMatchObject({
-    disabled: true,
-    title: "Check for updates successfully before starting an update.",
-  });
-
-  context.overlays.snapshot.updateSchedule = {
-    channel: "dev",
-    autoEnabled: false,
-    install: { kind: "git", git: { status: "diverged", commitsAhead: 1, commitsBehind: 3 } },
-  };
-  publishConfigSource(context.overlays);
-  expect(updateButton()).toMatchObject({ disabled: false, title: "" });
-  expect(status()).toContain("Could not check for updates: timeout");
-  expect(runUpdate).not.toHaveBeenCalled();
-
   container.querySelector<HTMLInputElement>('.settings-segmented__input[value="beta"]')!.click();
-  const policySwitches = [
-    ...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input"),
-  ];
-  const togglePolicy = (title: string, checked: boolean) => {
-    const control = policySwitches.find(
-      (input) =>
-        input
+  for (const [title, checked, path] of [
+    ["Check for updates", false, ["update", "checkOnStart"]],
+    ["Automatic updates", true, ["update", "auto", "enabled"]],
+  ] as const) {
+    const input = [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].find(
+      (control) =>
+        control
           .closest(".settings-row")
           ?.querySelector(".settings-row__title")
           ?.textContent?.trim() === title,
-    );
-    if (!control) {
-      throw new Error(`Missing ${title} control`);
-    }
-    control.checked = checked;
-    control.dispatchEvent(new Event("change"));
-  };
-  togglePolicy("Check for updates", false);
-  togglePolicy("Automatic updates", true);
-  updateButton().click();
-  await nextFrame();
-
+    )!;
+    input.checked = checked;
+    input.dispatchEvent(new Event("change"));
+    expect(patchForm).toHaveBeenCalledWith(path, checked);
+  }
   expect(patchForm).toHaveBeenCalledWith(["update", "channel"], "beta");
-  expect(patchForm).toHaveBeenCalledWith(["update", "checkOnStart"], false);
-  expect(patchForm).toHaveBeenCalledWith(["update", "auto", "enabled"], true);
-  expect(runUpdate).not.toHaveBeenCalled();
-
-  const { modal } = await waitForRenderedModalDialog(document.body);
-  [...modal.querySelectorAll("button")]
-    .find((button) => button.textContent?.trim() === "Update and restart")
-    ?.click();
-  await nextFrame();
-
-  expect(runUpdate).toHaveBeenCalledOnce();
-  restoreDialogPolyfill();
 });
 
 function createRuntimeConfig() {

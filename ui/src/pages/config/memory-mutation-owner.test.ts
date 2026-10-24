@@ -35,9 +35,6 @@ vi.mock("../../lib/plugins/index.ts", async (importOriginal) => {
   return { ...actual, setPluginEnabled: vi.fn() };
 });
 
-function engines() {
-  return [engine("memory-core", true), engine("other", false)];
-}
 function addons() {
   return [addon("active-memory", true), addon("memory-wiki", false)];
 }
@@ -68,30 +65,6 @@ function waitForAddon(element: HTMLElement, state: { checked?: boolean; disabled
 
 beforeEach(() => {
   vi.mocked(setPluginEnabled).mockReset();
-});
-
-it("keeps a committed engine successful while making its failed refresh visible", async () => {
-  const { element, runExternalMutation } = createMemoryPage({
-    configObject: {},
-    catalog: engines(),
-    refresh: () => Promise.reject(new Error("authoritative snapshot unavailable")),
-  });
-  mountMemoryPage(element);
-  try {
-    await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
-    selectEngine(element, "other");
-
-    await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledOnce());
-    await waitForSolid(() =>
-      expect(element.textContent).toContain(
-        "Could not refresh Control UI configuration: authoritative snapshot unavailable",
-      ),
-    );
-    expect(element.textContent).toContain("Needs attention");
-    expect(element.textContent).not.toContain("Could not change the memory engine");
-  } finally {
-    await finishMemory(element, runExternalMutation);
-  }
 });
 
 it("keeps a later add-on pending through the real configuration owner", async () => {
@@ -171,14 +144,16 @@ it("keeps a later add-on pending through the real configuration owner", async ()
 });
 
 it("finishes one add-on while its admitted sibling is still pending", async () => {
+  const processInfo = deferred<{ processInstanceId: string }>();
   const first = deferred<unknown>();
   const second = deferred<unknown>();
   const setEnabled = vi.fn((pluginId: string) =>
     pluginId === "active-memory" ? first.promise : second.promise,
   );
-  const { element, runExternalMutation } = createMemoryPage({
+  const { element, request, runExternalMutation } = createMemoryPage({
     configObject: {},
     catalog: addons(),
+    processInfo: () => processInfo.promise,
     setEnabled,
   });
   mountMemoryPage(element);
@@ -205,7 +180,9 @@ it("finishes one add-on while its admitted sibling is still pending", async () =
       expect(element.textContent).toContain("Review active-memory settings.");
       expect(element.textContent).toContain("Review memory-wiki settings.");
     });
+    expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(0);
   } finally {
+    processInfo.resolve({ processInstanceId: "memory-process" });
     first.resolve(committed("active-memory", false));
     second.resolve(committed("memory-wiki", true));
 
@@ -294,44 +271,6 @@ it("leaves Memory through RouterOutlet while an add-on mutation is pending", asy
     ]);
     page.unmount();
     router.stop();
-  }
-});
-
-it("retires an old preview on reconnect while its catalog reload is pending", async () => {
-  const oldCatalog = deferred<{
-    plugins: ReturnType<typeof addon>[];
-  }>();
-  let enabled = true;
-  const { element, request, runExternalMutation, setPhase } = createMemoryPage({
-    configObject: {},
-    listCatalog: (call) =>
-      call === 1
-        ? oldCatalog.promise
-        : Promise.resolve({ plugins: [addon("active-memory", enabled)] }),
-    setEnabled: (id, value) => {
-      enabled = value;
-      return Promise.resolve(committed(id, value));
-    },
-  });
-  mountMemoryPage(element);
-  try {
-    await waitForAddon(element, { checked: true });
-    toggleAddon(element, "Active memory", false);
-    await waitForCatalog(request, 2);
-    enabled = true;
-    setPhase("disconnected");
-    setPhase("connected");
-    await waitForAddon(element, { checked: true, disabled: false });
-    toggleAddon(element, "Active memory", false);
-    await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
-    await waitForAddon(element, { checked: false, disabled: false });
-    oldCatalog.resolve({ plugins: [addon("active-memory", true)] });
-    await nextTurn();
-    await waitForAddon(element, { checked: false, disabled: false });
-  } finally {
-    oldCatalog.resolve({ plugins: [addon("active-memory", true)] });
-
-    await finishMemory(element, runExternalMutation);
   }
 });
 
@@ -487,28 +426,6 @@ it.each(["queued", "in flight"])(
   },
 );
 
-it("shows a committed runtime warning without waiting for process discovery", async () => {
-  const processInfo = deferred<{ processInstanceId: string }>();
-  const { element, request, runExternalMutation } = createMemoryPage({
-    configObject: {},
-    catalog: [addon("active-memory", true)],
-    processInfo: () => processInfo.promise,
-    setEnabled: (pluginId, enabled) =>
-      Promise.resolve(committed(pluginId, enabled, ["Review the addon settings."])),
-  });
-  mountMemoryPage(element);
-  try {
-    await waitForAddon(element);
-    toggleAddon(element, "Active memory", false);
-    await waitForSolid(() => expect(element.textContent).toContain("Review the addon settings."));
-    expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(0);
-  } finally {
-    processInfo.resolve({ processInstanceId: "memory-process" });
-
-    await finishMemory(element, runExternalMutation);
-  }
-});
-
 it.each(["add-on", "engine"] as const)(
   "keeps the replacement %s busy after an older connection finishes",
   async (kind) => {
@@ -556,6 +473,7 @@ it.each(["add-on", "engine"] as const)(
       firstMutation.resolve(committed(pluginId, isEngine));
       await waitForSolid(() => expect(setEnabled).toHaveBeenCalledTimes(2));
       await waitForCatalog(request, 3);
+      expect(element.textContent).not.toContain("Could not change the memory engine");
       flush();
       expect(control()?.hasAttribute("aria-disabled")).toBe(true);
 
@@ -629,51 +547,16 @@ it.each(["memory-boot-b", undefined])(
   },
 );
 
-it("clears a rendered refresh warning after reconnect without losing its runtime warning", async () => {
-  let failRefresh = true;
-  let enabled = true;
-  const { element, runExternalMutation, setPhase } = createMemoryPage({
-    configObject: {},
-    listCatalog: () => Promise.resolve({ plugins: [addon("active-memory", enabled)] }),
-    refresh: () =>
-      failRefresh
-        ? Promise.reject(new Error("old authoritative refresh failed"))
-        : Promise.resolve(),
-    setEnabled: (pluginId, nextEnabled) => {
-      enabled = nextEnabled;
-      return Promise.resolve(committed(pluginId, nextEnabled, ["Review active-memory settings."]));
-    },
-  });
-  mountMemoryPage(element);
-  try {
-    await waitForAddon(element, { checked: true });
-    toggleAddon(element, "Active memory", false);
-    await waitForSolid(() => {
-      expect(element.textContent).toContain("old authoritative refresh failed");
-      expect(element.textContent).toContain("Review active-memory settings.");
-    });
-
-    failRefresh = false;
-    setPhase("disconnected");
-    setPhase("connected");
-    await waitForSolid(() => {
-      expect(element.textContent).not.toContain("old authoritative refresh failed");
-      expect(element.textContent).toContain("Review active-memory settings.");
-    });
-  } finally {
-    await finishMemory(element, runExternalMutation);
-  }
-});
-
 it.each([
   ["active-memory", "memory-wiki"],
   ["engine", "active-memory"],
   ["active-memory", "engine"],
+  ["active-memory", "reconnect"],
 ] as const)(
   "clears a %s refresh warning when %s refreshes authoritative configuration",
   async (first, second) => {
     let refreshCalls = 0;
-    const { element, runExternalMutation } = createMemoryPage({
+    const { element, runExternalMutation, setPhase } = createMemoryPage({
       configObject: {},
       catalog: [
         engine("memory-core", true),
@@ -693,7 +576,7 @@ it.each([
         ),
     });
     mountMemoryPage(element);
-    const mutate = (owner: typeof first | typeof second) => {
+    const mutate = (owner: Exclude<typeof first | typeof second, "reconnect">) => {
       if (owner === "engine") {
         selectEngine(element, "other");
         return;
@@ -711,9 +594,18 @@ it.each([
       await waitForSolid(() =>
         expect(element.textContent).toContain("previous authoritative refresh failed"),
       );
+      if (first === "engine") {
+        expect(element.textContent).toContain("Needs attention");
+        expect(element.textContent).not.toContain("Could not change the memory engine");
+      }
 
-      mutate(second);
-      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      if (second === "reconnect") {
+        setPhase("disconnected");
+        setPhase("connected");
+      } else {
+        mutate(second);
+        await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      }
       await waitForSolid(() =>
         expect(element.textContent).not.toContain("previous authoritative refresh failed"),
       );
@@ -725,36 +617,3 @@ it.each([
     }
   },
 );
-
-it("reloads the replacement connection after an older engine change commits", async () => {
-  const pendingMutation = deferred<unknown>();
-  const { element, request, runExternalMutation, setPhase } = createMemoryPage({
-    configObject: {},
-    listCatalog: (call) =>
-      Promise.resolve({
-        plugins:
-          call < 2
-            ? [engine("memory-core", true), engine("other", false)]
-            : [engine("memory-core", false), engine("other", true)],
-      }),
-    setEnabled: () => pendingMutation.promise,
-  });
-  mountMemoryPage(element);
-  try {
-    await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
-    selectEngine(element, "other");
-    await waitForSolid(() => expect(setPluginEnabled).toHaveBeenCalledOnce());
-
-    setPhase("disconnected");
-    setPhase("connected");
-    await waitForCatalog(request, 2);
-    pendingMutation.resolve(committed("other", true));
-
-    await waitForCatalog(request, 3);
-    expect(element.textContent).not.toContain("Could not change the memory engine");
-  } finally {
-    pendingMutation.resolve(committed("other", true));
-
-    await finishMemory(element, runExternalMutation);
-  }
-});

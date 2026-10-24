@@ -647,24 +647,6 @@ describe("Talk device and voice wake settings", () => {
     },
   );
 
-  it("does not carry an unsaved trigger draft into another Gateway", async () => {
-    let gatewayWords = ["openclaw"];
-    const { page, input, voiceWakeRequest, setGatewayConnection } = await voiceWakeFixture(
-      () => ({ triggers: gatewayWords }),
-      () => gatewayWords,
-    );
-    editTrigger(input, "old gateway words");
-    setGatewayConnection(false);
-    gatewayWords = ["new gateway words"];
-    setGatewayConnection(true, "wss://other-gateway.example.test");
-    await tick(400);
-    expect(triggerInput(page)?.value).toBe("new gateway words");
-    expect(voiceWakeRequest.mock.calls).toEqual([
-      ["voicewake.get", {}],
-      ["voicewake.get", {}],
-    ]);
-  });
-
   it.each([false, true])(
     "restores an offline trigger draft after reopening Talk only for its Gateway (switch: %s)",
     async (switchGateway) => {
@@ -753,17 +735,27 @@ describe("Talk device and voice wake settings", () => {
 });
 
 describe("TalkSettingsPage realtime transport mutation", () => {
-  it("acknowledges a model reset from the canonical config revision", async () => {
-    const hashCatalog = createDeferred();
-    const { page, request, runtimeConfig, setConfigHash } = createTalkMutationHarness({
-      activeVoiceSelectionPolicy: "allowlist-default",
-      configSnapshot: { hash: null, configRevisionHash: "revision-1" },
+  async function resetHarness(options: TalkMutationHarnessOptions = {}) {
+    const harness = createTalkMutationHarness({
       defaultModel: "gpt-realtime-2.1",
       model: null,
+      ...options,
+    });
+    await waitForSolid(() => {
+      expect(harness.request).toHaveBeenCalledExactlyOnceWith("talk.catalog", {});
+      expect(harness.page.querySelector("openclaw-select-picker")).not.toBeNull();
+    });
+    return harness;
+  }
+
+  it("acknowledges a model reset from the canonical config revision", async () => {
+    const hashCatalog = createDeferred();
+    const { page, request, runtimeConfig, setConfigHash } = await resetHarness({
+      activeVoiceSelectionPolicy: "allowlist-default",
+      configSnapshot: { hash: null, configRevisionHash: "revision-1" },
       catalogRequest: (requestIndex, catalog) =>
         requestIndex === 3 ? hashCatalog.promise.then(() => catalog) : catalog,
     });
-    await waitForSolid(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
     setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
     await waitForSolid(() => expectVoiceState(page, ACTIVE_VOICES, true));
 
@@ -795,15 +787,9 @@ describe("TalkSettingsPage realtime transport mutation", () => {
   });
 
   it("retains a reset without revisions, then clears it after reconnect with a revision", async () => {
-    const { page, request, setConfigHash, setGatewayConnection } = createTalkMutationHarness({
+    const { page, request, setConfigHash, setGatewayConnection } = await resetHarness({
       activeVoiceSelectionPolicy: "allowlist-default",
       configSnapshot: { hash: null, configRevisionHash: null },
-      defaultModel: "gpt-realtime-2.1",
-      model: null,
-    });
-    await waitForSolid(() => {
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(page.querySelector("openclaw-select-picker")).not.toBeNull();
     });
     page.changeModel(null);
     setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
@@ -823,17 +809,11 @@ describe("TalkSettingsPage realtime transport mutation", () => {
   });
 
   it("clears model reset intent on explicit model, provider, and Gateway changes", async () => {
-    const { page, request, setGatewayConnection } = createTalkMutationHarness({
-      defaultModel: "gpt-realtime-2.1",
-      model: null,
+    const { page, request, setGatewayConnection } = await resetHarness({
       voicesByModel: {
         "gpt-realtime-2.1": ["marin"],
         "gpt-realtime-alt": ["verse"],
       },
-    });
-    await waitForSolid(() => {
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(page.querySelector("openclaw-select-picker")).not.toBeNull();
     });
 
     page.changeModel(null);

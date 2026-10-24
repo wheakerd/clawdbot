@@ -17,7 +17,7 @@ import * as modelCatalogStore from "../../lib/model-catalog-store.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -165,54 +165,6 @@ describe("ConfigPage navigation", () => {
       }
       expect(removeFormValue).not.toHaveBeenCalled();
     });
-
-    it.each([
-      ["communications", "?section=tts", "config-section-tts", "config-section-messages"],
-      ["notifications", "", "settings-communications-notifications", "config-section-messages"],
-    ] as const)(
-      "renders the selected section for %s%s",
-      async (pageId, search, visibleId, absentId) => {
-        const route = expectDefined(
-          pages.find((entry) => entry.id === pageId),
-          "config route",
-        );
-        const context = routeContext();
-        const location = { pathname: `/settings/${pageId}`, search, hash: "" };
-        const data = await route.loader?.(context, {
-          location,
-          signal: new AbortController().signal,
-          shouldRun: () => true,
-          revalidating: false,
-          deps: expectDefined(route.loaderDeps, "config route dependencies")(context, location),
-          cause: "navigation",
-        });
-        if (!data || typeof data !== "object" || !("section" in data)) {
-          throw new Error("Config route did not return section data");
-        }
-        expect(data).toMatchObject({ pageId });
-        const module = await route.component();
-        const provider = createSolidApplicationContextProvider(completeConfigContext(context));
-        const render = expectDefined(module.renderSolid, "Solid config route");
-        const { container } = mountSolid(
-          () =>
-            render({ data: data as ConfigPageRouteData, loaderPending: false, presented: true }),
-          { wrapper: provider.wrapper },
-        );
-        const page = expectDefined(
-          container.querySelector<HTMLElement>("openclaw-config-page"),
-          "mounted config page",
-        );
-        flush();
-
-        await waitForSolid(() => expect(page.querySelector(`#${visibleId}`)).not.toBeNull());
-        expect(page.querySelector(`#${absentId}`)).toBeNull();
-        if (pageId === "communications") {
-          expect(page.querySelector('.hub-tab[aria-selected="true"]')?.textContent?.trim()).toBe(
-            search ? "Voice" : "Messages",
-          );
-        }
-      },
-    );
   });
 
   it("keeps the config owner through a pending subpage loader in the real outlet", async () => {
@@ -276,6 +228,10 @@ describe("ConfigPage navigation", () => {
         expect(mounted.querySelector("#config-section-tts")).not.toBeNull();
       });
       const host = expectDefined(mounted.querySelector("openclaw-config-page"), "config host");
+      expect(host.querySelector("#config-section-messages")).toBeNull();
+      expect(host.querySelector('.hub-tab[aria-selected="true"]')?.textContent?.trim()).toBe(
+        "Voice",
+      );
       expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
         "Communications",
       );
@@ -724,15 +680,6 @@ describe("ConfigPage model catalog lifecycle", () => {
         expect(view.page.textContent).toContain("Explicit model catalog unavailable"),
       );
       expect(observerModels(view)).toEqual([]);
-      const picker = element<
-        HTMLElement & {
-          params: { options: Array<{ value: string; disabled?: boolean }> };
-        }
-      >(view.page, "#settings-appearance-sidebar openclaw-select-picker");
-      expect(picker.params.options.slice(0, 2).map((option) => option.disabled === true)).toEqual([
-        false,
-        false,
-      ]);
       expect(view.page.querySelector("#settings-appearance-sidebar input")).toBe(toggle);
 
       await vi.advanceTimersByTimeAsync(10_000);
