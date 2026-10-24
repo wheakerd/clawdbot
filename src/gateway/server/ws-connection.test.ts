@@ -250,11 +250,9 @@ it("counts accepted event bytes per socket with bounded names and live operator 
       String(frame).includes('"event":"tick"'),
     )![0];
     const lastFrame = first.socket.send.mock.lastCall![0];
-    const firstBytes =
-      typeof firstFrame === "string" ? Buffer.byteLength(firstFrame) : firstFrame.byteLength;
-    const lastBytes =
-      typeof lastFrame === "string" ? Buffer.byteLength(lastFrame) : lastFrame.byteLength;
-    expect(events[0]!.bytes).toBe(2 * firstBytes + lastBytes);
+    const byteLength = (frame: typeof firstFrame) =>
+      typeof frame === "string" ? Buffer.byteLength(frame) : frame.byteLength;
+    expect(events[0]!.bytes).toBe(2 * byteLength(firstFrame) + byteLength(lastFrame));
     expect(JSON.stringify(events)).not.toMatch(/private-dynamic-name|private-content|connId/);
     expect(operatorCounts()).toEqual([2]);
     observations.length = 0;
@@ -548,19 +546,14 @@ it.each([false, true])(
     broadcast("tick", { value: 3 });
     expect([...liveClients][0]!.socket.bufferedAmount).toBeGreaterThan(0);
     await complete.promise;
-    expect(received).toEqual([
-      { type: "event", event: "tick", payload: { value: 1 }, seq: 1 },
-      { type: "event", event: "tick", payload: { value: 2 }, seq: 2 },
-      { type: "res", id: "between", ok: true },
-      { type: "event", event: "tick", payload: { value: 3 }, seq: 3 },
-    ]);
-    const wire = Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)));
     const expected = [
       '{"type":"event","event":"tick","payload":{"value":1},"seq":1}',
       '{"type":"event","event":"tick","payload":{"value":2},"seq":2}',
       '{"type":"res","id":"between","ok":true}',
       '{"type":"event","event":"tick","payload":{"value":3},"seq":3}',
     ];
+    expect(received).toEqual(expected.map((json) => JSON.parse(json)));
+    const wire = Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)));
     expect(wire).toEqual(
       Buffer.concat(
         expected.flatMap((json) => [Buffer.from([0x81, json.length]), Buffer.from(json)]),
