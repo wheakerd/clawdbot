@@ -59,7 +59,6 @@ import {
   useSessionStoreFixture,
   withStateDirEnv,
 } from "./session-utils.test-support.js";
-import type { SessionTitleFields } from "./session-utils.types.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 
 const { getSessionProviderArtifactMocks, resetSessionProviderArtifacts } =
