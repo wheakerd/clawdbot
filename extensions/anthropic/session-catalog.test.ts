@@ -69,6 +69,14 @@ function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] 
   return commands;
 }
 
+function terminalCommand(name: string) {
+  const command = createClaudeSessionNodeHostCommands().find((entry) => entry.command === name);
+  if (!command || command.duplex !== true) {
+    throw new Error(`Expected duplex command: ${name}`);
+  }
+  return command;
+}
+
 function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider {
   let provider: SessionCatalogProvider | undefined;
   const runtimeWithSession = {
@@ -681,75 +689,144 @@ describe("Claude session catalog", () => {
     ]);
   });
 
-  it("adopts a local CLI row with a locked one-shot fork binding", async () => {
-    const home = await createHome();
-    process.env.HOME = home;
-    const sessionId = "claude-source-session";
-    await writeTranscript(
-      home,
-      sessionId,
-      [
-        message(sessionId, "user", "source prompt", 1),
-        { type: "custom-title", customTitle: "Renamed source", sessionId },
-        { type: "agent-color", agentColor: "purple", sessionId },
-      ],
-      { summary: "Source session", projectPath: "/work/source" },
-    );
-    const createSessionEntry = vi.fn(async (params: Record<string, unknown>) => ({
-      key: `agent:main:${String(params.key)}`,
-      agentId: "main",
-      sessionId: "openclaw-adopted",
-      entry: { sessionId: "openclaw-adopted", updatedAt: Date.now() },
-    }));
-    const config = routedConfig();
-    const provider = captureCatalogProvider(
-      createPluginRuntimeMock({
-        config: { current: () => config },
-        agent: {
-          session: {
-            listSessionEntries: () => [],
-            createSessionEntry,
+  it.each([false, true])(
+    "adopts a CLI row with a locked fork binding (remote=%s)",
+    async (remote) => {
+      const threadId = "source-session";
+      const home = await createHome();
+      process.env.HOME = home;
+      const cwd = "/work/source";
+      const name = "Renamed source";
+      const color = "purple";
+      const createSessionEntry = vi.fn(async (params: Record<string, unknown>) => ({
+        key: String(params.key),
+        agentId: "main",
+        sessionId: "adopted",
+        entry: { sessionId: "adopted", updatedAt: 1 },
+      }));
+      const commands = [
+        CLAUDE_SESSIONS_LIST_COMMAND,
+        CLAUDE_SESSION_READ_COMMAND,
+        CLAUDE_CLI_NODE_RUN_COMMAND,
+        CLAUDE_TERMINAL_RESUME_COMMAND,
+      ];
+      const nodes = [
+        { nodeId: "node-a", connected: true, commands, invocableCommands: [...commands] },
+      ];
+      const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) =>
+        nodePayload(
+          command === CLAUDE_SESSIONS_LIST_COMMAND
+            ? {
+                sessions: [
+                  nodeSession(threadId, {
+                    name,
+                    color,
+                    cwd,
+                    pullRequest: { numbers: [1234], state: "open" },
+                  }),
+                ],
+              }
+            : { threadId, items: [{ type: "userMessage", text: "history", uuid: "history-1" }] },
+        ),
+      );
+      const session = { listSessionEntries: () => [], createSessionEntry };
+      const provider = captureCatalogProvider(
+        remote
+          ? ({
+              ...nodeRuntime(nodes, invoke),
+              config: { current: () => ({}) },
+              agent: { session },
+            } as unknown as PluginRuntime)
+          : createPluginRuntimeMock({
+              config: { current: () => routedConfig() },
+              agent: { session },
+            }),
+      );
+      if (!remote) {
+        await writeTranscript(
+          home,
+          threadId,
+          [
+            message(threadId, "user", "source prompt", 1),
+            { type: "custom-title", customTitle: name, sessionId: threadId },
+            { type: "agent-color", agentColor: color, sessionId: threadId },
+          ],
+          { summary: "Stale title", projectPath: cwd },
+        );
+      }
+      const hostId = remote ? "node:node-a" : "gateway:local";
+      const request = { hostId, threadId };
+      if (remote) {
+        expect((await provider.list({ hostIds: [hostId] }))[0]?.sessions).toMatchObject([
+          {
+            threadId,
+            color,
+            pullRequest: { numbers: [1234], state: "open" },
+            canContinue: true,
+            canOpenTerminal: true,
           },
-        },
-      }),
-    );
-
-    await expect(
-      provider?.continueSession?.({ hostId: "gateway:local", threadId: sessionId }),
-    ).resolves.toEqual(
-      expect.objectContaining({
+        ]);
+        await expect(provider.openTerminal?.(request)).resolves.toMatchObject({
+          kind: "node",
+          nodeId: "node-a",
+          command: CLAUDE_TERMINAL_RESUME_COMMAND,
+          uploadPathStyle: "native",
+          cwd,
+        });
+      }
+      await expect(provider.continueSession?.(request)).resolves.toMatchObject({
         sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
         upstream: {
           kind: "claude-cli",
-          ref: {
-            filePath: expect.stringContaining(`${sessionId}.jsonl`),
-          },
-          marker: { offset: expect.any(Number) },
+          ref: remote
+            ? { nodeId: "node-a", threadId }
+            : { filePath: expect.stringContaining(threadId + ".jsonl") },
+          marker: remote ? { uuid: "history-1" } : { offset: expect.any(Number) },
         },
-      }),
-    );
-    expect(createSessionEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        // Adoption shows the user's /rename via displayName; labels stay unseeded
-        // because OpenClaw labels are unique and duplicate CLI titles must adopt.
-        displayName: "Renamed source",
-        spawnedCwd: "/work/source",
-        initialEntry: expect.objectContaining({
-          color: "purple",
+      });
+      // Names are display metadata, not unique labels; the first resume must fork.
+      expect(createSessionEntry.mock.calls[0]?.[0]).toMatchObject({
+        displayName: name,
+        spawnedCwd: cwd,
+        ...(remote ? { execNode: "node-a", execCwd: cwd } : {}),
+        initialEntry: {
+          color,
           cliBackendId: "claude-cli",
           model: "claude-opus-4-8",
           modelSelectionLocked: true,
           pluginOwnerId: "anthropic",
-          cliSessionBinding: {
-            sessionId,
-            forceReuse: true,
-            forkNextResume: true,
-          },
-        }),
-      }),
-    );
-    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
-  });
+          cliSessionBinding: { sessionId: threadId, forceReuse: true, forkNextResume: true },
+          ...(remote
+            ? {
+                pluginExtensions: {
+                  anthropic: {
+                    sessionCatalog: {
+                      sourceHostId: hostId,
+                      sourceThreadId: threadId,
+                    },
+                  },
+                },
+              }
+            : {}),
+        },
+      });
+      expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
+      if (remote) {
+        expect(invoke.mock.calls.every(([call]) => call.scopes?.includes("operator.write"))).toBe(
+          true,
+        );
+        nodes[0]!.invocableCommands = commands.filter(
+          (command) => command !== CLAUDE_TERMINAL_RESUME_COMMAND,
+        );
+        expect((await provider.list({ hostIds: [hostId] }))[0]?.sessions).toMatchObject([
+          { threadId, canOpenTerminal: false },
+        ]);
+        await expect(provider.openTerminal?.(request)).rejects.toThrow(
+          "paired-node Claude terminal is unavailable",
+        );
+      }
+    },
+  );
 
   it("refreshes creation availability when a non-default Claude CLI route changes", () => {
     let config: OpenClawConfig = {};
@@ -854,128 +931,6 @@ describe("Claude session catalog", () => {
       }
     },
   );
-
-  it("continues an advertised paired-node CLI row with node-bound placement", async () => {
-    const threadId = "node-claude-session";
-    const createSessionEntry = vi.fn(async (params: Record<string, unknown>) => ({
-      key: String(params.key),
-      agentId: "main",
-      sessionId: "adopted-node-session",
-      entry: { sessionId: "adopted-node-session", updatedAt: 1 },
-    }));
-    const commands = [
-      CLAUDE_SESSIONS_LIST_COMMAND,
-      CLAUDE_SESSION_READ_COMMAND,
-      CLAUDE_CLI_NODE_RUN_COMMAND,
-      CLAUDE_TERMINAL_RESUME_COMMAND,
-    ];
-    const nodes = [
-      {
-        nodeId: "node-a",
-        displayName: "Node A",
-        connected: true,
-        commands,
-        invocableCommands: [...commands],
-      },
-    ];
-    const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) =>
-      nodePayload(
-        command === CLAUDE_SESSIONS_LIST_COMMAND
-          ? {
-              sessions: [
-                nodeSession(threadId, {
-                  name: "Node source",
-                  color: "cyan",
-                  cwd: "/work/on-node",
-                  pullRequest: { numbers: [1234], state: "open" },
-                }),
-              ],
-            }
-          : { threadId, items: [{ type: "userMessage", text: "history", uuid: "history-1" }] },
-      ),
-    );
-    const provider = captureCatalogProvider({
-      ...nodeRuntime(nodes, invoke),
-      config: { current: () => ({}) },
-      agent: {
-        session: {
-          listSessionEntries: () => [],
-          createSessionEntry,
-        },
-      },
-    } as unknown as PluginRuntime);
-
-    const hosts = await provider?.list({ hostIds: ["node:node-a"] });
-    expect(hosts?.[0]?.sessions[0]).toMatchObject({
-      threadId,
-      pullRequest: { numbers: [1234], state: "open" },
-      color: "cyan",
-      canContinue: true,
-      canOpenTerminal: true,
-    });
-    await expect(
-      provider?.openTerminal?.({ hostId: "node:node-a", threadId }),
-    ).resolves.toMatchObject({
-      kind: "node",
-      nodeId: "node-a",
-      command: CLAUDE_TERMINAL_RESUME_COMMAND,
-      uploadPathStyle: "native",
-      cwd: "/work/on-node",
-    });
-    await expect(provider?.continueSession?.({ hostId: "node:node-a", threadId })).resolves.toEqual(
-      {
-        sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
-        upstream: {
-          kind: "claude-cli",
-          ref: { nodeId: "node-a", threadId },
-          marker: { uuid: "history-1" },
-        },
-      },
-    );
-    expect(createSessionEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        displayName: "Node source",
-        execNode: "node-a",
-        execCwd: "/work/on-node",
-        spawnedCwd: "/work/on-node",
-        initialEntry: expect.objectContaining({
-          color: "cyan",
-          cliSessionBinding: {
-            sessionId: threadId,
-            forceReuse: true,
-            forkNextResume: true,
-          },
-          pluginExtensions: {
-            anthropic: {
-              sessionCatalog: { sourceHostId: "node:node-a", sourceThreadId: threadId },
-            },
-          },
-        }),
-      }),
-    );
-    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: CLAUDE_SESSION_READ_COMMAND,
-        scopes: ["operator.write"],
-      }),
-    );
-    expect(invoke.mock.calls.every(([request]) => request.scopes?.includes("operator.write"))).toBe(
-      true,
-    );
-
-    nodes[0]!.invocableCommands = [
-      CLAUDE_SESSIONS_LIST_COMMAND,
-      CLAUDE_SESSION_READ_COMMAND,
-      CLAUDE_CLI_NODE_RUN_COMMAND,
-    ];
-    await expect(provider?.list({ hostIds: ["node:node-a"] })).resolves.toMatchObject([
-      { sessions: [{ threadId, canOpenTerminal: false }] },
-    ]);
-    await expect(provider?.openTerminal?.({ hostId: "node:node-a", threadId })).rejects.toThrow(
-      "paired-node Claude terminal is unavailable",
-    );
-  });
 
   it("keeps policy-blocked, non-advertising, and Desktop rows view-only", async () => {
     const threadId = "view-only-session";
@@ -1543,30 +1498,54 @@ describe("Claude session catalog", () => {
     expect(transcriptAttempts).toBe(2);
   });
 
-  it("expires a partial discovery scan on the short transient-I/O retry bound", async () => {
-    const home = await createHome();
-    const sessionId = "partial-scan-retry";
-    const transcriptPath = projectFile(home, `${sessionId}.jsonl`);
-    await writeUnindexedCliSessions(home, { [sessionId]: "Recovered" });
-    const canonicalTranscriptPath = await fs.realpath(transcriptPath);
-    const open = fs.open.bind(fs);
-    let transcriptAttempts = 0;
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      if (args[0] === canonicalTranscriptPath && transcriptAttempts++ === 0) {
-        throw new Error("transient transcript open failure");
+  it.each(["transcript", "index"] as const)(
+    "retries transient %s I/O without a metadata change",
+    async (owner) => {
+      const home = await createHome();
+      const sessionId = "io-retry";
+      if (owner === "index") {
+        await writeIndexedSession(
+          home,
+          sessionId,
+          { summary: "Recovered", isSidechain: false },
+          "Indexed only",
+        );
+      } else {
+        await writeUnindexedCliSessions(home, { [sessionId]: "Recovered" });
       }
-      return await open(...args);
-    });
-
-    await expect(listPage({}, home)).resolves.toEqual({ sessions: [] });
-    now += 15_001;
-    await expect(listPage({}, home)).resolves.toMatchObject({
-      sessions: [{ threadId: sessionId }],
-    });
-    expect(transcriptAttempts).toBe(2);
-  });
+      const target =
+        owner === "index"
+          ? projectFile(home, "sessions-index.json")
+          : await fs.realpath(projectFile(home, sessionId + ".jsonl"));
+      let attempts = 0;
+      const failOnce = (file: unknown) => {
+        if (file === target && attempts++ === 0) {
+          throw new Error("transient I/O failure");
+        }
+      };
+      if (owner === "index") {
+        const read = fs.readFile.bind(fs);
+        vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+          failOnce(args[0]);
+          return read(...args);
+        });
+      } else {
+        const open = fs.open.bind(fs);
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          failOnce(args[0]);
+          return open(...args);
+        });
+      }
+      let now = 1_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      expect((await listPage({}, home)).sessions).toEqual([]);
+      now += 15_001;
+      expect((await listPage({}, home)).sessions).toMatchObject([
+        { threadId: sessionId, name: "Recovered" },
+      ]);
+      expect(attempts).toBe(2);
+    },
+  );
 
   it("bounds actual metadata reads in serial directory order under parallel stats", async () => {
     const home = await createHome();
@@ -1596,37 +1575,6 @@ describe("Claude session catalog", () => {
     const cold = await listPage({ limit: 100 }, home);
     expect(maxConcurrentLstats).toBeGreaterThan(1);
     expect(cold.sessions.map((session) => session.threadId).toSorted()).toEqual(expected);
-  });
-
-  it("retries transient index reads without waiting for the file metadata to change", async () => {
-    const home = await createHome();
-    const projectDir = projectFile(home);
-    const indexPath = path.join(projectDir, "sessions-index.json");
-    const sessionId = "retry-index-session";
-    await writeIndexedSession(
-      home,
-      sessionId,
-      { summary: "Recovered index", isSidechain: false },
-      "Indexed only",
-    );
-    const readFile = fs.readFile.bind(fs);
-    let failIndexRead = true;
-    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-      if (failIndexRead && args[0] === indexPath) {
-        failIndexRead = false;
-        throw new Error("transient index read failure");
-      }
-      return await readFile(...args);
-    });
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-
-    expect((await listPage({}, home)).sessions).toEqual([]);
-    now += 15_001;
-
-    await expect(listPage({}, home)).resolves.toMatchObject({
-      sessions: [{ threadId: sessionId, name: "Recovered index" }],
-    });
   });
 
   it("evicts a deleted transcript after a complete scan", async () => {
@@ -1892,24 +1840,18 @@ describe("Claude session catalog", () => {
   it("advertises terminal resume only when the store and Claude binary exist", async () => {
     const home = await createHome();
     const commands = createClaudeSessionNodeHostCommands();
-    expect(commands.map((command) => command.command)).toEqual([
-      CLAUDE_SESSIONS_LIST_COMMAND,
-      CLAUDE_SESSION_READ_COMMAND,
-      CLAUDE_TERMINAL_RESUME_COMMAND,
-      CLAUDE_TERMINAL_START_COMMAND,
-    ]);
     expect(commands.every((command) => command.dangerous === false)).toBe(true);
     await expect(commands[0]?.handle(JSON.stringify({ cursor: " wrapped " }))).rejects.toThrow(
       "catalog cursor is invalid",
     );
+    const read = commands.find((command) => command.command === CLAUDE_SESSION_READ_COMMAND);
+    await expect(read?.handle(JSON.stringify({ threadId: "invalid/id" }))).rejects.toThrow(
+      "threadId is invalid",
+    );
     const policy = createClaudeSessionNodeInvokePolicies()[0];
-    expect(policy?.commands).toEqual([
-      CLAUDE_SESSIONS_LIST_COMMAND,
-      CLAUDE_SESSION_READ_COMMAND,
-      CLAUDE_CLI_NODE_RUN_COMMAND,
-      CLAUDE_TERMINAL_RESUME_COMMAND,
-      CLAUDE_TERMINAL_START_COMMAND,
-    ]);
+    expect(new Set(policy?.commands)).toEqual(
+      new Set([...commands.map((command) => command.command), CLAUDE_CLI_NODE_RUN_COMMAND]),
+    );
     if (!policy) {
       throw new Error("expected Claude node invoke policy");
     }
@@ -1960,15 +1902,9 @@ describe("Claude session catalog", () => {
       commands[2]?.isAvailable?.({ config: {}, env: { HOME: home, PATH: binDir } } as never),
     ).toBe(true);
 
-    const terminalCommand = commands[2];
-    if (!terminalCommand || terminalCommand.duplex !== true) {
-      throw new Error("expected duplex Claude terminal command");
-    }
+    const resume = terminalCommand(CLAUDE_TERMINAL_RESUME_COMMAND);
     await expect(
-      terminalCommand.handle(
-        JSON.stringify({ threadId: "--bad", cols: 80, rows: 24 }),
-        terminalIo(),
-      ),
+      resume.handle(JSON.stringify({ threadId: "--bad", cols: 80, rows: 24 }), terminalIo()),
     ).rejects.toThrow("threadId must be a Claude session id");
 
     const registerSessionCatalog = vi.fn();
@@ -2017,9 +1953,7 @@ describe("Claude session catalog", () => {
       cwd: "/work/new-session",
       title: "claude",
     });
-    const fresh = createClaudeSessionNodeHostCommands().find(
-      (command) => command.command === CLAUDE_TERMINAL_START_COMMAND,
-    )!;
+    const fresh = terminalCommand(CLAUDE_TERMINAL_START_COMMAND);
     expect(fresh.isAvailable?.({ config: {}, env: { HOME: home, PATH: binDir } })).toBe(true);
     const io = terminalIo();
     await fresh.handle(
@@ -2116,12 +2050,7 @@ describe("Claude session catalog", () => {
     const shellBinDir = path.join(home, "shell-bin");
     const shellExecutable = await writeClaudeExecutable(shellBinDir, "#!/bin/sh\nexit 0\n");
     nodeHostMocks.userShellPaths.set("claude", shellBinDir);
-    const command = createClaudeSessionNodeHostCommands().find(
-      (candidate) => candidate.command === CLAUDE_TERMINAL_RESUME_COMMAND,
-    );
-    if (!command || command.duplex !== true) {
-      throw new Error("expected duplex Claude terminal command");
-    }
+    const command = terminalCommand(CLAUDE_TERMINAL_RESUME_COMMAND);
 
     await command.handle(
       JSON.stringify({ threadId, cwd: "/caller/cwd", cols: 80, rows: 24 }),

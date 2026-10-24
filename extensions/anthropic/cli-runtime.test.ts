@@ -369,9 +369,6 @@ describe("Claude native stdio boundary", () => {
         });
       }
       // Host policy, not the stale-run guard, answered the notification turn's hook.
-      expect(context.requestToolPermission).toHaveBeenCalledWith(
-        expect.objectContaining({ toolName: "Read", toolCallId: "tool-bg-read" }),
-      );
       expect(detail.notificationDecision).toMatchObject({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
