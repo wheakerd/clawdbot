@@ -8,11 +8,34 @@ import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import { mount, PaletteDraftHost } from "../../test-helpers/palette-session-draft.tsx";
+import {
+  mount as mountDraft,
+  PaletteDraftHost,
+} from "../../test-helpers/palette-session-draft.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
-import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import {
+  backgroundCreateOptions,
+  createDraftFixture,
+} from "./draft-submission-flow.test-support.ts";
 import { PALETTE_PREFERENCE_KEY, PREFS_MIGRATION_KEY } from "./preferences.ts";
+
+async function mount(...options: Parameters<typeof mountDraft>) {
+  const fixture = await mountDraft(...options);
+  return { ...fixture, create: vi.mocked(fixture.context.sessions.createResult) };
+}
+
+function setting<T extends HTMLElement = HTMLElement>(
+  host: Pick<ParentNode, "querySelector">,
+  part: string,
+) {
+  return host.querySelector<T>(".palette-session-settings__" + part);
+}
+
+function reopen(host: PaletteDraftHost) {
+  host.draft.close();
+  host.draft.open();
+}
 
 afterEach(() => {
   cleanupSolid();
@@ -32,11 +55,11 @@ describe("PaletteSessionDraft", () => {
       inference: "worker",
       executionModes: ["worker-turn"],
     };
-    const { host, context } = await mount({
+    const { host, context, create } = await mount({
       methods: ["agents.list", "environments.list", "sessions.create", "sessions.send"],
       placementPolicy: () => policy.promise,
     });
-    vi.mocked(context.sessions.createResult).mockResolvedValue({
+    create.mockResolvedValue({
       key: "agent:main:dashboard:cold-required",
       initialRun: { status: "idle" },
     });
@@ -70,20 +93,16 @@ describe("PaletteSessionDraft", () => {
     host.draft.submitCold();
     await host.updateComplete;
     expect(host.draft.messageLocked).toBe(true);
-    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
     policy.resolve({ sessionPlacement: { requiredProfile: profile } });
     await context.agents.refreshList();
     await host.coldOutcome.promise;
     expect(host.draft.submitting).toBe(true);
     expect(host.draft.error).toBeNull();
     await submitted.promise;
-    expect(context.sessions.createResult).toHaveBeenCalledOnce();
-    expect(context.sessions.createResult).toHaveBeenCalledWith(
+    expect(create).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
-      {
-        reconciliation: "background",
-        signal: expect.any(AbortSignal),
-      },
+      backgroundCreateOptions,
     );
     expect(context.placementStartup.start).toHaveBeenCalledOnce();
     expect(context.placementStartup.start).toHaveBeenCalledWith(
@@ -100,7 +119,7 @@ describe("PaletteSessionDraft", () => {
   it.each(["synchronous", "deferred"] as const)(
     "does not auto-submit after a %s attachment read failure",
     async (failure) => {
-      const { host, context } = await mount();
+      const { host, create } = await mount();
       let failRead: (() => void) | undefined;
       vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
         this: FileReader,
@@ -117,20 +136,18 @@ describe("PaletteSessionDraft", () => {
       );
       failRead?.();
       await waitForSolid(() => expect(host.draft.messageLocked).toBe(false));
-      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
       expect(host.draft.message).toBe("Keep this prompt after the attachment fails.");
       expect(host.querySelector(".chat-attachment-thumb")).toBeNull();
       await waitForSolid(() => expect(host.draft.canSubmit).toBe(true));
       await host.draft.submit();
-      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      expect(create).toHaveBeenCalledOnce();
     },
   );
 
   it("omits the worktree setting for a non-Git workspace", async () => {
     const { host } = await mount();
-    await vi.waitFor(() =>
-      expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
-    );
+    await vi.waitFor(() => expect(setting(host, "workspace")).not.toBeNull());
     expect(host.querySelector('[role="switch"][aria-label="New worktree"]')).toBeNull();
   });
 
@@ -157,7 +174,7 @@ describe("PaletteSessionDraft", () => {
     const ensure = vi.mocked(context.agentIdentity.ensure);
     await waitForSolid(() => expect(ensure).toHaveBeenLastCalledWith(["main"]));
 
-    host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
+    setting<HTMLButtonElement>(host, "trigger")!.click();
     await waitForSolid(() =>
       expect(host.querySelector(".palette-session-settings")?.matches(":popover-open")).toBe(true),
     );
@@ -190,7 +207,7 @@ describe("PaletteSessionDraft", () => {
       agentRuntime: { id: "openclaw", source: "model" },
       runtimeChoices: [{ agentRuntime: hosted, available: true }],
     };
-    const { host, context, request } = await mount({
+    const { host, create, request } = await mount({
       modelCatalog: async () => ({ models: [model] }),
       methods: ["agents.list", "environments.list", "sessions.create", "projects.list"],
       request: async (method) =>
@@ -208,13 +225,8 @@ describe("PaletteSessionDraft", () => {
           : {},
     });
     const select = async (machine: string, project = "") => {
-      await vi.waitFor(() =>
-        expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
-      );
-      expectDefined(
-        host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
-        "workspace picker",
-      ).click();
+      await vi.waitFor(() => expect(setting(host, "workspace")).not.toBeNull());
+      expectDefined(setting<HTMLButtonElement>(host, "workspace"), "workspace picker").click();
       await host.updateComplete;
       await vi.waitFor(() =>
         expect(
@@ -230,29 +242,21 @@ describe("PaletteSessionDraft", () => {
 
     await select("local", "registered");
     await select("runtime:agentsapi");
-    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
-      "Hosted workspace",
-    );
-    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
-      "OpenAI (Agents API)",
-    );
-    expect(host.querySelector(".palette-session-settings__worktree")).toBeNull();
+    expect(setting(host, "workspace")?.textContent).toContain("Hosted workspace");
+    expect(setting(host, "workspace")?.textContent).toContain("OpenAI (Agents API)");
+    expect(setting(host, "worktree")).toBeNull();
     await select("local", "registered");
-    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
-      "Local project",
-    );
-    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).not.toContain(
-      "Agents API",
-    );
+    expect(setting(host, "workspace")?.textContent).toContain("Local project");
+    expect(setting(host, "workspace")?.textContent).not.toContain("Agents API");
     await select("runtime:agentsapi");
-    vi.mocked(context.sessions.createResult).mockResolvedValue({
+    create.mockResolvedValue({
       key: "agent:main:hosted-palette",
       initialRun: { status: "idle" },
     });
     host.draft.setMessage("Analyze my attachment");
     await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
     await host.draft.submit();
-    const payload = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+    const payload = create.mock.calls[0]?.[0];
     expect(payload).toMatchObject({
       model: "openai/gpt-5.6-luna",
       agentRuntime: "agentsapi",
@@ -279,9 +283,9 @@ describe("PaletteSessionDraft", () => {
     "settles one locked creation when its owner is %s",
     async (change) => {
       const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
-      const { host, context, publish } = await mount();
+      const { host, context, create, publish } = await mount();
       const accepted = createDeferred<SessionCreateOutcome>();
-      vi.mocked(context.sessions.createResult).mockReturnValueOnce(accepted.promise);
+      create.mockReturnValueOnce(accepted.promise);
       host.draft.setMessage("Hold my creation");
       await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
       const submission = host.draft.submit();
@@ -293,8 +297,7 @@ describe("PaletteSessionDraft", () => {
           host.draft.close();
           host.paletteOpen = true;
           host.draft.open();
-          expect(host.draft.message).toBe("Hold my creation");
-          expect(host.draft.submitting).toBe(true);
+          expect(host.draft).toMatchObject({ message: "Hold my creation", submitting: true });
           host.draft.setMessage("must not replace the submitted intent");
           expect(host.draft.message).toBe("Hold my creation");
         } else {
@@ -318,7 +321,7 @@ describe("PaletteSessionDraft", () => {
         accepted.resolve({ key: "agent:main:dashboard:held", initialRun: { status: "idle" } });
         await submission;
       }
-      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      expect(create).toHaveBeenCalledOnce();
       expect(host.started).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 0);
       expect(context.navigateAndWait).not.toHaveBeenCalled();
       if (change !== "unchanged") {
@@ -335,7 +338,7 @@ describe("PaletteSessionDraft", () => {
     "reports accepted $status creation without changing the foreground selection",
     async (initialRun) => {
       const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
-      const { host, context } = await mount({
+      const { host, context, create } = await mount({
         agents: [
           { id: "main", workspace: "/workspace", model: { primary: "example/main" } },
           { id: "other", workspace: "/other", model: { primary: "example/other" } },
@@ -346,18 +349,15 @@ describe("PaletteSessionDraft", () => {
       };
       select.onSelect("other");
       host.draft.setMessage("Create with this explicit agent");
-      vi.mocked(context.sessions.createResult).mockResolvedValue({
+      create.mockResolvedValue({
         key: "agent:other:dashboard:created",
         initialRun,
       });
       await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
       await host.draft.submit();
-      expect(context.sessions.createResult).toHaveBeenCalledWith(
+      expect(create).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: "other", message: "Create with this explicit agent" }),
-        {
-          reconciliation: "background",
-          signal: expect.any(AbortSignal),
-        },
+        backgroundCreateOptions,
       );
       if (initialRun.status === "rejected") {
         expect(host.started).not.toHaveBeenCalled();
@@ -365,9 +365,8 @@ describe("PaletteSessionDraft", () => {
         expect(host.draft.error).toBe(initialRun.error);
         expect(host.draft.canSubmit).toBe(false);
         await host.draft.submit();
-        expect(context.sessions.createResult).toHaveBeenCalledOnce();
-        host.draft.close();
-        host.draft.open();
+        expect(create).toHaveBeenCalledOnce();
+        reopen(host);
         expect(host.draft.message).toBe("Create with this explicit agent");
       } else {
         expect(host.started).toHaveBeenCalledOnce();
@@ -388,9 +387,9 @@ describe("PaletteSessionDraft", () => {
     "keeps rejected-session recovery bound to its owner after %s reconnect",
     async (reconnect) => {
       const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
-      const { host, context, publish } = await mount();
+      const { host, context, create, publish } = await mount();
       host.draft.setMessage("Keep the rejected task recoverable");
-      vi.mocked(context.sessions.createResult).mockResolvedValue({
+      create.mockResolvedValue({
         key: "agent:main:dashboard:rejected",
         initialRun: { status: "rejected", error: "Initial turn rejected" },
       });
@@ -408,8 +407,10 @@ describe("PaletteSessionDraft", () => {
       publish();
       await host.updateComplete;
       if (reconnect === "same-owner") {
-        expect(host.draft.message).toBe("Keep the rejected task recoverable");
-        expect(host.draft.canSubmit).toBe(false);
+        expect(host.draft).toMatchObject({
+          message: "Keep the rejected task recoverable",
+          canSubmit: false,
+        });
         const recovery = [...host.querySelectorAll("button")].find(
           (button) => button.textContent?.trim() === "Open session",
         );
@@ -423,7 +424,7 @@ describe("PaletteSessionDraft", () => {
         expect(context.navigate).not.toHaveBeenCalled();
         expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
       }
-      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      expect(create).toHaveBeenCalledOnce();
     },
   );
 
@@ -456,7 +457,7 @@ describe("PaletteSessionDraft", () => {
     expect(route).not.toHaveBeenCalled();
     expect(sessionStorage.length).toBe(1);
     expect(host.querySelector(".new-session-page__where-popover")).toBeNull();
-    const settingsTrigger = host.querySelector(".palette-session-settings__trigger");
+    const settingsTrigger = setting(host, "trigger");
     expect(settingsTrigger?.id).toMatch(/^palette-session-\d+-settings-trigger$/);
     expect(settingsTrigger?.getAttribute("aria-controls")).toBe(
       host.querySelector(".oc-popover.palette-session-settings")?.id,
@@ -464,15 +465,17 @@ describe("PaletteSessionDraft", () => {
   });
 
   it("clears another credential owner's text and keeps a failed create unaccepted", async () => {
-    const { host, context, publish } = await mount();
+    const { host, context, create, publish } = await mount();
     host.draft.setMessage("Only for the first owner");
-    vi.mocked(context.sessions.createResult).mockResolvedValue(null);
+    create.mockResolvedValue(null);
     Object.assign(context.sessions.state, { error: "Creation denied" });
     await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
     await host.draft.submit();
     expect(host.started).not.toHaveBeenCalled();
-    expect(host.draft.message).toBe("Only for the first owner");
-    expect(host.draft.error).toBe("Creation denied");
+    expect(host.draft).toMatchObject({
+      message: "Only for the first owner",
+      error: "Creation denied",
+    });
     const hello = context.gateway.snapshot.hello!;
     context.gateway.snapshot.hello = {
       ...hello,
@@ -548,14 +551,11 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
   });
   const remember = () =>
     expectDefined(
-      fixture.host.querySelector<HTMLInputElement>(".palette-session-settings__remember input"),
+      setting<HTMLInputElement>(fixture.host, "remember input"),
       "palette remember checkbox",
     );
   const footer = () =>
-    expectDefined(
-      fixture.host.querySelector<HTMLElement>(".palette-session-settings__footer"),
-      "palette preference status",
-    );
+    expectDefined(setting<HTMLElement>(fixture.host, "footer"), "palette preference status");
   const select = () =>
     expectDefined(
       fixture.host.querySelector<AgentSelectElement>("openclaw-agent-select"),
@@ -617,7 +617,7 @@ describe("palette-only remembered settings", () => {
     fixture.host.draft.setMessage("A separate background worktree task");
     await vi.waitFor(() => expect(fixture.host.draft.canSubmit).toBe(true));
     await fixture.host.draft.submit();
-    const params = vi.mocked(fixture.context.sessions.createResult).mock.calls[0]?.[0];
+    const params = fixture.create.mock.calls[0]?.[0];
     expect(params).toMatchObject({
       worktree: true,
       message: "A separate background worktree task",
@@ -649,12 +649,9 @@ describe("palette-only remembered settings", () => {
           folder: "/confirmed-after-disposal",
         }),
       );
-      fixture.host.draft.close();
-      fixture.host.draft.open();
+      reopen(fixture.host);
       await fixture.host.updateComplete;
-      expect(
-        fixture.host.querySelector(".palette-session-settings__workspace")?.textContent,
-      ).toContain("confirmed-after-disposal");
+      expect(setting(fixture.host, "workspace")?.textContent).toContain("confirmed-after-disposal");
     } finally {
       held.resolve();
     }
@@ -680,14 +677,9 @@ describe("palette-only remembered settings", () => {
         replacement.draft.open();
         const current = replacement;
         await vi.waitFor(() =>
-          expect(
-            current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
-              ?.disabled,
-          ).toBe(false),
+          expect(setting<HTMLInputElement>(current, "remember input")?.disabled).toBe(false),
         );
-        expect(
-          current.querySelector(".palette-session-settings__footer")?.getAttribute("aria-busy"),
-        ).toBe("false");
+        expect(setting(current, "footer")?.getAttribute("aria-busy")).toBe("false");
         if (edited) {
           const select = expectDefined(
             current.querySelector<AgentSelectElement>("openclaw-agent-select"),
@@ -704,10 +696,7 @@ describe("palette-only remembered settings", () => {
         );
         expect(fixture.writes).toHaveLength(2);
         await vi.waitFor(() =>
-          expect(
-            current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
-              ?.checked,
-          ).toBe(!edited),
+          expect(setting<HTMLInputElement>(current, "remember input")?.checked).toBe(!edited),
         );
         expect(current.querySelector<AgentSelectElement>("openclaw-agent-select")?.value).toBe(
           edited ? "main" : "other",
@@ -767,7 +756,7 @@ describe("palette-only remembered settings", () => {
         );
         const retry = holdPaletteSave(fixture);
         expectDefined(
-          fixture.host.querySelector<HTMLButtonElement>(".palette-session-settings__error button"),
+          setting<HTMLButtonElement>(fixture.host, "error button"),
           "retry remembered settings",
         ).click();
         try {
@@ -804,8 +793,7 @@ describe("palette-only remembered settings", () => {
     await host.updateComplete;
     expect(select().value).toBe("other");
     expect(writes).toEqual([]);
-    host.draft.close();
-    host.draft.open();
+    reopen(host);
     await vi.waitFor(() => expect(select().value).toBe("main"));
     expect(entries["new-session.v1:main"]).toEqual({ folder: "/workspace", worktree: true });
     expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined();
@@ -823,8 +811,7 @@ describe("palette-only remembered settings", () => {
       }),
     );
     expect(Object.keys(writes[0] ?? {})).toEqual([PALETTE_PREFERENCE_KEY]);
-    host.draft.close();
-    host.draft.open();
+    reopen(host);
     await vi.waitFor(() => expect(select().value).toBe("other"));
     expect(remember().checked).toBe(true);
     // The concurrently mounted full-page owner keeps writing only its ordinary key.
@@ -839,9 +826,7 @@ describe("palette-only remembered settings", () => {
     remember().click();
     await host.updateComplete;
     expect(select().value).toBe("main");
-    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
-      "updated-default",
-    );
+    expect(setting(host, "workspace")?.textContent).toContain("updated-default");
     expect(host.draft.message).toBe("Keep this exact prompt");
     expect(host.querySelector("textarea")).toBe(prompt);
     expect([prompt.selectionStart, prompt.selectionEnd]).toEqual([5, 9]);
@@ -878,23 +863,18 @@ describe("palette-only remembered settings", () => {
     expect(remember().checked).toBe(false);
     expect(select().value).toBe(deleting ? "main" : "other");
     if (!deleting) {
-      host.draft.close();
-      host.draft.open();
+      reopen(host);
       await host.updateComplete;
       expect(host.querySelector('.palette-session-settings__error[role="alert"]')).not.toBeNull();
     }
     setReject(false);
     const retry = holdPaletteSave(fixture);
-    expectDefined(
-      host.querySelector<HTMLButtonElement>(".palette-session-settings__error button"),
-      "retry settings save",
-    ).click();
+    expectDefined(setting<HTMLButtonElement>(host, "error button"), "retry settings save").click();
     try {
       await retry.saving;
       await vi.waitFor(() => expect(footer().getAttribute("aria-busy")).toBe("true"));
       expect(remember().disabled).toBe(false);
-      host.draft.close();
-      host.draft.open();
+      reopen(host);
       await vi.waitFor(() => expect(footer().getAttribute("aria-busy")).toBe("false"));
       expect(select().value).toBe(deleting ? "main" : "other");
       expect(host.draft.message).toBe("");
@@ -956,16 +936,10 @@ describe("palette-only remembered settings", () => {
     "leaves workspace-search composition keys untouched: %j",
     async (composition) => {
       const { host } = await mountPreferences();
-      host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
-      expectDefined(
-        host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
-        "workspace picker",
-      ).click();
+      setting<HTMLButtonElement>(host, "trigger")!.click();
+      expectDefined(setting<HTMLButtonElement>(host, "workspace"), "workspace picker").click();
       await host.updateComplete;
-      const search = expectDefined(
-        host.querySelector<HTMLInputElement>(".palette-session-settings__search"),
-        "workspace search",
-      );
+      const search = expectDefined(setting<HTMLInputElement>(host, "search"), "workspace search");
       search.focus();
       for (const key of ["Escape", "ArrowDown", "ArrowUp"]) {
         const event = new KeyboardEvent("keydown", {
@@ -977,7 +951,7 @@ describe("palette-only remembered settings", () => {
         search.dispatchEvent(event);
         await host.updateComplete;
         expect(event.defaultPrevented).toBe(false);
-        expect(host.querySelector(".palette-session-settings__search")).toBe(search);
+        expect(setting(host, "search")).toBe(search);
         expect(document.activeElement).toBe(search);
       }
     },

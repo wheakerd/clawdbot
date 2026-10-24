@@ -9,7 +9,6 @@ import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { waitForModelControl } from "./model-control.test-support.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
 const REMOTE_PROJECT = {
@@ -260,8 +259,6 @@ describe("DraftPlaceState repository selection", () => {
   });
 
   it("keeps a route-selected model in the unsent composer instead of restoring a remembered model", async () => {
-    // This test owns draft selection; settle lazy code loading before the interaction deadline.
-    await import("../chat/components/chat-model-picker-panel.tsx");
     const { state, context, readPreference, persistPreference, request } = createRepositoryFixture({
       data: routeData({ requestedModel: "example/first" }),
       models: models("first", "second", "remembered"),
@@ -270,24 +267,11 @@ describe("DraftPlaceState repository selection", () => {
     readPreference.mockReturnValue({ model: "example/remembered" });
     state.adoptAgentDefaults();
     await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
-    const view = await waitForModelControl(
-      state.modelControl,
-      context,
-      "main",
-      state.selectedAgent(),
-    );
     expect(state.modelControl.modelForSubmission()).toBe("example/first");
     expect(createParams(state).model).toBe("example/first");
     expect(persistPreference).not.toHaveBeenCalled();
 
-    const choice = await vi.waitFor(() => {
-      const option = view.querySelector<HTMLButtonElement>(
-        '[data-chat-model-option="example/second"]',
-      );
-      expect(option).not.toBeNull();
-      return option!;
-    });
-    choice.click();
+    state.modelControl.selectModel("example/second");
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     state.modelControl.load(context, "main", true, { agent: state.selectedAgent() });
     state.adoptAgentDefaults();

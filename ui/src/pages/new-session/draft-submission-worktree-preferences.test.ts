@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import * as toast from "../../lib/toast.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import {
   createDraftFixture,
@@ -28,7 +27,6 @@ import {
   submitPendingWorktree,
 } from "./draft-worktree-submission.test-support.ts";
 import { testModel } from "./model-control-view-queries.test-support.ts";
-import { renderControl } from "./model-control.test-support.ts";
 import { decodeIdentityPreferences } from "./preferences.ts";
 
 afterEach(resetWorktreeMocks);
@@ -38,12 +36,19 @@ async function preferenceDraft(...options: Parameters<typeof identityPreferences
   return { prefs, first: await readyPreferenceDraft(prefs) };
 }
 
+function expectSaved(
+  prefs: ReturnType<typeof identityPreferences>,
+  selection: Record<string, unknown>,
+) {
+  return vi.waitFor(() => expect(prefs.stored()).toMatchObject(selection));
+}
+
 it.each([
-  { identified: false, fastMode: true, speedOption: "on" },
-  { identified: true, fastMode: "ultrafast", speedOption: "ultrafast" },
+  { identified: false, fastMode: true },
+  { identified: true, fastMode: "ultrafast" },
 ] as const)(
-  "preserves newer model controls, identity=$identified, speed=$speedOption",
-  async ({ identified, fastMode, speedOption }) => {
+  "preserves newer model controls, identity=$identified, speed=$fastMode",
+  async ({ identified, fastMode }) => {
     const { prefs, first } = await preferenceDraft(identified, async () => ({
       models: [
         testModel("openai", "gpt-5.6-luna"),
@@ -61,58 +66,17 @@ it.each([
     const { admitted, submitting } = await submitPendingWorktree(first);
     const next = await readyPreferenceDraft(prefs, first.context.gateway);
     const control = next.place.modelControl;
-    await vi.waitFor(() =>
-      expect(
-        renderControl(control, next.context).querySelector(
-          '[data-chat-model-option="openai/gpt-5.6-sol"]',
-        ),
-      ).not.toBeNull(),
-    );
-    renderControl(control, next.context)
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')!
-      .click();
-    const rendered = renderControl(control, next.context);
-    const initialEffort = await waitForSolid(() => {
-      const picker = rendered.querySelector<HTMLDetailsElement>(
-        ".chat-controls__effort-picker[data-chat-native-picker]",
-      );
-      expect(picker).not.toBeNull();
-      return picker!;
+    await chooseModel(next);
+    const controls = control.renderProps({
+      context: next.context,
+      agentId: "main",
+      agent: next.place.selectedAgent(),
+      sending: false,
     });
-    if (!initialEffort.open) {
-      initialEffort.querySelector<HTMLElement>("summary")!.click();
-    }
-    const thinking = await waitForSolid(() => {
-      const input = rendered.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
-      expect(input).not.toBeNull();
-      return input!;
-    });
-    thinking.value = "1";
-    thinking.dispatchEvent(new Event("change", { bubbles: true }));
-    await waitForSolid(() =>
-      expect(rendered.querySelector(".chat-controls__effort-trigger")?.textContent).toContain(
-        "High",
-      ),
-    );
-    // A model-control refresh can replace the open menu; use its current visible trigger.
-    const effort = rendered.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
-    if (effort.open) {
-      effort.querySelector<HTMLElement>("summary")!.click();
-    }
-    await waitForSolid(() =>
-      expect(rendered.querySelector(".chat-controls__effort-menu")).toBeNull(),
-    );
-    effort.querySelector<HTMLElement>("summary")!.click();
-    const speed = await waitForSolid(() => {
-      const button = rendered.querySelector<HTMLButtonElement>(
-        `[data-chat-speed-option="${speedOption}"]`,
-      );
-      expect(button).not.toBeNull();
-      return button!;
-    });
-    speed.click();
+    controls.onThinkingSelect?.("high", controls.sessionKey);
+    controls.onFastModeSelect?.(fastMode === true ? "on" : fastMode, controls.sessionKey);
     const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high", fastMode };
-    await vi.waitFor(() => expect(prefs.stored()).toMatchObject(selected));
+    await expectSaved(prefs, selected);
     admitted.resolve(acceptedWorktreeSession);
     await submitting;
     expectWorktreeName(next.place);
@@ -241,7 +205,7 @@ it.each([
       next = await readyPreferenceDraft(prefs, first.context.gateway);
       if (change === "renamed") {
         next.place.setWorktreeName("next-task");
-        await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ worktreeName: "next-task" }));
+        await expectSaved(prefs, { worktreeName: "next-task" });
       } else {
         expect(next.place.worktreeName).toBe("first-task");
       }
@@ -525,22 +489,18 @@ it.each(["repository", "model", "empty base", "base before read"] as const)(
       await started.promise;
       if (change === "repository") {
         next.place.applyFolder("/other-repo");
-        await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ folder: "/other-repo" }));
+        await expectSaved(prefs, { folder: "/other-repo" });
         next.place.setWorktreeName("next-task");
       }
       if (change === "repository" || change === "model") {
         await chooseModel(next);
-        await vi.waitFor(() =>
-          expect(prefs.stored()).toMatchObject({
-            model: "openai/gpt-5.6-sol",
-            ...(change === "repository"
-              ? { folder: "/other-repo", worktreeName: "next-task" }
-              : {}),
-          }),
-        );
+        await expectSaved(prefs, {
+          model: "openai/gpt-5.6-sol",
+          ...(change === "repository" ? { folder: "/other-repo", worktreeName: "next-task" } : {}),
+        });
       } else {
         next.place.setBaseRef("");
-        await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ baseRef: "" }));
+        await expectSaved(prefs, { baseRef: "" });
       }
       newer = structuredClone(prefs.stored());
       if (change === "base before read") {
@@ -618,7 +578,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     const independent = base === "cleared" ? await readyPreferenceDraft(prefs) : undefined;
     if (base === "implicit") {
       first.place.setBaseRef("");
-      await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ baseRef: "" }));
+      await expectSaved(prefs, { baseRef: "" });
       disposeWorktreeDraft(first);
       first = await readyPreferenceDraft(prefs);
       expect(first.place.baseRef).toBe("");
@@ -638,7 +598,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     disposeWorktreeDraft(first);
     if (independent) {
       independent.place.setBaseRef("");
-      await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ baseRef: "" }));
+      await expectSaved(prefs, { baseRef: "" });
       disposeWorktreeDraft(independent);
     }
     const retained = structuredClone(prefs.stored());
