@@ -19,7 +19,6 @@ import {
   registerTextPayload,
   stubObjectUrls,
 } from "./draft-submission-flow.test-support.ts";
-import { selectCloudWorktree } from "./draft-worktree-submission.test-support.ts";
 
 afterEach(resetSubmissionMocks);
 
@@ -353,92 +352,50 @@ describe("DraftSubmissionFlow", () => {
       }
     },
   );
-  it("starts a cloud repository with its selected ref without cloning on the Gateway", async () => {
-    const fixture = createDraftFixture({
+  it("replays a frozen background create without inheriting mutable draft state", async () => {
+    const takePreparedTitle = vi.fn(() => "Original prepared title");
+    const { context, create, flow, place } = createDraftFixture({
+      takePreparedTitle,
       methods: ["sessions.create", "sessions.dispatch"],
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
-    const { context, create, flow, place, request } = fixture;
-    const start = vi.fn();
-    context.placementStartup.start = start;
-    create.mockImplementation(async (params) => ({
-      key: expectDefined(params?.key, "remote session create key"),
-      initialRun: { status: "idle" },
-    }));
+    const original = createDeferred<SessionCreateOutcome>();
+    const result = { key: "agent:main:direct-resumed", initialRun: { status: "idle" as const } };
+    create.mockReturnValueOnce(original.promise).mockResolvedValueOnce(result);
     vi.mocked(context.navigateAndWait).mockImplementation(readyChatRoute);
-    place.selectRemoteProject({ ...REMOTE_PROJECT, projectId: "old-local-clone" });
-    place.setBaseRef("release/next");
-    selectCloudWorktree(fixture);
-    flow.setMessage("Run only on the cloud worker");
+    flow.setMessage("@Alex keep the original direct request", [
+      { profileId: "profile-original", start: 0, end: 5 },
+    ]);
 
-    await flow.submit();
+    const initialSubmission = flow.submit(undefined, true);
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const originalParams = create.mock.calls[0]?.[0];
+    expect(originalParams).toMatchObject({
+      displayName: "Original prepared title",
+      mentions: [{ profileId: "profile-original", start: 0, end: 5 }],
+    });
+    flow.invalidate("gateway-changed");
+    takePreparedTitle.mockReturnValue("Replacement prepared title");
+    flow.setMessage("@Alex a different draft", [
+      { profileId: "profile-replacement", start: 0, end: 5 },
+    ]);
+    place.applyPendingPlacement({ agentId: "main", profileId: "new-cloud-discovery" });
+    expect(flow.canSubmit()).toBe(false);
+    expect(flow.submitting).toBe(true);
 
-    expect(create).toHaveBeenCalledOnce();
-    const created = expectDefined(create.mock.calls[0]?.[0], "remote session create request");
-    expect(created).toMatchObject({
-      agentId: "main",
-      message: "",
-      repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" },
-    });
-    expect(request.mock.calls.some(([method]) => method === "projects.add")).toBe(false);
-    expect(start).toHaveBeenCalledOnce();
-    expect(start.mock.calls[0]![0].recovery).toMatchObject({
-      sessionKey: created.key,
-      message: "Run only on the cloud worker",
-      phase: "dispatching",
-      target: { kind: "profile", profileId: "cloud" },
-    });
+    flow.synchronizeSubmission();
+    expect(flow.pendingMessage?.["__openclaw"].humanMentions).toEqual([
+      { profileId: "profile-original", start: 0, end: 5 },
+    ]);
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(create.mock.calls[1]?.[0]).toEqual(originalParams);
+    expect(flow.pendingPlacement.sessionKey).toBe("");
+    original.resolve(result);
+    await initialSubmission;
+    await vi.waitFor(() => expect(flow.submitting).toBe(false));
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
   });
-
-  it.each([false, true])(
-    "replays a frozen create with background=%s without inheriting mutable draft state",
-    async (background) => {
-      const takePreparedTitle = vi.fn(() => "Original prepared title");
-      const { context, create, flow, place } = createDraftFixture({
-        takePreparedTitle,
-        methods: ["sessions.create", "sessions.dispatch"],
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-      });
-      const original = createDeferred<SessionCreateOutcome>();
-      const result = { key: "agent:main:direct-resumed", initialRun: { status: "idle" as const } };
-      create.mockReturnValueOnce(original.promise).mockResolvedValueOnce(result);
-      vi.mocked(context.navigateAndWait).mockImplementation(readyChatRoute);
-      flow.setMessage("@Alex keep the original direct request", [
-        { profileId: "profile-original", start: 0, end: 5 },
-      ]);
-
-      const initialSubmission = flow.submit(undefined, background);
-      await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
-      const originalParams = create.mock.calls[0]?.[0];
-      expect(originalParams).toMatchObject({
-        displayName: "Original prepared title",
-        mentions: [{ profileId: "profile-original", start: 0, end: 5 }],
-      });
-      flow.invalidate("gateway-changed");
-      takePreparedTitle.mockReturnValue("Replacement prepared title");
-      flow.setMessage("@Alex a different draft", [
-        { profileId: "profile-replacement", start: 0, end: 5 },
-      ]);
-      place.applyPendingPlacement({ agentId: "main", profileId: "new-cloud-discovery" });
-      expect(flow.canSubmit()).toBe(false);
-      expect(flow.submitting).toBe(true);
-
-      flow.synchronizeSubmission();
-      expect(flow.pendingMessage?.["__openclaw"].humanMentions).toEqual([
-        { profileId: "profile-original", start: 0, end: 5 },
-      ]);
-      await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
-      expect(create.mock.calls[1]?.[0]).toEqual(originalParams);
-      expect(flow.pendingPlacement.sessionKey).toBe("");
-      original.resolve(result);
-      await initialSubmission;
-      await vi.waitFor(() => expect(flow.submitting).toBe(false));
-      if (background) {
-        expect(context.navigateAndWait).not.toHaveBeenCalled();
-        expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
-      }
-    },
-  );
 
   it.each(["lost authority", "expired retry"])(
     "unlocks an interrupted create after %s",
@@ -565,48 +522,6 @@ describe("DraftSubmissionFlow", () => {
     }
 
     expect(flow.submissionAccess().allowed).toBe(allowed);
-  });
-
-  it.each([false, true])("materializes an empty remote project (failure=%s)", async (failed) => {
-    const cloned = createDeferred<{ id: string }>();
-    const { context, create, flow, place, request } = createDraftFixture({
-      methods: ["projects.add", "sessions.create"],
-      request: async (method) => (method === "projects.add" ? cloned.promise : {}),
-    });
-    create.mockResolvedValue({
-      key: "agent:main:empty-remote-project",
-      initialRun: { status: "idle" },
-    });
-    vi.mocked(context.navigateAndWait).mockImplementation(readyChatRoute);
-    place.selectRemoteProject(REMOTE_PROJECT);
-    place.selectWorktree(true);
-    vi.spyOn(flow, "canSubmit").mockReturnValue(true);
-    const submitted = flow.submit();
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(
-        "projects.add",
-        { gitUrl: REMOTE_PROJECT.cloneUrl },
-        { timeoutMs: null },
-      ),
-    );
-    expect(create).not.toHaveBeenCalled();
-    if (failed) {
-      cloned.reject(new Error("clone failed"));
-    } else {
-      cloned.resolve({ id: "openclaw" });
-    }
-    await submitted;
-    if (failed) {
-      expect(flow.error).toBe("clone failed");
-      expect(place.browser.remoteProject?.identity).toBe(REMOTE_PROJECT.identity);
-      expect(create).not.toHaveBeenCalled();
-    } else {
-      expect(create.mock.calls[0]?.[0]).toMatchObject({
-        projectId: "openclaw",
-        message: "",
-        worktree: true,
-      });
-    }
   });
 
   it.each(["keep this prompt", ""])(

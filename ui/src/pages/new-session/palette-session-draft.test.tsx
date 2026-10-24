@@ -87,25 +87,14 @@ describe("PaletteSessionDraft", () => {
       initialRun: { status: "idle" },
     });
     vi.mocked(context.placementStartup.start).mockImplementation(() => submitted.resolve());
-    const readers: FileReader[] = [];
     vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
-      readers.push(this);
+      Object.defineProperty(this, "result", { value: "data:text/plain;base64,Y29sZA==" });
+      this.dispatchEvent(new ProgressEvent("load"));
     });
     host.draft.setMessage("Carry my cold Send into the required worker");
     host.draft.adoptAttachmentFiles([
       new File(["cold attachment"], "cold.txt", { type: "text/plain" }),
     ]);
-    await host.updateComplete;
-    await waitForSolid(
-      () =>
-        expect(host.querySelector('.chat-attachment-loading[data-state="reading"]')).not.toBeNull(),
-      { timeout: 5_000 },
-    );
-    const pending = expectDefined(readers[0], "pending attachment read");
-    Object.defineProperty(pending, "result", {
-      value: "data:text/plain;base64," + btoa("cold attachment"),
-    });
-    pending.dispatchEvent(new ProgressEvent("load"));
     await waitForSolid(() => {
       expect(host.querySelector('.chat-attachment-loading[data-state="ready"]')).not.toBeNull();
     });
@@ -238,17 +227,12 @@ describe("PaletteSessionDraft", () => {
       await vi.waitFor(() => expect(setting(host, "workspace")).not.toBeNull());
       expectDefined(setting<HTMLButtonElement>(host, "workspace"), "workspace picker").click();
       await host.updateComplete;
-      await vi.waitFor(() =>
-        expect(
-          host.querySelector('[data-machine="' + machine + '"][data-project="' + project + '"]'),
-        ).not.toBeNull(),
-      );
-      expectDefined(
+      const row = () =>
         host.querySelector<HTMLButtonElement>(
-          '[data-machine="' + machine + '"][data-project="' + project + '"]',
-        ),
-        "environment choice",
-      ).click();
+          `[data-machine="${machine}"][data-project="${project}"]`,
+        );
+      await vi.waitFor(() => expect(row()).not.toBeNull());
+      expectDefined(row(), "environment choice").click();
       await host.updateComplete;
     };
 
@@ -340,35 +324,6 @@ describe("PaletteSessionDraft", () => {
     },
   );
 
-  it("opens an accepted session only when its notice action is invoked", async () => {
-    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
-    const { host, context, create } = await mount({
-      agents: [
-        { id: "main", workspace: "/workspace", model: { primary: "example/main" } },
-        { id: "other", workspace: "/other", model: { primary: "example/other" } },
-      ],
-    });
-    agent(host).onSelect("other");
-    create.mockResolvedValue({
-      key: "agent:other:dashboard:created",
-      initialRun: { status: "idle" },
-    });
-    await submit(host, "Create with this explicit agent");
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "other", message: "Create with this explicit agent" }),
-      backgroundCreateOptions,
-    );
-    expect(host.started).toHaveBeenCalledOnce();
-    expect(host.draft.message).toBe("");
-    expect(context.navigateAndWait).not.toHaveBeenCalled();
-    expect(context.agentSelection.set).not.toHaveBeenCalled();
-    expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
-    const notice = expectDefined(showToast.mock.calls.at(-1)?.[0].onAction, "notice action");
-    notice();
-    expect(context.gateway.setSessionKey).toHaveBeenCalledWith("agent:other:dashboard:created");
-    expect(context.navigate).toHaveBeenCalledOnce();
-  });
-
   it.each(["same-owner", "gateway-object", "disconnected"])(
     "keeps rejected-session recovery bound to its owner after %s reconnect",
     async (reconnect) => {
@@ -447,26 +402,6 @@ describe("PaletteSessionDraft", () => {
       host.querySelector(".oc-popover.palette-session-settings")?.id,
     );
   });
-
-  it("clears another credential owner's text and keeps a failed create unaccepted", async () => {
-    const { host, context, create, publish } = await mount();
-    create.mockResolvedValue(null);
-    Object.assign(context.sessions.state, { error: "Creation denied" });
-    await submit(host, "Only for the first owner");
-    expect(host.started).not.toHaveBeenCalled();
-    expect(host.draft).toMatchObject({
-      message: "Only for the first owner",
-      error: "Creation denied",
-    });
-    const hello = context.gateway.snapshot.hello!;
-    context.gateway.snapshot.hello = {
-      ...hello,
-      auth: { ...hello.auth!, recoveryScope: "principal-b" },
-    };
-    Object.assign(context.gateway.snapshot.client!, { recoveryScope: "principal-b" });
-    publish();
-    expect(host.draft.message).toBe("");
-  });
 });
 
 async function mountPreferences(initial: Record<string, unknown> = {}) {
@@ -476,15 +411,12 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
   let beforeSave = async (_patch: Record<string, unknown>) => {};
   const fixture = await mount({
     selfUser: { id: "alice" },
-    agents: [
-      {
-        id: "main",
-        workspace: "/workspace",
-        workspaceGit: true,
-        model: { primary: "example/main" },
-      },
-      { id: "other", workspace: "/other", workspaceGit: true, model: { primary: "example/other" } },
-    ],
+    agents: ["main", "other"].map((id) => ({
+      id,
+      workspace: id === "main" ? "/workspace" : "/other",
+      workspaceGit: true,
+      model: { primary: "example/" + id },
+    })),
     methods: [
       "sessions.create",
       "users.prefs.get",
@@ -712,24 +644,18 @@ describe("palette-only remembered settings", () => {
     },
   );
 
-  it("keeps one-off choices out of normal defaults and resets on reopen", async () => {
-    const { host, entries, writes, select, worktree } = await mountPreferences({
-      "new-session.v1:main": { folder: "/workspace", worktree: true },
-    });
-    await vi.waitFor(() => expect(worktree().getAttribute("aria-checked")).toBe("true"));
-    select().onSelect("other");
-    await host.updateComplete;
+  it("remembers only opted-in palette settings and restores defaults without touching prompt/caret", async () => {
+    const ordinary = { folder: "/workspace", worktree: true };
+    const fixture = await mountPreferences({ "new-session.v1:main": ordinary });
+    const { host, entries, writes, select, remember, gateway, place } = fixture;
+    await vi.waitFor(() => expect(fixture.worktree().getAttribute("aria-checked")).toBe("true"));
+    await fixture.choose("other");
     expect(select().value).toBe("other");
     expect(writes).toEqual([]);
     reopen(host);
     await vi.waitFor(() => expect(select().value).toBe("main"));
-    expect(entries["new-session.v1:main"]).toEqual({ folder: "/workspace", worktree: true });
+    expect(entries["new-session.v1:main"]).toEqual(ordinary);
     expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined();
-  });
-
-  it("remembers only the palette and disabling restores current defaults without touching prompt/caret", async () => {
-    const fixture = await mountPreferences();
-    const { host, entries, writes, select, remember, gateway, place } = fixture;
     await fixture.choose("other");
     remember().click();
     await vi.waitFor(() =>

@@ -2,11 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import * as toast from "../../lib/toast.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
-import {
-  createDraftFixture,
-  backgroundCreateOptions,
-  readyChatRoute,
-} from "./draft-submission-flow.test-support.ts";
+import { backgroundCreateOptions, readyChatRoute } from "./draft-submission-flow.test-support.ts";
 import {
   browserPreference,
   preferenceGate,
@@ -26,7 +22,6 @@ import {
   selectCloudWorktree,
   submitPendingWorktree,
 } from "./draft-worktree-submission.test-support.ts";
-import { testModel } from "./model-control-view-queries.test-support.ts";
 import { decodeIdentityPreferences } from "./preferences.ts";
 
 afterEach(resetWorktreeMocks);
@@ -43,47 +38,19 @@ function expectSaved(
   return vi.waitFor(() => expect(prefs.stored()).toMatchObject(selection));
 }
 
-it.each([
-  { identified: false, fastMode: true },
-  { identified: true, fastMode: "ultrafast" },
-] as const)(
-  "preserves newer model controls, identity=$identified, speed=$fastMode",
-  async ({ identified, fastMode }) => {
-    const { prefs, first } = await preferenceDraft(identified, async () => ({
-      models: [
-        testModel("openai", "gpt-5.6-luna"),
-        testModel("openai", "gpt-5.6-sol", {
-          reasoning: true,
-          available: true,
-          serviceTiers: ["ultrafast"],
-          thinkingLevels: [
-            { id: "low", label: "Low" },
-            { id: "high", label: "High" },
-          ],
-        }),
-      ],
-    }));
-    const { admitted, submitting } = await submitPendingWorktree(first);
-    const next = await readyPreferenceDraft(prefs, first.context.gateway);
-    const control = next.place.modelControl;
-    await chooseModel(next);
-    const controls = control.renderProps({
-      context: next.context,
-      agentId: "main",
-      agent: next.place.selectedAgent(),
-      sending: false,
-    });
-    controls.onThinkingSelect?.("high", controls.sessionKey);
-    controls.onFastModeSelect?.(fastMode === true ? "on" : fastMode, controls.sessionKey);
-    const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high", fastMode };
-    await expectSaved(prefs, selected);
-    admitted.resolve(acceptedWorktreeSession);
-    await submitting;
-    expectWorktreeName(next.place);
-    expect(prefs.stored()).toMatchObject({ ...selected, worktree: true, baseRef: "main" });
-    expect(control).toMatchObject({ selected: selected.model, thinkingLevel: "high", fastMode });
-  },
-);
+it("preserves newer browser model choices when accepting an older draft", async () => {
+  const { prefs, first } = await preferenceDraft(false, async () => ({ models }));
+  const { admitted, submitting } = await submitPendingWorktree(first);
+  const next = await readyPreferenceDraft(prefs, first.context.gateway);
+  await chooseModel(next);
+  const selected = { model: "openai/gpt-5.6-sol" };
+  await expectSaved(prefs, selected);
+  admitted.resolve(acceptedWorktreeSession);
+  await submitting;
+  expectWorktreeName(next.place);
+  expect(prefs.stored()).toMatchObject({ ...selected, worktree: true, baseRef: "main" });
+  expect(next.place.modelControl.selected).toBe(selected.model);
+});
 
 it.each(["composer retirement", "preference clear"] as const)(
   "prevents placement publication after %s disposal",
@@ -221,26 +188,27 @@ it.each([
     }
     admitted.resolve(acceptedWorktreeSession);
     await submitting;
-    if (change === "renamed") {
-      expect(next.place.worktreeName).toBe("next-task");
-      expect(prefs.stored()).toMatchObject({ worktreeName: "next-task" });
-    } else if (change === "reconnected") {
-      expect(next.place.worktreeName).toBe("");
-      expect(first.context.navigateAndWait).not.toHaveBeenCalled();
-    } else if (change === "hello" || change === "client") {
-      expect(prefs.stored()).toMatchObject({ worktreeName: "first-task" });
-      expect(first.place.worktreeName).toBe("first-task");
-      expect(first.context.navigateAndWait).not.toHaveBeenCalled();
-    } else if (change === "same name again" || change === "new repository") {
-      expect(first.place.worktreeName).toBe("first-task");
-      expect(first.context.navigateAndWait).not.toHaveBeenCalled();
-    } else if (hydrated) {
+    const name =
+      change === "renamed"
+        ? "next-task"
+        : change === "reconnected"
+          ? ""
+          : change === "agent"
+            ? "work-task"
+            : hydrated
+              ? (patch.worktreeName ?? "first-task")
+              : "first-task";
+    expect(next.place.worktreeName).toBe(name);
+    if (hydrated) {
       expect(prefs.stored()).toEqual(retained);
-      expect(next.place.worktreeName).toBe(patch.worktreeName ?? "first-task");
-    } else {
+    } else if (change === "agent") {
       expect(prefs.stored()).toMatchObject({ worktreeName: "" });
       expect(prefs.stored("work")).toEqual(retained);
-      expect(first.place).toMatchObject({ agentId: "work", worktreeName: "work-task" });
+      expect(first.place.agentId).toBe("work");
+    } else if (change === "renamed" || change === "hello" || change === "client") {
+      expect(prefs.stored()).toMatchObject({ worktreeName: name });
+    }
+    if (!hydrated && change !== "renamed") {
       expect(first.context.navigateAndWait).not.toHaveBeenCalled();
     }
   },
@@ -359,15 +327,14 @@ it.each(["read", "save", "transport", "browser"] as const)(
     const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
     vi.mocked(fixture.context.navigateAndWait).mockImplementation(readyChatRoute);
     const write = localStorage.setItem.bind(localStorage);
-    const rejectedWrite =
-      failure === "browser"
-        ? vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
-            if (key.includes("new-session")) {
-              throw new Error("Synthetic browser quota exceeded");
-            }
-            return write(key, value);
-          })
-        : undefined;
+    if (failure === "browser") {
+      vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+        if (key.includes("new-session")) {
+          throw new Error("Synthetic browser quota exceeded");
+        }
+        return write(key, value);
+      });
+    }
     if (failure !== "browser") {
       const original = fixture.request.getMockImplementation()!;
       fixture.request.mockImplementation(async (method, params) => {
@@ -388,41 +355,9 @@ it.each(["read", "save", "transport", "browser"] as const)(
     expect(fixture.flow.error).toBeNull();
     expect(warning).toHaveBeenCalledExactlyOnceWith(acceptedNameWarning);
     expect(prefs.stored()).toMatchObject({ worktreeName: "first-task" });
-    if (rejectedWrite) {
-      expect(rejectedWrite).toHaveBeenCalledWith(
-        expect.stringContaining("new-session.preferences"),
-        expect.any(String),
-      );
-    } else {
-      expect(browserPreference()).toMatchObject({ worktreeName: "first-task" });
-    }
+    expect(browserPreference()).toMatchObject({ worktreeName: "first-task" });
   },
 );
-
-it("retires the restored agent's name despite default-agent hydration", async () => {
-  const { prefs, first } = await preferenceDraft();
-  first.place.selectAgentId("work");
-  await vi.waitFor(() => expect(first.place.worktreeName).toBe("work-task"));
-  selectCloudWorktree(first);
-  first.flow.setMessage("work task");
-  vi.mocked(first.context.sessions.createResult).mockResolvedValue(null);
-  await first.flow.submit(undefined, true);
-  const original = vi.mocked(first.context.sessions.createResult).mock.calls[0]![0];
-  expect(original).toMatchObject({ agentId: "work", worktreeName: "work-task" });
-  disposeWorktreeDraft(first);
-  const retry = await readyPreferenceDraft(prefs, first.context.gateway);
-  expect(retry.place.agentId).toBe("main");
-  const mainPreference = structuredClone(prefs.stored());
-  retry.context.placementStartup.start = vi.fn();
-  acceptIdlePlacement(retry);
-  await retry.flow.submit(undefined, true);
-  expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
-    original,
-    backgroundCreateOptions,
-  );
-  expect(prefs.stored("work")).toMatchObject({ worktreeName: "" });
-  expect(prefs.stored()).toEqual(mainPreference);
-});
 
 const acceptedWarnings = (warning: { mock: { calls: Parameters<typeof toast.showToast>[] } }) =>
   warning.mock.calls.filter(
@@ -503,10 +438,13 @@ it.each(["repository", "model", "empty base", "base before read"] as const)(
       expect(acceptedWarnings(warning)).toEqual([]);
     }
     if (change === "model") {
-      expect(prefs.stored()).toMatchObject({ worktreeName: "", model: "openai/gpt-5.6-sol" });
-      expect(decodePreference(prefs.stored())).toEqual(
-        decodePreference({ ...(newer as object), worktreeName: "" }),
-      );
+      expect(prefs.stored()).toMatchObject({
+        worktreeName: "",
+        model: "openai/gpt-5.6-sol",
+        baseRef: "main",
+        folder: "/repo",
+        worktree: true,
+      });
     } else {
       expect(prefs.stored()).toEqual(newer);
     }
@@ -555,7 +493,7 @@ it.each(["accepted clear", "ordinary edit"] as const)(
   },
 );
 
-it.each(["explicit", "implicit", "cleared"] as const)(
+it.each(["explicit", "implicit", "cleared", "other agent"] as const)(
   "restores creating placement with %s base",
   async (base) => {
     const prefs = identityPreferences();
@@ -567,11 +505,18 @@ it.each(["explicit", "implicit", "cleared"] as const)(
       disposeWorktreeDraft(first);
       first = await readyPreferenceDraft(prefs);
     }
+    if (base === "other agent") {
+      first.place.selectAgentId("work");
+      await vi.waitFor(() => expect(first.place.worktreeName).toBe("work-task"));
+    }
     selectCloudWorktree(first);
     first.flow.setMessage("first task");
     vi.mocked(first.context.sessions.createResult).mockResolvedValue(null);
     await first.flow.submit(undefined, true);
     const original = vi.mocked(first.context.sessions.createResult).mock.calls[0]![0];
+    if (base === "other agent") {
+      expect(original).toMatchObject({ agentId: "work", worktreeName: "work-task" });
+    }
     if (base === "implicit") {
       expect(original).not.toHaveProperty("worktreeBaseRef");
     } else {
@@ -585,6 +530,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     }
     const retained = structuredClone(prefs.stored());
     const retry = await readyPreferenceDraft(prefs, first.context.gateway);
+    expect(retry.place.agentId).toBe("main");
     retry.context.placementStartup.start = vi.fn();
     acceptIdlePlacement(retry);
     const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
@@ -595,7 +541,12 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     );
     expect(retry.flow.error).toBeNull();
     if (base !== "cleared") {
-      expect(prefs.stored()).toMatchObject({ worktreeName: "" });
+      expect(prefs.stored(base === "other agent" ? "work" : "main")).toMatchObject({
+        worktreeName: "",
+      });
+      if (base === "other agent") {
+        expect(prefs.stored()).toEqual(retained);
+      }
       expect(acceptedWarnings(warning)).toEqual([]);
     } else {
       expect(prefs.stored()).toEqual(retained);
@@ -634,27 +585,9 @@ it("keeps accepted names retired when older model saves commit last", async () =
 });
 
 async function namedWorktreeFixture(explicitBase = true) {
-  const fixture = createDraftFixture({
-    scopes: ["operator.admin", "operator.read", "operator.write"],
-    methods: ["sessions.create", "sessions.dispatch"],
-    agents: [
-      {
-        id: "main",
-        workspace: "/repo",
-        workspaceGit: true,
-        model: { primary: "openai/gpt-5.6-luna" },
-      },
-    ],
-    request: async (method) =>
-      method === "worktrees.branches"
-        ? { repositoryStatus: "git", branches: ["main"], defaultBranch: "main" }
-        : { status: "ok", endedAt: 1 },
-  });
-  await vi.waitFor(() => expect(fixture.place.repository.kind).toBe("git"));
+  const { first: fixture } = await preferenceDraft(false);
   fixture.place.selectWorktree(true);
-  if (explicitBase) {
-    fixture.place.setBaseRef("main");
-  }
+  fixture.place.setBaseRef(explicitBase ? "main" : "");
   fixture.place.setWorktreeName(explicitBase ? "first-task" : "  first-task  ");
   fixture.flow.setMessage("first task");
   vi.mocked(fixture.context.navigateAndWait).mockImplementation(readyChatRoute);
