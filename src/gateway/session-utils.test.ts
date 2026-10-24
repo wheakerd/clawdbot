@@ -87,6 +87,21 @@ function storeConfig(
 const agentStore = (root: string, agentId = "{agentId}") =>
   path.join(root, "agents", agentId, "sessions", "sessions.json");
 
+function seedDeletedMainStores(stateDir: string, mainKey = "main") {
+  const deletedStorePath = agentStore(stateDir, "main");
+  const liveStorePath = agentStore(stateDir, "ops");
+  for (const storePath of [liveStorePath, deletedStorePath]) {
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  }
+  seedSessionEntries(liveStorePath, {
+    [`agent:ops:${mainKey}`]: makeSession("sess-live-default", { updatedAt: 10 }),
+  });
+  seedSessionEntries(deletedStorePath, {
+    "agent:main:main": makeSession("sess-deleted-main", { updatedAt: 20 }),
+  });
+  return { deletedStorePath, storeTemplate: agentStore(stateDir) };
+}
+
 function catalogModel(
   provider: string,
   id: string,
@@ -901,21 +916,14 @@ describe("gateway session utils", () => {
     expect(row).toMatchObject({ totalTokens: 0, totalTokensFresh: true });
   });
 
-  test.each<[string, string, Partial<SessionEntry>, string | undefined]>([
+  test.each<[string, Partial<SessionEntry>, string | undefined]>([
     [
-      "opaque direct route",
       "imessage:direct:+15551234567",
       imessageEntry("direct", "auto:+15551234567", "+15551234567"),
       undefined,
     ],
+    ["imessage:direct:Alice", imessageEntry("direct", "imessage:Alice", "Alice"), "Alice"],
     [
-      "human contact alias matching the route tail",
-      "imessage:direct:Alice",
-      imessageEntry("direct", "imessage:Alice", "Alice"),
-      "Alice",
-    ],
-    [
-      "compact group route fallback",
       "imessage:group:13",
       {
         ...imessageEntry("group", "chat_id:13", "Group id:13", "imessage:group:13"),
@@ -924,14 +932,9 @@ describe("gateway session utils", () => {
       },
       undefined,
     ],
-    ["channel title", "slack:channel:C1", slackChannelEntry(), "Acme #general"],
-    [
-      "explicit label overriding channel metadata",
-      "slack:channel:C1",
-      { ...slackChannelEntry(), label: "Team room" },
-      "Team room",
-    ],
-  ])("projects %s as the session display name", (_name, suffix, fields, expected) => {
+    ["slack:channel:C1", slackChannelEntry(), "Acme #general"],
+    ["slack:channel:C1", { ...slackChannelEntry(), label: "Team room" }, "Team room"],
+  ])("projects the display name of %s", (suffix, fields, expected) => {
     const key = `agent:main:${suffix}`;
     const entry = makeSession("display-name", fields);
     const row = buildGatewaySessionRow({
@@ -1380,19 +1383,7 @@ describe("gateway session utils", () => {
       resetConfigRuntimeState();
       try {
         await withStateDirEnv("session-utils-load-deleted-main-entry-", async ({ stateDir }) => {
-          const storeTemplate = agentStore(stateDir);
-          const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
-          const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
-          fs.mkdirSync(liveSessionsDir, { recursive: true });
-          fs.mkdirSync(deletedSessionsDir, { recursive: true });
-          const liveStorePath = path.join(liveSessionsDir, "sessions.json");
-          const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
-          seedSessionEntries(liveStorePath, {
-            "agent:ops:main": makeSession("sess-live-default", { updatedAt: 10 }),
-          });
-          seedSessionEntries(deletedStorePath, {
-            "agent:main:main": makeSession("sess-deleted-main", { updatedAt: 20 }),
-          });
+          const { storeTemplate, deletedStorePath } = seedDeletedMainStores(stateDir);
           const cfg = {
             session: { store: storeTemplate },
             agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
@@ -1492,18 +1483,7 @@ describe("gateway session utils", () => {
 
   test("loadSessionEntry rejects deleted main aliases when mainKey is customized", async () => {
     await withConfiguredStateDir("session-utils-load-deleted-main-alias-", async ({ stateDir }) => {
-      const storeTemplate = agentStore(stateDir);
-      const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
-      const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
-      fs.mkdirSync(liveSessionsDir, { recursive: true });
-      fs.mkdirSync(deletedSessionsDir, { recursive: true });
-      seedSessionEntries(path.join(liveSessionsDir, "sessions.json"), {
-        "agent:ops:work": makeSession("sess-live-default", { updatedAt: 10 }),
-      });
-      const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
-      seedSessionEntries(deletedStorePath, {
-        "agent:main:main": makeSession("sess-deleted-main", { updatedAt: 20 }),
-      });
+      const { storeTemplate } = seedDeletedMainStores(stateDir, "work");
       const cfg = {
         session: { mainKey: "work", store: storeTemplate },
         agents: { entries: { ops: {} } },
@@ -1837,19 +1817,23 @@ describe("deriveSessionTitle", () => {
 
 describe("resolveGatewayModelSupportsImages", () => {
   type Model = GatewayModelCatalogSnapshot["entries"][number];
+  type Facts = Partial<GatewayModelCatalogSnapshot>;
   const vision: Model = catalogModel("openai", "gpt-5.4", {
     name: "GPT-5.4",
     input: ["text", "image"],
   });
-  const routeVision = (
-    api: "openai-completions" | "openai-responses",
-    baseUrl = "https://api.openai.com/v1",
-  ) => ({ ...vision, api, baseUrl });
+  const baseUrl = "https://api.openai.com/v1";
+  const routeVision = (api: "openai-completions" | "openai-responses", url = baseUrl) => ({
+    ...vision,
+    api,
+    baseUrl: url,
+  });
   const textOnly = (model: Model): Model => ({ ...model, input: ["text"] });
-  const query = { agentId: "qa", model: vision.id, provider: vision.provider };
-  const snapshot = (
-    overrides: Partial<GatewayModelCatalogSnapshot> = {},
-  ): GatewayModelCatalogSnapshot => ({
+  const runtimeModel = catalogModel("openrouter", "vendor/runtime-vision-model", {
+    name: "Runtime Vision Model",
+    input: ["text", "image"],
+  });
+  const snapshot = (facts: Facts): GatewayModelCatalogSnapshot => ({
     agentId: "qa",
     agentDir: "/tmp/gateway-model-capability-agent",
     workspaceDir: "/tmp/gateway-model-capability-workspace",
@@ -1857,223 +1841,183 @@ describe("resolveGatewayModelSupportsImages", () => {
     config: {},
     entries: [],
     routeVariants: [],
-    ...overrides,
-  });
-  const preparedSupport = (
-    prepared: GatewayModelCatalogSnapshot,
-    provider: string | undefined = "openai",
-  ) =>
-    resolveGatewayModelSupportsImages({
-      ...query,
-      provider,
-      loadGatewayModelCatalog: async () => [],
-      loadGatewayModelCatalogSnapshot: async () => prepared,
-    });
-
-  test("discovers live capabilities when provisional metadata is text-only", async () => {
-    const runtimeModel: Model = catalogModel("openrouter", "vendor/runtime-vision-model", {
-      name: "Runtime Vision Model",
-      input: ["text", "image"],
-    });
-    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) =>
-      snapshot({
-        entries: params?.readOnly ? [{ ...runtimeModel, input: ["text"] }] : [runtimeModel],
-      }),
-    );
-    await expect(
-      resolveGatewayModelSupportsImages({
-        ...query,
-        model: runtimeModel.id,
-        provider: runtimeModel.provider,
-        loadGatewayModelCatalog: async () => [],
-        loadGatewayModelCatalogSnapshot,
-      }),
-    ).resolves.toBe(true);
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(1, {
-      agentId: "qa",
-      readOnly: true,
-    });
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(2, {
-      agentId: "qa",
-      readOnly: false,
-    });
+    ...facts,
   });
 
-  test("does not rediscover a complete catalog without the requested row", async () => {
-    const modes: Array<boolean | undefined> = [];
-    await expect(
-      resolveGatewayModelSupportsImages({
-        agentId: "qa",
-        model: "vendor/runtime-text-model",
-        provider: "openrouter",
-        loadGatewayModelCatalog: async () => [],
-        loadGatewayModelCatalogSnapshot: async (params) => {
-          modes.push(params?.readOnly);
-          if (params?.readOnly !== true) {
-            throw new Error("full catalog discovery must not restart for a complete owner");
-          }
-          return snapshot({ catalogComplete: true });
-        },
-      }),
-    ).resolves.toBe(false);
-    expect(modes).toEqual([true]);
-  });
-
-  test("repairs stale visible text-only metadata with same-agent static vision", async () => {
-    const loadGatewayModelCatalog = vi.fn(async () => []);
-    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) => {
-      if (params?.readOnly !== true) {
-        throw new Error("full catalog discovery must not start during attachment admission");
-      }
-      return snapshot({ entries: [textOnly(vision)], staticEntries: [vision] });
-    });
-    await expect(
-      resolveGatewayModelSupportsImages({
-        ...query,
-        loadGatewayModelCatalog,
-        loadGatewayModelCatalogSnapshot,
-      }),
-    ).resolves.toBe(true);
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "qa", readOnly: true });
-    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
-  });
-
-  test("does not override explicitly configured text-only input with static vision", async () => {
-    const modes: Array<boolean | undefined> = [];
-    await expect(
-      resolveGatewayModelSupportsImages({
-        ...query,
-        loadGatewayModelCatalog: async () => [],
-        loadGatewayModelCatalogSnapshot: async (params) => {
-          modes.push(params?.readOnly);
-          return snapshot({
-            config: {
-              models: {
-                providers: {
-                  openai: {
-                    baseUrl: "https://api.openai.com/v1",
-                    models: [
-                      {
-                        id: vision.id,
-                        name: "Text only",
-                        reasoning: false,
-                        input: ["text"],
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                        contextWindow: 128_000,
-                        maxTokens: 4_096,
-                      },
-                    ],
-                  },
-                },
-              },
-            },
-            entries: [textOnly({ ...vision, baseUrl: "https://api.openai.com/v1" })],
-            staticEntries: [{ ...vision, baseUrl: "https://api.openai.com/v1" }],
-          });
-        },
-      }),
-    ).resolves.toBe(false);
-    expect(modes).toEqual([true]);
-  });
-
-  test.each<{ boundary: string; facts: Partial<GatewayModelCatalogSnapshot> }>([
-    { boundary: "agent owner", facts: { agentId: "other", staticEntries: [vision] } },
+  test.each<{
+    name: string;
+    facts: Facts | Error;
+    full?: Facts;
+    model?: string;
+    provider?: string | null;
+    expected?: boolean;
+    modes?: boolean[];
+  }>([
     {
-      boundary: "configured base URL",
+      name: "discovers live capabilities after provisional text-only metadata",
+      facts: { entries: [textOnly(runtimeModel)] },
+      full: { entries: [runtimeModel] },
+      model: runtimeModel.id,
+      provider: runtimeModel.provider,
+      expected: true,
+    },
+    {
+      name: "does not rediscover a complete catalog missing the requested row",
+      facts: { catalogComplete: true },
+      model: "vendor/runtime-text-model",
+      provider: "openrouter",
+      modes: [true],
+    },
+    {
+      name: "repairs stale text-only metadata with same-agent static vision",
+      facts: { entries: [textOnly(vision)], staticEntries: [vision] },
+      expected: true,
+      modes: [true],
+    },
+    {
+      name: "honors explicitly configured text-only input",
       facts: {
         config: {
           models: {
-            providers: { openai: { baseUrl: "https://custom.example.test/v1", models: [] } },
+            providers: {
+              openai: {
+                baseUrl,
+                models: [
+                  {
+                    id: vision.id,
+                    name: "Text only",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128_000,
+                    maxTokens: 4_096,
+                  },
+                ],
+              },
+            },
           },
         },
-        staticEntries: [{ ...vision, baseUrl: "https://api.openai.com/v1" }],
+        entries: [textOnly({ ...vision, baseUrl })],
+        staticEntries: [{ ...vision, baseUrl }],
+      },
+      modes: [true],
+    },
+    {
+      name: "does not borrow static vision across the agent owner",
+      facts: { agentId: "other", staticEntries: [vision] },
+    },
+    {
+      name: "does not borrow static vision across the configured base URL",
+      facts: {
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://custom.example.test/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        staticEntries: [{ ...vision, baseUrl }],
       },
     },
     {
-      boundary: "visible API",
+      name: "does not borrow static vision across the visible API",
       facts: {
         entries: [textOnly(routeVision("openai-completions"))],
         staticEntries: [routeVision("openai-responses")],
       },
     },
     {
-      boundary: "visible base URL",
+      name: "does not borrow static vision across the visible base URL",
       facts: {
         entries: [textOnly(routeVision("openai-responses", "https://custom.example.test/v1"))],
         staticEntries: [routeVision("openai-responses")],
       },
     },
-  ])("does not borrow static vision across the $boundary", async ({ facts }) => {
-    await expect(preparedSupport(snapshot(facts))).resolves.toBe(false);
-  });
-
-  test("fails closed on providerless static image capabilities", async () => {
-    await expect(
-      resolveGatewayModelSupportsImages({
-        agentId: "qa",
-        model: "shared-vision",
-        loadGatewayModelCatalog: async () => [],
-        loadGatewayModelCatalogSnapshot: async () =>
-          snapshot({
-            staticEntries: [
-              { ...vision, id: "shared-vision", provider: "first" },
-              { ...vision, id: "shared-vision", provider: "second" },
-            ],
-          }),
-      }),
-    ).resolves.toBe(false);
-  });
-
-  test("fails closed without a stale catalog when the prepared snapshot fails", async () => {
-    const loadGatewayModelCatalog = vi.fn(async () => [vision]);
-    await expect(
-      resolveGatewayModelSupportsImages({
-        ...query,
-        loadGatewayModelCatalog,
-        loadGatewayModelCatalogSnapshot: async () => {
-          throw new Error("prepared catalog unavailable");
-        },
-      }),
-    ).resolves.toBe(false);
-    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
-  });
-
-  test.each([
     {
-      model: "deployment-gpt5",
-      provider: "microsoft-foundry",
-      entry: catalogModel("microsoft-foundry", "deployment-gpt5", {
-        name: "gpt-5.4",
-        input: ["text"],
-      }),
+      name: "fails closed on providerless static image capabilities",
+      facts: {
+        staticEntries: [
+          { ...vision, id: "shared-vision", provider: "first" },
+          { ...vision, id: "shared-vision", provider: "second" },
+        ],
+      },
+      model: "shared-vision",
+      provider: null,
     },
     {
-      model: "claude-sonnet-4-6",
-      provider: "claude-cli",
-      entry: catalogModel("claude-cli", "claude-sonnet-4-6", {
+      name: "fails closed without a stale catalog when the prepared snapshot fails",
+      facts: new Error("prepared catalog unavailable"),
+      modes: [true],
+    },
+  ])(
+    "$name",
+    async ({
+      facts,
+      full,
+      model = vision.id,
+      provider = vision.provider,
+      expected = false,
+      modes = [true, false],
+    }) => {
+      const loadGatewayModelCatalog = vi.fn(async () => (facts instanceof Error ? [vision] : []));
+      const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) => {
+        if (facts instanceof Error) {
+          throw facts;
+        }
+        if (modes.length === 1 && params?.readOnly !== true) {
+          throw new Error("full catalog discovery must not restart");
+        }
+        return snapshot(params?.readOnly ? facts : (full ?? facts));
+      });
+      await expect(
+        resolveGatewayModelSupportsImages({
+          agentId: "qa",
+          model,
+          provider: provider ?? undefined,
+          loadGatewayModelCatalog,
+          loadGatewayModelCatalogSnapshot,
+        }),
+      ).resolves.toBe(expected);
+      expect(loadGatewayModelCatalogSnapshot.mock.calls.map(([params]) => params)).toEqual(
+        modes.map((readOnly) => ({ agentId: "qa", readOnly })),
+      );
+      expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each([
+    [
+      "deployment-gpt5",
+      "microsoft-foundry",
+      catalogModel("microsoft-foundry", "deployment-gpt5", { name: "gpt-5.4", input: ["text"] }),
+    ],
+    [
+      "claude-sonnet-4-6",
+      "claude-cli",
+      catalogModel("claude-cli", "claude-sonnet-4-6", {
         name: "Claude Sonnet 4.6",
         input: ["text"],
       }),
-    },
-    {
-      model: "Qwen/Qwen3.5-35B-A3B",
-      provider: undefined,
-      entry: catalogModel("modelscope", "qwen/qwen3.5-35b-a3b", {
+    ],
+    [
+      "Qwen/Qwen3.5-35B-A3B",
+      undefined,
+      catalogModel("modelscope", "qwen/qwen3.5-35b-a3b", {
         name: "Qwen3.5 35B",
         input: ["text", "image"],
       }),
-    },
-  ] satisfies Array<{ model: string; provider?: string; entry: Model }>)(
-    "resolves legacy or providerless vision for $model",
-    async ({ model, provider, entry }) => {
-      await expect(
-        resolveGatewayModelSupportsImages({
-          model,
-          provider,
-          loadGatewayModelCatalog: async () => [entry],
-        }),
-      ).resolves.toBe(true);
-    },
-  );
+    ],
+  ] as const)("resolves legacy or providerless vision for %s", async (model, provider, entry) => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model,
+        provider,
+        loadGatewayModelCatalog: async () => [entry],
+      }),
+    ).resolves.toBe(true);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
