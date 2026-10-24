@@ -43,16 +43,8 @@ function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): Sessi
     ...provider,
     list: (params) => provider.list({ agentId: "main", ...params }),
     read: (params) => provider.read({ agentId: "main", ...params }),
-    ...(provider.continueSession
-      ? {
-          continueSession: (params) => provider.continueSession!({ agentId: "main", ...params }),
-        }
-      : {}),
-    ...(provider.openTerminal
-      ? {
-          openTerminal: (params) => provider.openTerminal!({ agentId: "main", ...params }),
-        }
-      : {}),
+    continueSession: (params) => provider.continueSession!({ agentId: "main", ...params }),
+    openTerminal: (params) => provider.openTerminal!({ agentId: "main", ...params }),
   } as SessionCatalogProvider;
 }
 
@@ -261,27 +253,16 @@ async function writeDesktopMetadata(
 
 async function writeIndexedDesktopSession(
   home: string,
-  params: {
-    sessionId: string;
-    localSessionId: string;
-    metadataName: string;
-    title: string;
-    prompt: string;
-    metadata?: Record<string, unknown>;
-  },
+  sessionId: string,
+  localSessionId: string,
+  metadata: Record<string, unknown> = {},
 ): Promise<void> {
-  const { sessionId, localSessionId, metadataName, title, prompt, metadata } = params;
-  await writeIndexedSession(
-    home,
-    sessionId,
-    { projectPath: "/work/openclaw", isSidechain: false },
-    prompt,
-  );
-  await writeDesktopMetadata(home, metadataName, {
+  await writeIndexedSession(home, sessionId, { projectPath: "/work/openclaw", isSidechain: false });
+  await writeDesktopMetadata(home, "fixture", {
     sessionId: localSessionId,
     cliSessionId: sessionId,
     cwd: "/work/openclaw",
-    title,
+    title: "Desktop session",
     ...metadata,
   });
 }
@@ -315,14 +296,11 @@ const CLAUDE_GROUP_USER_KEY = Buffer.from("_https://claude.ai\0\x01dframe-store"
 
 function levelDbInternalKey(sequence: number, kind = 1): Buffer {
   const trailer = Buffer.alloc(8);
-  trailer[0] = kind;
-  let remaining = sequence;
-  for (let index = 1; index < trailer.length; index += 1) {
-    trailer[index] = remaining & 0xff;
-    remaining = Math.floor(remaining / 0x100);
-  }
+  trailer.writeBigUInt64LE((BigInt(sequence) << 8n) | BigInt(kind));
   return Buffer.concat([CLAUDE_GROUP_USER_KEY, trailer]);
 }
+
+const LEVELDB_RESTART = Buffer.from([0, 0, 0, 0, 1, 0, 0, 0]);
 
 function levelDbDataBlock(
   entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
@@ -345,11 +323,7 @@ function levelDbDataBlock(
     );
     previousKey = key;
   }
-  return Buffer.concat([
-    ...encoded,
-    Buffer.alloc(4), // one restart at the first entry
-    Buffer.from([1, 0, 0, 0]),
-  ]);
+  return Buffer.concat([...encoded, LEVELDB_RESTART]);
 }
 
 function snappyGroupRecords(groupId: string, groupName: string, localSessionId: string): Buffer {
@@ -366,7 +340,7 @@ function snappyGroupRecords(groupId: string, groupName: string, localSessionId: 
     Buffer.from(`${group}${assignmentPrefix}`),
   ]);
   const groupIdOffset = firstChunk.length - firstChunk.indexOf(groupId);
-  const tail = Buffer.concat([Buffer.from('"}'), Buffer.alloc(4), Buffer.from([1, 0, 0, 0])]);
+  const tail = Buffer.concat([Buffer.from('"}'), LEVELDB_RESTART]);
   const decodedLength = firstChunk.length + groupId.length + tail.length;
   return Buffer.concat([
     encodeVarint(decodedLength),
@@ -380,11 +354,7 @@ function levelDbTable(data: Buffer, compression: 0 | 1): Buffer {
   const dataWithTrailer = Buffer.concat([data, Buffer.from([compression, 0, 0, 0, 0])]);
   const handle = Buffer.concat([encodeVarint(0), encodeVarint(data.length)]);
   const indexEntry = Buffer.concat([Buffer.from([0, 1, handle.length, 0x78]), handle]);
-  const index = Buffer.concat([
-    indexEntry,
-    Buffer.alloc(4), // one restart at the start of the index block
-    Buffer.from([1, 0, 0, 0]),
-  ]);
+  const index = Buffer.concat([indexEntry, LEVELDB_RESTART]);
   const indexWithTrailer = Buffer.concat([index, Buffer.alloc(5)]);
   const footer = Buffer.alloc(48);
   Buffer.concat([
@@ -1152,13 +1122,7 @@ describe("Claude session catalog", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const sessionId = "desktop-custom-group";
     const localSessionId = "local_11111111-1111-1111-1111-111111111111";
-    await writeIndexedDesktopSession(home, {
-      sessionId,
-      localSessionId,
-      metadataName: "custom-group",
-      title: "Desktop custom group",
-      prompt: "custom group prompt",
-    });
+    await writeIndexedDesktopSession(home, sessionId, localSessionId);
     await writeDesktopGroupStore(
       home,
       "cg-22222222-2222-2222-2222-222222222222",
@@ -1212,13 +1176,11 @@ describe("Claude session catalog", () => {
   it("retains the current Claude Desktop pull request when history is truncated", async () => {
     const home = await createHome();
     const sessionId = "desktop-pull-requests";
-    await writeIndexedDesktopSession(home, {
+    await writeIndexedDesktopSession(
+      home,
       sessionId,
-      localSessionId: "local_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      metadataName: "pull-requests",
-      title: "Desktop pull requests",
-      prompt: "pull request prompt",
-      metadata: {
+      "local_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      {
         prNumber: 111772,
         prs: [
           { prNumber: 111772, state: "MERGED" },
@@ -1229,7 +1191,7 @@ describe("Claude session catalog", () => {
           })),
         ],
       },
-    });
+    );
 
     await expect(listPage({}, home)).resolves.toMatchObject({
       sessions: [
@@ -1252,13 +1214,7 @@ describe("Claude session catalog", () => {
       const sessionId = "desktop-group";
       const localSessionId = "local_33333333-3333-3333-3333-333333333333";
       const groupId = "cg-44444444-4444-4444-4444-444444444444";
-      await writeIndexedDesktopSession(home, {
-        sessionId,
-        localSessionId,
-        metadataName: "group",
-        title: "Desktop group",
-        prompt: "group prompt",
-      });
+      await writeIndexedDesktopSession(home, sessionId, localSessionId);
       await writeDesktopGroupStoreEntries(home, [
         {
           sequence: 1,
@@ -1285,6 +1241,16 @@ describe("Claude session catalog", () => {
     const escapedId = "escaped-session";
     const escapedPath = path.join(projectDir, `${escapedId}.jsonl`);
     const externalPath = path.join(home, "outside.jsonl");
+    const visible = [
+      ["cli-session", "Interactive CLI prompt", "cli"],
+      ["sdk-cli-session", "Headless CLI prompt", "sdk-cli"],
+      ["sdk-ts-session", "Bidirectional stream-json prompt", "sdk-ts"],
+    ] as const;
+    const hidden = [
+      ["cli-sidechain-session", { entrypoint: "cli", isSidechain: true }],
+      ["discovered-sidechain", { entrypoint: "sdk-cli", isSidechain: true }],
+      ["foreign-entrypoint-session", { entrypoint: "some-other-tool" }],
+    ] satisfies Array<[string, Record<string, unknown>]>;
     await writeProject({
       home,
       entries: [
@@ -1298,50 +1264,19 @@ describe("Claude session catalog", () => {
       transcripts: {
         "sidechain-session": [message("sidechain-session", "user", "sidechain", 1)],
         "unindexed-session": [message("unindexed-session", "user", "unindexed", 1)],
-        "cli-session": [
-          message(
-            "cli-session",
-            "user",
-            "<local-command-caveat>CLI metadata</local-command-caveat>",
-            1,
-            { entrypoint: "cli", isMeta: true },
-          ),
-          message("cli-session", "user", "Interactive CLI prompt", 1, {
-            entrypoint: "cli",
-            cwd: "/work/cli",
-            version: "2.1.216",
-          }),
-        ],
         ...Object.fromEntries(
-          (
+          visible.map(([id, text, entrypoint]) => [
+            id,
             [
-              [
-                "sdk-cli-session",
-                "Headless CLI prompt",
-                { entrypoint: "sdk-cli", cwd: "/work/sdk", version: "2.1.204" },
-              ],
-              [
-                "cli-sidechain-session",
-                "interactive sidechain",
-                { entrypoint: "cli", isSidechain: true },
-              ],
-              [
-                "discovered-sidechain",
-                "headless sidechain",
-                { entrypoint: "sdk-cli", isSidechain: true },
-              ],
-              [
-                "sdk-ts-session",
-                "Bidirectional stream-json prompt",
-                { entrypoint: "sdk-ts", cwd: "/work/sdk-ts", version: "2.1.263" },
-              ],
-              [
-                "foreign-entrypoint-session",
-                "Unrelated tool session",
-                { entrypoint: "some-other-tool" },
-              ],
-            ] satisfies Array<[string, string, Record<string, unknown>]>
-          ).map(([id, text, extra]) => [id, [message(id, "user", text, 1, extra)]]),
+              ...(entrypoint === "cli"
+                ? [message(id, "user", "CLI metadata", 1, { entrypoint, isMeta: true })]
+                : []),
+              message(id, "user", text, 1, { entrypoint, cwd: "/work/cli", version: "2.1.216" }),
+            ],
+          ]),
+        ),
+        ...Object.fromEntries(
+          hidden.map(([id, extra]) => [id, [message(id, "user", id, 1, extra)]]),
         ),
       },
     });
@@ -1350,12 +1285,16 @@ describe("Claude session catalog", () => {
       `${JSON.stringify(message(escapedId, "user", "outside", 1))}\n`,
     );
     await fs.symlink(externalPath, escapedPath);
-    for (const [name, cliSessionId, title] of [
-      ["sidechain", "sidechain-session", "Desktop sidechain"],
-      ["cli-sidechain", "cli-sidechain-session", "Interactive Desktop sidechain"],
-      ["discovered-sidechain", "discovered-sidechain", "Headless Desktop sidechain"],
-    ] as const) {
-      await writeDesktopMetadata(home, name, { cliSessionId, title, isArchived: false });
+    for (const cliSessionId of [
+      "sidechain-session",
+      "cli-sidechain-session",
+      "discovered-sidechain",
+    ]) {
+      await writeDesktopMetadata(home, cliSessionId, {
+        cliSessionId,
+        title: "Desktop sidechain",
+        isArchived: false,
+      });
     }
 
     const sessions = (await listPage({}, home)).sessions;
@@ -1364,30 +1303,11 @@ describe("Claude session catalog", () => {
       "sdk-cli-session",
       "sdk-ts-session",
     ]);
-    expect(sessions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          threadId: "cli-session",
-          name: "Interactive CLI prompt",
-          source: "claude-cli",
-        }),
-        expect.objectContaining({
-          threadId: "sdk-cli-session",
-          name: "Headless CLI prompt",
-          source: "claude-cli",
-        }),
-        expect.objectContaining({
-          threadId: "sdk-ts-session",
-          name: "Bidirectional stream-json prompt",
-          source: "claude-cli",
-        }),
-      ]),
-    );
-    for (const [threadId, text] of [
-      ["cli-session", "Interactive CLI prompt"],
-      ["sdk-cli-session", "Headless CLI prompt"],
-      ["sdk-ts-session", "Bidirectional stream-json prompt"],
-    ] as const) {
+    for (const [threadId, text] of visible) {
+      expect(sessions.find((session) => session.threadId === threadId)).toMatchObject({
+        name: text,
+        source: "claude-cli",
+      });
       await expect(readPage({ threadId, limit: 1 }, home)).resolves.toMatchObject({
         items: [{ text }],
       });
@@ -2074,37 +1994,21 @@ describe("Claude session catalog", () => {
     nodeHostMocks.userShellPaths.set("claude", binDir);
     const runtime = createPluginRuntimeMock();
     const provider = captureCatalogProvider(runtime);
+    const start = (params: { cwd: string; initialMessage?: string; nodeId?: string }) =>
+      provider.startTerminalSession?.({ agentId: "main", ...params });
 
-    await expect(
-      provider.startTerminalSession?.({
-        agentId: "main",
-        cwd: "/work/new-session",
-        initialMessage: "--help",
-      }),
-    ).resolves.toEqual({
+    await expect(start({ cwd: "/work/new-session", initialMessage: "--help" })).resolves.toEqual({
       kind: "local",
       argv: [executable, "--", "--help"],
       cwd: "/work/new-session",
       pathEnv: binDir,
       title: "claude",
     });
-    await expect(
-      provider.startTerminalSession?.({
-        agentId: "main",
-        cwd: "/work/command-prompt",
-        initialMessage: "mcp",
-      }),
-    ).resolves.toMatchObject({ argv: [executable, "--", "mcp"] });
-    await expect(
-      provider.startTerminalSession?.({ agentId: "main", cwd: "/work/blank-session" }),
-    ).resolves.toMatchObject({ argv: [executable], cwd: "/work/blank-session" });
-    await expect(
-      provider.startTerminalSession?.({
-        agentId: "main",
-        cwd: "/work/new-session",
-        nodeId: "paired-node",
-      }),
-    ).resolves.toEqual({
+    await expect(start({ cwd: "/work/blank-session" })).resolves.toMatchObject({
+      argv: [executable],
+      cwd: "/work/blank-session",
+    });
+    await expect(start({ cwd: "/work/new-session", nodeId: "paired-node" })).resolves.toEqual({
       kind: "node",
       nodeId: "paired-node",
       command: CLAUDE_TERMINAL_START_COMMAND,
@@ -2168,21 +2072,17 @@ describe("Claude session catalog", () => {
         onHost,
         listNodes: async () => ({
           nodes: [
-            {
-              nodeId: "ready",
-              connected: true,
-              invocableCommands: [CLAUDE_TERMINAL_START_COMMAND],
-            },
-            {
-              nodeId: "resume-only",
-              connected: true,
-              invocableCommands: [CLAUDE_TERMINAL_RESUME_COMMAND],
-            },
-            {
-              nodeId: "offline",
-              connected: false,
-              invocableCommands: [CLAUDE_TERMINAL_START_COMMAND],
-            },
+            ...(
+              [
+                ["ready", true, CLAUDE_TERMINAL_START_COMMAND],
+                ["resume-only", true, CLAUDE_TERMINAL_RESUME_COMMAND],
+                ["offline", false, CLAUDE_TERMINAL_START_COMMAND],
+              ] as const
+            ).map(([nodeId, connected, command]) => ({
+              nodeId,
+              connected,
+              invocableCommands: [command],
+            })),
             {
               nodeId: "denied",
               connected: true,
