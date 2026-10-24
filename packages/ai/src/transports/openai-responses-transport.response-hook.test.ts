@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { streamAzureOpenAIResponses } from "../providers/azure-openai-responses.js";
@@ -211,20 +212,6 @@ const fixtures = {
   },
 };
 
-async function settleWithin<T>(promise: Promise<T>, timeoutMs = 500): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("response hook lifecycle timed out")), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 let previousHost: ReturnType<typeof getAiTransportHost>;
 
 beforeEach(() => {
@@ -363,7 +350,7 @@ describe.each([fixtures.shared])("$name response hook", ({ createStream, install
         eventTypes.push(event.type);
       }
     })();
-    const result = await settleWithin(stream.result());
+    const result = await withTestTimeout(stream.result(), 500, "response hook lifecycle timed out");
     await consume;
 
     expect(onResponse).toHaveBeenCalledOnce();
@@ -410,7 +397,11 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
           code: "CALLER_ABORTED",
         });
         controller.abort(abortReason);
-        const result = await settleWithin(stream.result());
+        const result = await withTestTimeout(
+          stream.result(),
+          500,
+          "response hook lifecycle timed out",
+        );
         await consume;
         expect(result).toMatchObject({
           stopReason: "aborted",
@@ -533,7 +524,7 @@ describe("native ChatGPT SSE non-success response hooks", () => {
     );
     const onFirstEventTimeout = vi.fn();
 
-    const result = await settleWithin(
+    const result = await withTestTimeout(
       streamOpenAICodexResponses(chatGptModel, context, {
         apiKey: chatGptToken,
         transport: "sse",
@@ -541,6 +532,8 @@ describe("native ChatGPT SSE non-success response hooks", () => {
         onFirstEventTimeout,
         onResponse: () => new Promise<void>(() => {}),
       }).result(),
+      500,
+      "response hook lifecycle timed out",
     );
 
     expect(result.stopReason).toBe("error");

@@ -44,6 +44,8 @@ import {
 import * as dispatchHarness from "./dispatch-from-config.test-support.js";
 import {
   type ResolveInboundConversationParams,
+  createPluginBoundDiscordCtx,
+  mockPluginBoundDiscordBinding,
   dispatchReplyFromConfig,
   runWithReplyOperationLifecycleAdmission,
   setNoAbort,
@@ -764,14 +766,9 @@ describe("dispatchReplyFromConfig", () => {
       ]),
     );
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       data: {
         kind: "codex-app-server-session",
@@ -782,22 +779,11 @@ describe("dispatchReplyFromConfig", () => {
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
+    const ctx = createPluginBoundDiscordCtx("who are you", {
       OriginatingTo: "discord:channel:1481858418548412579",
       To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
       OwnerAllowFrom: ["user-9"],
       GatewayClientScopes: ["operator.write"],
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "who are you",
-      RawBody: "who are you",
-      Body: "who are you",
       MessageSid: "msg-claim-plugin-1",
       SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
@@ -872,16 +858,12 @@ describe("dispatchReplyFromConfig", () => {
       ]),
     );
     mockPluginBindingClaim(undefined, { pluginId: "test-plugin", receiveMessages: false });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-null-rejection",
       targetSessionKey: "plugin-binding:test:null-rejection",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:null-rejection",
-      },
       pluginId: "test-plugin",
       pluginRoot: "/plugins/test-plugin",
+      conversationId: "channel:null-rejection",
     });
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -1396,16 +1378,12 @@ describe("dispatchReplyFromConfig", () => {
       },
       { pluginLoaded: false, receiveMessages: false },
     );
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-interrupted-fallback",
       targetSessionKey: "plugin-binding:test:interrupted-fallback",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:interrupted-fallback",
-      },
       pluginId: "missing-plugin",
       pluginRoot: "/tmp/missing-plugin",
+      conversationId: "channel:interrupted-fallback",
     });
     const sessionKey = "agent:main:discord:channel:interrupted-fallback";
     const sessionId = "interrupted-fallback-session";
@@ -1834,14 +1812,9 @@ describe("dispatchReplyFromConfig", () => {
       status: "handled",
       result: { handled: true, reply: { text: "should not send" } },
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-aborted-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/workspace/openclaw-app-server",
       data: {
         kind: "codex-app-server-session",
@@ -1854,20 +1827,9 @@ describe("dispatchReplyFromConfig", () => {
     abortController.abort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
+    const ctx = createPluginBoundDiscordCtx("who are you", {
       OriginatingTo: "discord:channel:1481858418548412579",
       To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "who are you",
-      RawBody: "who are you",
-      Body: "who are you",
       MessageSid: "msg-claim-plugin-aborted-1",
       SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
@@ -1909,14 +1871,9 @@ describe("dispatchReplyFromConfig", () => {
       ),
     ).toEqual({ ok: true });
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-command-escape-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       detachHint: "/codex detach",
       data: {
@@ -1928,21 +1885,10 @@ describe("dispatchReplyFromConfig", () => {
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
+    const ctx = createPluginBoundDiscordCtx("/codex detach", {
       OriginatingTo: "discord:channel:1481858418548412579",
       To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "/codex detach",
       BodyForCommands: "/codex detach",
-      RawBody: "/codex detach",
-      Body: "/codex detach",
       MessageSid: "msg-claim-plugin-command-escape",
       SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
@@ -1974,33 +1920,17 @@ describe("dispatchReplyFromConfig", () => {
   it("keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin", async () => {
     setNoAbort();
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-command-unknown-slash",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
+    const ctx = createPluginBoundDiscordCtx("/notes keep this with the bound plugin", {
       OriginatingTo: "discord:channel:1481858418548412579",
       To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
       CommandSource: "text",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "/notes keep this with the bound plugin",
-      RawBody: "/notes keep this with the bound plugin",
-      Body: "/notes keep this with the bound plugin",
       MessageSid: "msg-claim-plugin-command-unknown-slash",
       SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
