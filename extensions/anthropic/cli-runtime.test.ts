@@ -48,6 +48,9 @@ const denied = (): CliBackendToolPermissionResult => ({
   behavior: "deny",
   message: "Fixture denied.",
 });
+const allowInput: NonNullable<CliBackendExecuteContext["requestToolPermission"]> = async ({
+  toolInput,
+}) => ({ behavior: "allow", updatedInput: toolInput });
 const permission = (
   handler: CliBackendExecuteContext["requestToolPermission"] = async () => denied(),
 ) => vi.fn(handler);
@@ -90,6 +93,34 @@ const releaseFixture = (context: CliBackendExecuteContext, name: string) =>
 function expectRetired(context: CliBackendExecuteContext, pid: number) {
   expect(context.liveSession?.current()).toBeUndefined();
   expect(() => process.kill(pid, 0)).toThrow();
+}
+
+function expectFinalResults(records: Record<string, unknown>[], count?: number) {
+  const results = records.filter((record) => record.type === "result");
+  if (count !== undefined) {
+    expect(results).toHaveLength(count);
+  }
+  for (const interim of results.slice(0, -1)) {
+    expect(interim).toHaveProperty("openclaw_interim_result", true);
+  }
+  expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
+}
+
+async function expectWarmResume(
+  context: CliBackendExecuteContext,
+  detail: Record<string, unknown>,
+  overrides: Partial<CliBackendExecuteContext> = {},
+) {
+  const handle = context.liveSession?.current();
+  expect(handle?.isIdle()).toBe(true);
+  expect(
+    await runDetail(context, { prompt: "next input", useResume: true, ...overrides }),
+  ).toMatchObject({
+    pid: detail.pid,
+    turn: 2,
+    user: "next input",
+  });
+  expect(context.liveSession?.current()).toBe(handle);
 }
 
 async function startInjection(scenario: string, overrides: Partial<CliBackendExecuteContext> = {}) {
@@ -261,24 +292,17 @@ describe("Claude native stdio boundary", () => {
     } finally {
       release.resolve(decision);
     }
-    expect(results).toHaveLength(
+    expectFinalResults(
+      results,
       scenario.startsWith("background-parent-stopped")
         ? 4
         : scenario === "background-success" || scenario.startsWith("background-agent-foreground")
           ? 2
           : 3,
     );
-    for (const result of results.slice(0, -1)) {
-      expect(result).toHaveProperty("openclaw_interim_result", true);
-    }
-    expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
     const detail = resultDetail(results);
     expect(detail.finalBackgroundAnswer).toBe(true);
-    const handle = liveSession.current();
-    expect(handle?.isIdle()).toBe(true);
-    const next = resultDetail(await collect({ ...context, prompt: "next input", useResume: true }));
-    expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
-    expect(liveSession.current()).toBe(handle);
+    await expectWarmResume(context, detail);
   });
 
   it.each(["late-child", "late-child-run-ids"])(
@@ -293,12 +317,8 @@ describe("Claude native stdio boundary", () => {
       }
       // The old child resumes its Agent during the warm input and that Agent's deferred
       // answer arrives during the next one; neither settles nor holds a later input.
-      const results = turns.map((records) => records.filter((record) => record.type === "result"));
-      expect(results.map((list) => list.length)).toEqual([2, 1, scenario.endsWith("ids") ? 3 : 2]);
-      for (const list of results) {
-        expect(list.slice(0, -1).every((result) => result.openclaw_interim_result)).toBe(true);
-        expect(list.at(-1)).not.toHaveProperty("openclaw_interim_result");
-      }
+      const counts = [2, 1, scenario.endsWith("ids") ? 3 : 2];
+      turns.forEach((records, index) => expectFinalResults(records, counts[index]));
       const [first, warm, next] = turns.map((records) => resultDetail(records));
       if (!first) {
         throw new Error("Expected a first-turn result.");
@@ -343,26 +363,16 @@ describe("Claude native stdio boundary", () => {
         await releaseFixture(context, "background");
       }
       const records = await withinTest(running, signal);
-      if (scenario === "background-bash-overlap") {
-        expect(records.filter((record) => record.type === "result")).toHaveLength(3);
-      }
+      expectFinalResults(records, scenario === "background-bash-overlap" ? 3 : undefined);
       const detail = resultDetail(records);
       expect(detail.finalBackgroundAnswer).toBe(true);
-      expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
-      for (const interim of records.filter((record) => record.type === "result").slice(0, -1)) {
-        expect(interim).toHaveProperty("openclaw_interim_result", true);
-      }
       if (!replayReceipts) {
         expect(records).not.toContainEqual(
           expect.objectContaining({ type: "user", isReplay: true }),
         );
-        expect(context.liveSession?.current()?.isIdle()).toBe(true);
-        const next = await runDetail(context, {
-          prompt: "next input",
-          useResume: true,
+        await expectWarmResume(context, detail, {
           requestToolPermission: async () => denied(),
         });
-        expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
       }
       // Host policy, not the stale-run guard, answered the notification turn's hook.
       expect(context.requestToolPermission).toHaveBeenCalledWith(
@@ -409,12 +419,7 @@ describe("Claude native stdio boundary", () => {
         release.resolve(decision);
       }
       const records = await withinTest(running, signal);
-      const results = records.filter((record) => record.type === "result");
-      expect(results).toHaveLength(scenario.endsWith("-overlap") ? 2 : 1);
-      if (scenario.endsWith("-overlap")) {
-        expect(results[0]).toHaveProperty("openclaw_interim_result", true);
-      }
-      expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      expectFinalResults(records, scenario.endsWith("-overlap") ? 2 : 1);
       expect(
         records
           .filter((record) => record.subtype === "task_started")
@@ -423,13 +428,9 @@ describe("Claude native stdio boundary", () => {
       expect(records.some((record) => record.type === "user" && record.isReplay === true)).toBe(
         false,
       );
-      expect(resultDetail(records).capturedShapeAnswered).toBe(true);
       const detail = resultDetail(records);
-      expect(context.liveSession?.current()?.isIdle()).toBe(true);
-      const next = resultDetail(
-        await collect({ ...context, prompt: "next input", useResume: true }),
-      );
-      expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
+      expect(detail.capturedShapeAnswered).toBe(true);
+      await expectWarmResume(context, detail);
     },
   );
 
@@ -444,45 +445,28 @@ describe("Claude native stdio boundary", () => {
       const liveSession = createLiveSession();
       const context = await createContext(scenario, {
         liveSession,
-        requestToolPermission: async ({ toolInput }) => ({
-          behavior: "allow",
-          updatedInput: toolInput,
-        }),
+        requestToolPermission: allowInput,
       });
       // Native sends nothing after this result; holding it would wait for the no-output watchdog.
       const records = await withinTest(collect(context), signal);
-      const results = records.filter((record) => record.type === "result");
-      expect(results).toHaveLength(1);
-      expect(results[0]).not.toHaveProperty("openclaw_interim_result");
+      expectFinalResults(records, 1);
       expect(records.at(-2)).toMatchObject({
         type: "assistant",
         message: { stop_reason: "end_turn" },
       });
       const detail = resultDetail(records);
       expect(detail).toMatchObject({ stoppedBashFinal: true, turn: 1 });
-      const handle = liveSession.current();
-      expect(handle?.isIdle()).toBe(true);
-      const next = resultDetail(
-        await collect({ ...context, prompt: "next input", useResume: true }),
-      );
-      expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
-      expect(liveSession.current()).toBe(handle);
+      await expectWarmResume(context, detail);
     },
   );
 
   it.each([false, true])("tracks first Bash (explicit: %s)", async (explicit) => {
     const context = await createContext("background-bash-first-seen", {
-      requestToolPermission: async ({ toolInput }) => ({
-        behavior: "allow",
-        updatedInput: toolInput,
-      }),
+      requestToolPermission: allowInput,
     });
     context.env.CLAUDE_FIXTURE_EXPLICIT_BACKGROUND = explicit ? "1" : "0";
     const records = await collect(context);
-    const results = records.filter((record) => record.type === "result");
-    expect(results).toHaveLength(explicit ? 1 : 2);
-    expect(results[0]?.openclaw_interim_result).toBe(explicit ? undefined : true);
-    expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
+    expectFinalResults(records, explicit ? 1 : 2);
     expect(context.liveSession?.current()?.isIdle()).toBe(true);
     if (explicit) {
       const first = resultDetail(records);
@@ -577,31 +561,39 @@ describe("Claude native stdio boundary", () => {
     },
   );
 
-  it("denies an awaited hook decision after authority revocation", async () => {
-    let active = true;
-    const approvalStarted = createDeferred<void>();
-    const approval = createDeferred<CliBackendToolPermissionResult>();
-    const context = await createContext("revoked-approval", {
-      assertCurrent: () => {
-        if (!active) {
-          throw new Error("Synthetic owner revoked.");
-        }
-      },
-      requestToolPermission: () => {
-        approvalStarted.resolve();
-        return approval.promise;
-      },
-    });
-    const running = collect(context);
-    await approvalStarted.promise;
-    active = false;
-    approval.resolve({ behavior: "allow", updatedInput: { file_path: "approved.txt" } });
-    const detail = resultDetail(await running);
-    expect(detail.hookDecision).toMatchObject({
-      hookSpecificOutput: { permissionDecision: "deny" },
-    });
-    expect(detail.hookDecision).not.toHaveProperty("hookSpecificOutput.updatedInput");
-  });
+  it.each([
+    { check: "assertCurrent", decision: "deny" },
+    { check: "assertPrivateInputCurrent", decision: "allow" },
+  ] as const)(
+    "settles awaited hooks after $check revocation as $decision",
+    async ({ check, decision }) => {
+      let active = true;
+      const approvalStarted = createDeferred<void>();
+      const approval = createDeferred<CliBackendToolPermissionResult>();
+      const context = await createContext("revoked-approval", {
+        [check]: () => {
+          if (!active) {
+            throw new Error("Synthetic owner revoked.");
+          }
+        },
+        requestToolPermission: () => {
+          approvalStarted.resolve();
+          return approval.promise;
+        },
+      });
+      const running = collect(context);
+      await approvalStarted.promise;
+      active = false;
+      approval.resolve({ behavior: "allow", updatedInput: { file_path: "approved.txt" } });
+      const detail = resultDetail(await running);
+      expect(detail.hookDecision).toMatchObject({
+        hookSpecificOutput: { permissionDecision: decision },
+      });
+      if (decision === "deny") {
+        expect(detail.hookDecision).not.toHaveProperty("hookSpecificOutput.updatedInput");
+      }
+    },
+  );
 
   it("preserves native controls and sends private system instructions only over stdin", async () => {
     const context = await createContext("normal", {
@@ -642,10 +634,7 @@ describe("Claude native stdio boundary", () => {
 
   it("ignores replayed records until the current input UUID starts", async () => {
     const context = await createContext("input-lifecycle", {
-      requestToolPermission: permission(async ({ toolInput }) => ({
-        behavior: "allow",
-        updatedInput: toolInput,
-      })),
+      requestToolPermission: permission(allowInput),
     });
     for (const prompt of ["first input", "second input"]) {
       const records = await collect(context, {
@@ -697,17 +686,12 @@ describe("Claude native stdio boundary", () => {
       await injection.queueMessage(input, withCurrent);
       expect(withCurrent).toHaveBeenCalledOnce();
       const records = await running;
-      const resultRecords = records.filter((record) => record.type === "result");
       const tagged = records.filter((record) => record.user_message_uuid !== undefined);
       expect(tagged.map((record) => record.type)).toEqual(
         expect.arrayContaining(["stream_event", "assistant", "result"]),
       );
       expect(new Set(tagged.map((record) => record.user_message_uuid)).size).toBe(1);
-      expect(resultRecords).toHaveLength(results);
-      expect(resultRecords.map((record) => record.openclaw_interim_result === true)).toEqual([
-        ...Array.from({ length: results - 1 }, () => true),
-        false,
-      ]);
+      expectFinalResults(records, results);
       const detail = resultDetail(records);
       expect(detail).toMatchObject({ user: input, privateContext: PRIVATE });
       if (notificationReplay) {
@@ -759,10 +743,7 @@ describe("Claude native stdio boundary", () => {
       } else {
         await expect(receipt).rejects.toThrow(`Claude CLI ${state} the injected input.`);
       }
-      const records = await running;
-      const results = records.filter((record) => record.type === "result");
-      expect(results).toHaveLength(1);
-      expect(results[0]?.openclaw_interim_result).toBeUndefined();
+      expectFinalResults(await running, 1);
     },
   );
 
@@ -1007,30 +988,5 @@ describe("Claude native stdio private-input check", () => {
     const detail = await runDetail(context);
     expect(detail).toMatchObject({ turn: 1, user: "Remember orange." });
     expect(detail.privateContext).toBeUndefined();
-  });
-
-  it("keeps an awaited tool hook decision independent of the private-input check", async () => {
-    let loginHolds = true;
-    const approvalStarted = createDeferred<void>();
-    const approval = createDeferred<CliBackendToolPermissionResult>();
-    const context = await createContext("revoked-approval", {
-      assertPrivateInputCurrent: () => {
-        if (!loginHolds) {
-          throw new Error("A tool hook decision carries no saved turn context.");
-        }
-      },
-      requestToolPermission: () => {
-        approvalStarted.resolve();
-        return approval.promise;
-      },
-    });
-    const running = collect(context);
-    await approvalStarted.promise;
-    loginHolds = false;
-    approval.resolve({ behavior: "allow", updatedInput: { file_path: "approved.txt" } });
-    const detail = resultDetail(await running);
-    expect(detail.hookDecision).toMatchObject({
-      hookSpecificOutput: { permissionDecision: "allow" },
-    });
   });
 });
