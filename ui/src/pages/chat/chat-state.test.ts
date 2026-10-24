@@ -68,6 +68,53 @@ import { createHost as createToolStreamHost } from "./tool-stream.test-helpers.t
 
 const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
 
+function textMessage(text: string, role = "assistant") {
+  return { role, content: [{ type: "text", text }] };
+}
+
+function chatEvent(
+  state: ChatPageHost,
+  runId: string,
+  phase: string,
+  text: string,
+  extra: Record<string, unknown> = {},
+) {
+  emitGatewayEvent(state, "chat", {
+    sessionKey: state.sessionKey,
+    runId,
+    state: phase,
+    message: textMessage(text),
+    ...extra,
+  });
+}
+
+function agentEvent(
+  state: ChatPageHost,
+  runId: string,
+  seq: number,
+  stream: string,
+  data: Record<string, unknown>,
+  ts = seq,
+) {
+  emitGatewayEvent(state, "agent", { sessionKey: state.sessionKey, runId, seq, ts, stream, data });
+}
+
+function persistMessage(
+  state: ChatPageHost,
+  messageId: string,
+  messageSeq: number,
+  message: unknown,
+  extra: Record<string, unknown> = {},
+) {
+  emitGatewayEvent(state, "session.message", {
+    sessionKey: state.sessionKey,
+    messageId,
+    messageSeq,
+    message,
+    ...extra,
+  });
+}
+
 function captureAnimationFrames() {
   let nextFrame = 0;
   const frames = new Map<number, FrameRequestCallback>();
@@ -109,56 +156,38 @@ describe("canonical session message recovery", () => {
       const partial = text.slice(0, text.indexOf(" will report"));
       const { state } = createSessionEventState({ chatRunId: runId });
       const delta = (value: string, replace = false) =>
-        emitGatewayEvent(state, "chat", {
-          sessionKey: state.sessionKey,
-          runId,
-          state: "delta",
-          ...(replace ? { deltaText: value, replace: true } : {}),
-          message: { role: "assistant", content: [{ type: "text", text: value }] },
-        });
+        chatEvent(state, runId, "delta", value, replace ? { deltaText: value, replace: true } : {});
       const item = (seq: number) =>
-        emitGatewayEvent(state, "agent", {
-          sessionKey: state.sessionKey,
-          runId,
-          seq,
-          ts: seq,
-          stream: "item",
-          data: { kind: "preamble", phase: "end", itemId: "item-a", progressText: text },
+        agentEvent(state, runId, seq, "item", {
+          kind: "preamble",
+          phase: "end",
+          itemId: "item-a",
+          progressText: text,
         });
       const persist = () =>
-        emitGatewayEvent(state, "session.message", {
-          sessionKey: state.sessionKey,
-          sessionId: state.currentSessionId,
-          runId,
-          runActive: true,
-          messageId: "saved-commentary",
-          messageSeq: 1,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text }],
+        persistMessage(
+          state,
+          "saved-commentary",
+          1,
+          {
+            ...textMessage(text),
             openclawStreamFallback: { source: "segment", itemId: "item-a" },
             __openclaw: { id: "saved-commentary", seq: 1, runId },
           },
-        });
+          { sessionId: state.currentSessionId, runId, runActive: true },
+        );
       const visible = () => renderedTranscript(state).filter((entry) => entry.text);
       const single = [{ role: "assistant", text }];
       if (nestedTools) {
         for (const [index, value] of ["I am", partial].entries()) {
           delta(value);
           expect(visible()).toEqual([{ role: "assistant", text: value }]);
-          emitGatewayEvent(state, "agent", {
-            sessionKey: state.sessionKey,
-            runId,
-            seq: index + 1,
-            ts: index + 1,
-            stream: "tool",
-            data: {
-              phase: "start",
-              toolCallId: `earlier-${index}`,
-              parentToolCallId: "outer",
-              name: "read",
-              args: {},
-            },
+          agentEvent(state, runId, index + 1, "tool", {
+            phase: "start",
+            toolCallId: `earlier-${index}`,
+            parentToolCallId: "outer",
+            name: "read",
+            args: {},
           });
           expect(visible()).toEqual([{ role: "assistant", text: value }]);
         }
@@ -173,13 +202,11 @@ describe("canonical session message recovery", () => {
         persist();
         expect(visible()).toEqual(single);
       }
-      emitGatewayEvent(state, "agent", {
-        sessionKey: state.sessionKey,
-        runId,
-        seq: 2,
-        ts: 2,
-        stream: "tool",
-        data: { phase: "result", toolCallId: "call-a", name: "list_files", result: {} },
+      agentEvent(state, runId, 2, "tool", {
+        phase: "result",
+        toolCallId: "call-a",
+        name: "list_files",
+        result: {},
       });
       expect(visible()).toEqual(single);
       if (persistence === "after tool") {
@@ -217,30 +244,28 @@ describe("canonical session message recovery", () => {
           message: { role: "assistant", content: text },
         });
       const tool = (id: string) =>
-        emitGatewayEvent(state, "agent", {
-          sessionKey: state.sessionKey,
+        agentEvent(
+          state,
           runId,
-          seq: ++seq,
-          ts: seq,
-          stream: "tool",
-          data: { phase: "start", toolCallId: id, name: "read", args: {} },
-        });
+          ++seq,
+          "tool",
+          { phase: "start", toolCallId: id, name: "read", args: {} },
+          seq,
+        );
       const first = "First observation.";
       const persist = () => {
         delta("", true);
-        emitGatewayEvent(state, "session.message", {
-          sessionKey: state.sessionKey,
-          sessionId: state.currentSessionId,
-          runId,
-          runActive: true,
-          messageId: "saved-first",
-          messageSeq: 1,
-          message: {
+        persistMessage(
+          state,
+          "saved-first",
+          1,
+          {
             role: "assistant",
             content: first,
             __openclaw: { id: "saved-first", seq: 1, runId },
           },
-        });
+          { sessionId: state.currentSessionId, runId, runActive: true },
+        );
       };
       delta(first);
       if (persistFirst) {
@@ -373,15 +398,9 @@ describe("canonical session message recovery", () => {
         externalId: "source-local-user",
         ...(seq === undefined ? {} : { seq }),
       };
-      emitGatewayEvent(state, "session.message", {
-        sessionKey: state.sessionKey,
-        messageId: "conflicting-native-envelope",
-        messageSeq: 90,
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "Imported prompt" }],
-          __openclaw: identity,
-        },
+      persistMessage(state, "conflicting-native-envelope", 90, {
+        ...textMessage("Imported prompt", "user"),
+        __openclaw: identity,
       });
       if (seq === undefined) {
         expect(state.chatMessages).toEqual([]);
@@ -413,8 +432,7 @@ describe("canonical session message recovery", () => {
           messageId: "commentary-message-1",
           messageSeq: 1,
           message: {
-            role: "assistant",
-            content: [{ type: "text", text }],
+            ...textMessage(text),
             idempotencyKey: `codex-app-server:thread:turn:commentary:${itemId}`,
             __openclaw: {
               mirrorOrigin: "codex-app-server",
@@ -509,8 +527,7 @@ describe("canonical session message recovery", () => {
         messageId: "terminal-message",
         messageSeq: 2,
         message: {
-          role: "assistant",
-          content: [{ type: "text", text: finalText }],
+          ...textMessage(finalText),
           timestamp: 2,
         },
       },
@@ -559,24 +576,11 @@ describe("canonical session message recovery", () => {
       let agentSeq = 0;
       let persisted = false;
       const delta = (snapshot: string, deltaText: string) => {
-        emitGatewayEvent(state, "agent", {
-          sessionKey: state.sessionKey,
-          runId,
-          seq: ++agentSeq,
-          ts: 1,
-          stream: "assistant",
-          data: { text: snapshot, delta: deltaText },
-        });
+        agentEvent(state, runId, ++agentSeq, "assistant", { text: snapshot, delta: deltaText }, 1);
         if (persisted) {
           return;
         }
-        emitGatewayEvent(state, "chat", {
-          sessionKey: state.sessionKey,
-          runId,
-          state: "delta",
-          deltaText,
-          message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
-        });
+        chatEvent(state, runId, "delta", snapshot, { deltaText });
       };
       const persist = () => {
         emitGatewayEvent(state, "chat", {
@@ -587,18 +591,13 @@ describe("canonical session message recovery", () => {
           replace: true,
           message: { role: "assistant", content: [] },
         });
-        emitGatewayEvent(state, "session.message", {
-          sessionKey: state.sessionKey,
-          runId,
-          hasActiveRun: true,
-          messageId: "durable-answer",
-          messageSeq: 2,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text }],
-            __openclaw: { id: "durable-answer", seq: 2, runId },
-          },
-        });
+        persistMessage(
+          state,
+          "durable-answer",
+          2,
+          { ...textMessage(text), __openclaw: { id: "durable-answer", seq: 2, runId } },
+          { runId, hasActiveRun: true },
+        );
         persisted = true;
       };
       if (persistence === "before-stream") {
@@ -613,24 +612,17 @@ describe("canonical session message recovery", () => {
         persist();
       }
       if (persistence === "after-tool") {
-        emitGatewayEvent(state, "agent", {
-          sessionKey: state.sessionKey,
+        agentEvent(
+          state,
           runId,
-          seq: ++agentSeq,
-          ts: 2,
-          stream: "tool",
-          data: { phase: "result", toolCallId: "workspace-tool", name: "read" },
-        });
+          ++agentSeq,
+          "tool",
+          { phase: "result", toolCallId: "workspace-tool", name: "read" },
+          2,
+        );
         persist();
       }
-      emitGatewayEvent(state, "agent", {
-        sessionKey: state.sessionKey,
-        runId,
-        seq: ++agentSeq,
-        ts: 3,
-        stream: "lifecycle",
-        data: { phase: "finishing" },
-      });
+      agentEvent(state, runId, ++agentSeq, "lifecycle", { phase: "finishing" }, 3);
       expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
         { role: "assistant", text },
       ]);
@@ -642,13 +634,13 @@ describe("canonical session message recovery", () => {
       expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
         { role: "assistant", text },
       ]);
-      emitGatewayEvent(state, "chat", {
-        sessionKey: state.sessionKey,
+      chatEvent(
+        state,
         runId,
-        state: terminal,
-        ...(terminal === "error" ? { errorMessage: "Workspace reconciliation failed." } : {}),
-        message: { role: "assistant", content: [{ type: "text", text }] },
-      });
+        terminal,
+        text,
+        terminal === "error" ? { errorMessage: "Workspace reconciliation failed." } : {},
+      );
       delta(text, text);
       expect(state.chatRunId).toBeNull();
       expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
@@ -682,8 +674,7 @@ describe("canonical session message recovery", () => {
         __openclaw: { id: "prompt", seq: 1 },
       };
       const savedCommentary = {
-        role: "assistant",
-        content: [{ type: "text", text: commentary }],
+        ...textMessage(commentary),
         openclawStreamFallback: { source: "segment", itemId: "commentary-1" },
         __openclaw: { id: "commentary-and-tool", seq: 2, runId },
       };
@@ -693,8 +684,7 @@ describe("canonical session message recovery", () => {
         __openclaw: { id: "commentary-and-tool", seq: 2, runId },
       };
       const savedAnswer = {
-        role: "assistant",
-        content: [{ type: "text", text: answer }],
+        ...textMessage(answer),
         __openclaw: { id: "answer", seq: secondTool ? 6 : 4, runId },
       };
       const { state, request } = createSessionEventState({});
@@ -799,46 +789,30 @@ describe("canonical session message recovery", () => {
           lastRunId: runId,
         },
       });
-      emitGatewayEvent(state, "agent", {
-        sessionKey: state.sessionKey,
-        runId,
-        seq: 3,
-        ts: 3,
-        stream: "tool",
-        data: {
-          phase: "result",
-          name: "read",
-          toolCallId: "read-1",
-          result: savedResult,
-          isError: false,
-        },
+      agentEvent(state, runId, 3, "tool", {
+        phase: "result",
+        name: "read",
+        toolCallId: "read-1",
+        result: savedResult,
+        isError: false,
       });
       for (const [index, text] of [partial, answer].entries()) {
-        emitGatewayEvent(state, "agent", {
-          sessionKey: state.sessionKey,
-          runId,
-          seq: index + 4,
-          ts: index + 4,
-          stream: "assistant",
-          data: { text, delta: index === 0 ? partial : answer.slice(partial.length) },
+        agentEvent(state, runId, index + 4, "assistant", {
+          text,
+          delta: index === 0 ? partial : answer.slice(partial.length),
         });
-        emitGatewayEvent(state, "chat", {
-          sessionKey: state.sessionKey,
-          runId,
+        chatEvent(state, runId, "delta", text, {
           seq: index + 4,
-          state: "delta",
           deltaText: index === 0 ? partial : answer.slice(partial.length),
-          message: { role: "assistant", content: [{ type: "text", text }] },
         });
         if (secondTool && index === 0) {
           for (const phase of ["start", "result"]) {
-            emitGatewayEvent(state, "agent", {
-              sessionKey: state.sessionKey,
+            agentEvent(
+              state,
               runId,
-              seq: phase === "start" ? 4 : 5,
-              ts: 5,
-              stream: "tool",
-              data: {
+              phase === "start" ? 4 : 5,
+              "tool",
+              {
                 phase,
                 name: "read",
                 toolCallId: "read-2",
@@ -846,7 +820,8 @@ describe("canonical session message recovery", () => {
                   ? { args: { path: "more-files" } }
                   : { result: nextToolResult, isError: false }),
               },
-            });
+              5,
+            );
           }
         }
       }
@@ -862,19 +837,9 @@ describe("canonical session message recovery", () => {
         emitGatewayEvent(state, "session.message", persistedPayload(savedAnswer));
       }
       for (const [index, phase] of ["finishing", "end"].entries()) {
-        emitGatewayEvent(state, "agent", {
-          sessionKey: state.sessionKey,
-          runId,
-          seq: index + 6,
-          ts: index + 6,
-          stream: "lifecycle",
-          data: { phase },
-        });
+        agentEvent(state, runId, index + 6, "lifecycle", { phase });
       }
-      const terminalMessage = {
-        role: "assistant",
-        content: [{ type: "text", text: answer }],
-      };
+      const terminalMessage = textMessage(answer);
       emitGatewayEvent(state, "chat", {
         sessionKey: state.sessionKey,
         runId,
@@ -914,41 +879,32 @@ describe("canonical session message recovery", () => {
       chatRunId: runId,
     });
     for (const itemId of ["commentary-one", "commentary-two"]) {
-      emitGatewayEvent(state, "agent", {
-        sessionKey: state.sessionKey,
-        runId,
-        seq: 1,
-        ts: 1,
-        stream: "item",
-        data: { kind: "preamble", itemId, progressText: text },
-      });
+      agentEvent(state, runId, 1, "item", { kind: "preamble", itemId, progressText: text });
     }
     const stream = (snapshot: string, replace = false) =>
-      emitGatewayEvent(state, "chat", {
-        sessionKey: state.sessionKey,
+      chatEvent(
+        state,
         runId,
-        state: "delta",
-        ...(replace ? { deltaText: snapshot, replace: true } : {}),
-        message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
-      });
+        "delta",
+        snapshot,
+        replace ? { deltaText: snapshot, replace: true } : {},
+      );
     const persist = (id: string, seq: number, itemId?: string) => {
       if (!itemId) {
         stream("", true);
       }
-      emitGatewayEvent(state, "session.message", {
-        sessionKey: state.sessionKey,
-        runId,
-        hasActiveRun: true,
-        messageId: id,
-        messageSeq: seq,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text }],
+      persistMessage(
+        state,
+        id,
+        seq,
+        {
+          ...textMessage(text),
           ...(itemId
             ? { openclawStreamFallback: { itemId, source: "segment", replacementText: text } }
             : {}),
         },
-      });
+        { runId, hasActiveRun: true },
+      );
     };
     persist("durable-commentary", 1, "commentary-one");
     stream(text);
@@ -969,8 +925,7 @@ describe("canonical session message recovery", () => {
       const activeRunId = "active-run";
       const steerRunId = "steer-request";
       const originalPrompt = {
-        role: "user",
-        content: [{ type: "text", text: "Original prompt" }],
+        ...textMessage("Original prompt", "user"),
         timestamp: 100,
         __openclaw: {
           id: "original-user",
@@ -983,16 +938,7 @@ describe("canonical session message recovery", () => {
         chatMessages: [originalPrompt],
         chatRunId: activeRunId,
       });
-      emitGatewayEvent(state, "chat", {
-        sessionKey: state.sessionKey,
-        runId: activeRunId,
-        state: "delta",
-        deltaText: "Before steer.",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Before steer." }],
-        },
-      });
+      chatEvent(state, activeRunId, "delta", "Before steer.", { deltaText: "Before steer." });
       expect(renderedTranscript(state)).toEqual([
         { role: "user", text: "Original prompt" },
         { role: "assistant", text: "Before steer." },
@@ -1009,26 +955,23 @@ describe("canonical session message recovery", () => {
           replace: true,
           message: { role: "assistant", content: [] },
         });
-        emitGatewayEvent(state, "session.message", {
-          sessionKey: state.sessionKey,
-          runId: activeRunId,
-          hasActiveRun: true,
-          messageId: "saved-before-steer",
-          messageSeq: 2,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "Before steer." }],
+        persistMessage(
+          state,
+          "saved-before-steer",
+          2,
+          {
+            ...textMessage("Before steer."),
             timestamp: 101,
             __openclaw: { id: "saved-before-steer", seq: 2, runId: activeRunId },
           },
-        });
+          { runId: activeRunId, hasActiveRun: true },
+        );
       }
       reduceChatSessionProjection(state, {
         type: "sendPending",
         runId: steerRunId,
         message: {
-          role: "user",
-          content: [{ type: "text", text: "Steer prompt" }],
+          ...textMessage("Steer prompt", "user"),
           timestamp: 50,
           __openclaw: { idempotencyKey: `${steerRunId}:user` },
         },
@@ -1045,8 +988,7 @@ describe("canonical session message recovery", () => {
           messageId: "persisted-steer-user",
           messageSeq: laterCommentary ? 3 : 2,
           message: {
-            role: "user",
-            content: [{ type: "text", text: "Steer prompt" }],
+            ...textMessage("Steer prompt", "user"),
             timestamp: 50,
             __openclaw: {
               id: "persisted-steer-user",
@@ -1063,21 +1005,13 @@ describe("canonical session message recovery", () => {
       expect(
         state.chatMessages.filter((message) => extractText(message) === "Steer prompt"),
       ).toHaveLength(1);
-      emitGatewayEvent(state, "chat", {
-        sessionKey: state.sessionKey,
-        runId: activeRunId,
-        state: "delta",
-        deltaText: laterCommentary ? "After steer." : " After steer.",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: laterCommentary ? "After steer." : "Before steer. After steer.",
-            },
-          ],
-        },
-      });
+      chatEvent(
+        state,
+        activeRunId,
+        "delta",
+        laterCommentary ? "After steer." : "Before steer. After steer.",
+        { deltaText: laterCommentary ? "After steer." : " After steer." },
+      );
 
       expect(renderedTranscript(state)).toEqual([
         { role: "user", text: "Original prompt" },
@@ -1101,39 +1035,34 @@ describe("canonical session message recovery", () => {
           replace: true,
           message: { role: "assistant", content: [] },
         });
-        emitGatewayEvent(state, "agent", {
-          sessionKey: state.sessionKey,
-          runId: activeRunId,
-          seq: 1,
-          ts: 101,
-          stream: "item",
-          data: {
+        agentEvent(
+          state,
+          activeRunId,
+          1,
+          "item",
+          {
             kind: "preamble",
             itemId: "after-steer-commentary",
             progressText: "After steer.",
           },
-        });
-        emitGatewayEvent(state, "session.message", {
-          sessionKey: state.sessionKey,
-          runId: activeRunId,
-          hasActiveRun: true,
-          messageId: "saved-commentary",
-          messageSeq: 4,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "After steer." }],
+          101,
+        );
+        persistMessage(
+          state,
+          "saved-commentary",
+          4,
+          {
+            ...textMessage("After steer."),
             openclawStreamFallback: { source: "segment", itemId: "after-steer-commentary" },
             __openclaw: { id: "saved-commentary", seq: 4, runId: activeRunId },
           },
-        });
+          { runId: activeRunId, hasActiveRun: true },
+        );
       }
       const terminalText = laterCommentary
         ? "Before steer. Final unseen suffix."
         : "Before steer. After steer. Final unseen suffix.";
-      const terminalMessage = {
-        role: "assistant",
-        content: [{ type: "text", text: terminalText }],
-      };
+      const terminalMessage = textMessage(terminalText);
       emitGatewayEvent(state, "chat", {
         sessionKey: state.sessionKey,
         runId: activeRunId,
@@ -1188,13 +1117,11 @@ describe("canonical session message recovery", () => {
     const replyText = "Here is the answer.";
     const persistedReplyIdentity = { id: "persisted-reply", seq: 2 };
     const prompt = {
-      role: "user",
-      content: [{ type: "text", text: "Original prompt" }],
+      ...textMessage("Original prompt", "user"),
       __openclaw: { id: "original-user", idempotencyKey: `${activeRunId}:user`, seq: 1 },
     };
     const persistedReply = {
-      role: "assistant",
-      content: [{ type: "text", text: replyText }],
+      ...textMessage(replyText),
       __openclaw: persistedReplyIdentity,
       ...(scenario.aborted
         ? {
@@ -1244,7 +1171,7 @@ describe("canonical session message recovery", () => {
         sessionKey: state.sessionKey,
         runId: activeRunId,
         state: scenario.aborted ? "aborted" : "final",
-        message: { role: "assistant", content: [{ type: "text", text: replyText }] },
+        message: textMessage(replyText),
       },
     } satisfies Parameters<typeof handlePageGatewayEvent>[1];
 
@@ -1281,8 +1208,7 @@ describe("canonical session message recovery", () => {
   it("hydrates one final when an earlier same-run tool boundary overlaps terminal persistence", async () => {
     const runId = "tool-heavy-run";
     const prompt = {
-      role: "user",
-      content: [{ type: "text", text: "Inspect the repository." }],
+      ...textMessage("Inspect the repository.", "user"),
       __openclaw: { id: "prompt", idempotencyKey: `${runId}:user`, seq: 1 },
     };
     const toolBoundary = {
@@ -1294,9 +1220,13 @@ describe("canonical session message recovery", () => {
       __openclaw: { id: "assistant-tool-boundary", seq: 2, runId },
     };
     const persistedFinal = {
-      role: "assistant",
-      content: [{ type: "text", text: "The repair is complete." }],
-      __openclaw: { id: "assistant-final", seq: 4, runId, runTerminal: true },
+      ...textMessage("The repair is complete."),
+      __openclaw: {
+        id: "assistant-final",
+        seq: 4,
+        runId,
+        runTerminal: true,
+      },
     };
     const request = vi.fn().mockResolvedValue({
       messages: [prompt, toolBoundary, persistedFinal],
@@ -1319,20 +1249,8 @@ describe("canonical session message recovery", () => {
       client: createTestGatewayClient(request),
     });
 
-    emitGatewayEvent(state, "chat", {
-      sessionKey: state.sessionKey,
-      runId,
-      state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "The repair is complete." }],
-      },
-    });
-    emitGatewayEvent(state, "session.message", {
-      sessionKey: state.sessionKey,
-      message: prompt,
-      messageId: "prompt",
-      messageSeq: 1,
+    chatEvent(state, runId, "final", "The repair is complete.");
+    persistMessage(state, "prompt", 1, prompt, {
       hasActiveRun: false,
       activeRunIds: [],
       session: {
@@ -1359,8 +1277,7 @@ describe("canonical session message recovery", () => {
     const promptText = "Resume locally 2.";
     const replyText = "Exactly one local Gateway response 2.";
     const originalPrompt = {
-      role: "user",
-      content: [{ type: "text", text: "Continue interrupted work 2." }],
+      ...textMessage("Continue interrupted work 2.", "user"),
       timestamp: 1_700_000_000_000,
       __openclaw: {
         id: "placement-user-2",
@@ -1369,8 +1286,7 @@ describe("canonical session message recovery", () => {
       },
     };
     const abandonedPartial = {
-      role: "assistant",
-      content: [{ type: "text", text: "Gateway-synced device response 2." }],
+      ...textMessage("Gateway-synced device response 2."),
       timestamp: 1_700_000_000_001,
       __openclaw: { id: "placement-aborted-assistant-2", seq: 2 },
       idempotencyKey: "abandoned-placement-run-2:assistant",
@@ -1382,15 +1298,13 @@ describe("canonical session message recovery", () => {
       stopReason: "stop",
     };
     const localUser = {
-      role: "user",
-      content: [{ type: "text", text: promptText }],
+      ...textMessage(promptText, "user"),
       timestamp: 1_700_000_000_002,
       __openclaw: { id: "placement-local-user-2", idempotencyKey: `${runId}:user`, seq: 3 },
     };
     const localFinalIdentity = { id: "placement-local-final-2", seq: 4 };
     const localFinal = {
-      role: "assistant",
-      content: [{ type: "text", text: replyText }],
+      ...textMessage(replyText),
       timestamp: 1_700_000_000_003,
       __openclaw: localFinalIdentity,
     };
@@ -1443,14 +1357,10 @@ describe("canonical session message recovery", () => {
         deltaText: "",
         message: { role: "assistant", content: [] },
       });
-      emitGatewayEvent(state, "session.message", {
-        sessionKey: state.sessionKey,
+      persistMessage(state, localFinalIdentity.id, localFinalIdentity.seq, localFinal, {
         runId,
         activeRunIds: null,
         hasActiveRun: true,
-        messageId: localFinalIdentity.id,
-        messageSeq: localFinalIdentity.seq,
-        message: localFinal,
       });
       expect(state.chatMessages.map(extractText)).toEqual([
         extractText(originalPrompt),
@@ -1471,33 +1381,20 @@ describe("canonical session message recovery", () => {
     { name: "an exactly producer-owned", runId: "older-run" },
   ])("never lets $name delayed older assistant row displace a newer run's reply", ({ runId }) => {
     const olderReply = {
-      role: "assistant",
-      content: [{ type: "text", text: "Answer from the older run." }],
+      ...textMessage("Answer from the older run."),
       __openclaw: { id: "older-reply", seq: 2 },
     };
     const { state } = createSessionEventState({
       chatRunId: "newer-run",
     });
-    emitGatewayEvent(state, "chat", {
-      sessionKey: state.sessionKey,
-      runId: "newer-run",
-      state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Answer from the newer run." }],
-      },
-    });
+    chatEvent(state, "newer-run", "final", "Answer from the newer run.");
     expect(state.chatRunId).toBeNull();
 
     // The terminal tombstone outlives its run, so a late row carrying some
     // other reply must not borrow that run's ownership and replace it.
-    emitGatewayEvent(state, "session.message", {
-      sessionKey: state.sessionKey,
+    persistMessage(state, "older-reply", 2, olderReply, {
       ...(runId ? { runId } : {}),
       hasActiveRun: false,
-      messageId: "older-reply",
-      messageSeq: 2,
-      message: olderReply,
     });
 
     expect(state.chatMessages.map((message) => extractText(message))).toEqual([
@@ -1508,8 +1405,7 @@ describe("canonical session message recovery", () => {
   it("keeps an ordinary queued user after the active run assistant", () => {
     const activeRunId = "active-run";
     const originalPrompt = {
-      role: "user",
-      content: [{ type: "text", text: "Original prompt" }],
+      ...textMessage("Original prompt", "user"),
       __openclaw: {
         id: "original-user",
         idempotencyKey: `${activeRunId}:user`,
@@ -1522,45 +1418,26 @@ describe("canonical session message recovery", () => {
       chatRunId: activeRunId,
     });
 
-    emitGatewayEvent(state, "chat", {
-      sessionKey: state.sessionKey,
-      runId: activeRunId,
-      state: "delta",
-      deltaText: "Active reply.",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Active reply." }],
-      },
-    });
-    emitGatewayEvent(state, "session.message", {
-      sessionKey: state.sessionKey,
-      clientRunId: "queued-run",
-      hasActiveRun: true,
-      messageId: "ordinary-queued-user",
-      messageSeq: 2,
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "Queued follow-up" }],
+    chatEvent(state, activeRunId, "delta", "Active reply.", { deltaText: "Active reply." });
+    persistMessage(
+      state,
+      "ordinary-queued-user",
+      2,
+      {
+        ...textMessage("Queued follow-up", "user"),
         __openclaw: {
           id: "ordinary-queued-user",
           idempotencyKey: "queued-run:user",
           seq: 2,
         },
       },
-    });
+      { clientRunId: "queued-run", hasActiveRun: true },
+    );
 
     expect(state.chatStream).toBe("Active reply.");
     expect(state.chatStreamSegments).toEqual([]);
 
-    emitGatewayEvent(state, "chat", {
-      sessionKey: state.sessionKey,
-      runId: activeRunId,
-      state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Active reply. Final suffix." }],
-      },
-    });
+    chatEvent(state, activeRunId, "final", "Active reply. Final suffix.");
 
     expect(renderedTranscript(state)).toEqual([
       { role: "user", text: "Original prompt" },
@@ -1578,13 +1455,11 @@ describe("canonical session message recovery", () => {
       chatStream: "Run C",
     });
 
-    emitGatewayEvent(state, "session.message", {
-      sessionKey: state.sessionKey,
-      clientRunId: "run-b",
-      hasActiveRun: true,
-      messageId: "steer-b",
-      messageSeq: 1,
-      message: {
+    persistMessage(
+      state,
+      "steer-b",
+      1,
+      {
         role: "user",
         content: "Steer A",
         __openclaw: {
@@ -1594,7 +1469,8 @@ describe("canonical session message recovery", () => {
           steerTargetRunId: "run-a",
         },
       },
-    });
+      { clientRunId: "run-b", hasActiveRun: true },
+    );
 
     expect(state.chatRunId).toBe("run-c");
     expect(state.chatStream).toBe("Run C");
@@ -1604,8 +1480,7 @@ describe("canonical session message recovery", () => {
   it("keeps the whole live message above ordinary queued input and its later steer", () => {
     const activeRunId = "active-run";
     const originalPrompt = {
-      role: "user",
-      content: [{ type: "text", text: "Original prompt" }],
+      ...textMessage("Original prompt", "user"),
       timestamp: 100,
       __openclaw: {
         id: "original-user",
@@ -1618,25 +1493,13 @@ describe("canonical session message recovery", () => {
       chatMessages: [originalPrompt],
       chatRunId: activeRunId,
     });
-    emitGatewayEvent(state, "chat", {
-      sessionKey: state.sessionKey,
-      runId: activeRunId,
-      state: "delta",
-      deltaText: "Before steer.",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Before steer." }],
-      },
-    });
-    emitGatewayEvent(state, "session.message", {
-      sessionKey: state.sessionKey,
-      clientRunId: "queued-run",
-      hasActiveRun: true,
-      messageId: "ordinary-queued-user",
-      messageSeq: 2,
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "Queued follow-up" }],
+    chatEvent(state, activeRunId, "delta", "Before steer.", { deltaText: "Before steer." });
+    persistMessage(
+      state,
+      "ordinary-queued-user",
+      2,
+      {
+        ...textMessage("Queued follow-up", "user"),
         timestamp: 200,
         __openclaw: {
           id: "ordinary-queued-user",
@@ -1644,16 +1507,14 @@ describe("canonical session message recovery", () => {
           seq: 2,
         },
       },
-    });
-    emitGatewayEvent(state, "session.message", {
-      sessionKey: state.sessionKey,
-      clientRunId: "steer-run",
-      hasActiveRun: true,
-      messageId: "persisted-steer-user",
-      messageSeq: 3,
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "Steer prompt" }],
+      { clientRunId: "queued-run", hasActiveRun: true },
+    );
+    persistMessage(
+      state,
+      "persisted-steer-user",
+      3,
+      {
+        ...textMessage("Steer prompt", "user"),
         timestamp: 300,
         __openclaw: {
           id: "persisted-steer-user",
@@ -1662,16 +1523,10 @@ describe("canonical session message recovery", () => {
           steerTargetRunId: activeRunId,
         },
       },
-    });
-    emitGatewayEvent(state, "chat", {
-      sessionKey: state.sessionKey,
-      runId: activeRunId,
-      state: "delta",
+      { clientRunId: "steer-run", hasActiveRun: true },
+    );
+    chatEvent(state, activeRunId, "delta", "Before steer. After steer.", {
       deltaText: " After steer.",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Before steer. After steer." }],
-      },
     });
 
     expect(renderedTranscript(state)).toEqual([
@@ -1684,19 +1539,19 @@ describe("canonical session message recovery", () => {
 
   it("keeps a previous run final before a newer active user turn", () => {
     const previousUser = {
-      role: "user",
-      content: [{ type: "text", text: "What are groups?" }],
+      ...textMessage("What are groups?", "user"),
       __openclaw: { id: "previous-user", idempotencyKey: "previous-run:user", seq: 1 },
     };
     const currentUser = {
-      role: "user",
-      content: [{ type: "text", text: "Why were my sessions missing?" }],
+      ...textMessage("Why were my sessions missing?", "user"),
       __openclaw: { id: "current-user", idempotencyKey: "current-run:user", seq: 3 },
     };
     const persistedFinal = {
-      role: "assistant",
-      content: [{ type: "text", text: "Groups organize conversations." }],
-      __openclaw: { id: "previous-final", seq: 2 },
+      ...textMessage("Groups organize conversations."),
+      __openclaw: {
+        id: "previous-final",
+        seq: 2,
+      },
     };
     const { state } = createSessionEventState({
       chatMessages: [previousUser, currentUser],
@@ -1704,13 +1559,9 @@ describe("canonical session message recovery", () => {
       chatStream: "Checking external sessions...",
     });
 
-    emitGatewayEvent(state, "session.message", {
-      sessionKey: state.sessionKey,
+    persistMessage(state, "previous-final", 2, persistedFinal, {
       clientRunId: "previous-run",
       hasActiveRun: true,
-      messageId: "previous-final",
-      messageSeq: 2,
-      message: persistedFinal,
     });
 
     expect(state.chatMessages.map((message) => (message as { role?: string }).role)).toEqual([
@@ -1723,15 +1574,7 @@ describe("canonical session message recovery", () => {
       __openclaw: { id: "previous-final", seq: 2 },
     });
 
-    emitGatewayEvent(state, "chat", {
-      sessionKey: state.sessionKey,
-      runId: "previous-run",
-      state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Groups organize conversations." }],
-      },
-    });
+    chatEvent(state, "previous-run", "final", "Groups organize conversations.");
 
     expect(state.chatMessages.map((message) => (message as { role?: string }).role)).toEqual([
       "user",
@@ -1749,15 +1592,15 @@ describe("canonical session message recovery", () => {
       return 1;
     });
     const { promise: history, resolve: resolveHistory } = createDeferred<ChatHistoryResult>();
-    const messages = ["web", "tui", "cli"].map((client, index) => ({
-      role: "user",
-      content: [{ type: "text", text: "shared prompt" }],
-      __openclaw: {
-        id: `canonical-${client}-same-text`,
-        idempotencyKey: `${client}-same-text-run:user`,
-        seq: index + 1,
-      },
-    }));
+    const messages = ["web", "tui", "cli"].map((client, index) =>
+      Object.assign(textMessage("shared prompt", "user"), {
+        __openclaw: {
+          id: `canonical-${client}-same-text`,
+          idempotencyKey: `${client}-same-text-run:user`,
+          seq: index + 1,
+        },
+      }),
+    );
     const snapshot: ChatHistoryResult = { messages, sessionId: "selected-session" };
     const { request, state } = createSessionEventState({ chatDisplayedLeafEntryId: undefined });
     const publication = vi.fn();
@@ -1765,12 +1608,7 @@ describe("canonical session message recovery", () => {
     request.mockReturnValueOnce(history).mockResolvedValue(snapshot);
 
     for (const [index, message] of messages.entries()) {
-      emitGatewayEvent(state, "session.message", {
-        sessionKey: state.sessionKey,
-        messageId: `conflicting-envelope-${index}`,
-        messageSeq: 100 + index,
-        message,
-      });
+      persistMessage(state, `conflicting-envelope-${index}`, 100 + index, message);
 
       expect(state.chatMessages).toHaveLength(index + 1);
       expect(publication).not.toHaveBeenCalled();
@@ -1795,8 +1633,7 @@ describe("canonical session message recovery", () => {
   it("drops pre-reset live and pending messages before accepting a new session turn", () => {
     const retireSessionCompanion = vi.fn();
     const pendingUser = {
-      role: "user",
-      content: [{ type: "text", text: "Pending before reset" }],
+      ...textMessage("Pending before reset", "user"),
       __openclaw: { idempotencyKey: "pre-reset-pending:user" },
     };
     const { state } = createSessionEventState({
@@ -1810,8 +1647,7 @@ describe("canonical session message recovery", () => {
       emitGatewayEvent(state, "session.message", {
         sessionKey: state.sessionKey,
         message: {
-          role: "user",
-          content: [{ type: "text", text }],
+          ...textMessage(text, "user"),
           __openclaw: { id, idempotencyKey: `${id}:user`, seq: 1 },
         },
       });
@@ -1837,8 +1673,7 @@ describe("canonical session message recovery", () => {
   it("does not clear the selected transcript when another agent resets", () => {
     const retireSessionCompanion = vi.fn();
     const selectedUser = {
-      role: "user",
-      content: [{ type: "text", text: "Keep this agent's conversation" }],
+      ...textMessage("Keep this agent's conversation", "user"),
       __openclaw: { id: "selected-user", seq: 1 },
     };
     const { state } = createSessionEventState({
@@ -1950,8 +1785,7 @@ describe("canonical session message recovery", () => {
     { name: "already identified message", connected: true, otherSession: false, identified: true },
   ])("handles message invalidation for $name", async ({ connected, otherSession, identified }) => {
     const selectedUser = {
-      role: "user",
-      content: [{ type: "text", text: "Keep this pending transcript" }],
+      ...textMessage("Keep this pending transcript", "user"),
       __openclaw: { idempotencyKey: "still-pending:user" },
     };
     const { request, state } = createSessionEventState({
@@ -2030,11 +1864,7 @@ describe("canonical session message recovery", () => {
           runId: "run-1",
           messageId: "terminal-message",
           messageSeq: 2,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "Finished" }],
-            __openclaw: { id: "terminal-message", seq: 2 },
-          },
+          message: { ...textMessage("Finished"), __openclaw: { id: "terminal-message", seq: 2 } },
         },
       },
       () => presented,
@@ -2661,7 +2491,7 @@ describe("chat state render lifecycle", () => {
         runId: "run-1",
         sessionKey: "main",
         deltaText: text.slice(-1),
-        message: { role: "assistant", content: [{ type: "text", text }] },
+        message: textMessage(text),
       });
     }
 
@@ -2679,7 +2509,7 @@ describe("chat state render lifecycle", () => {
       runId: "run-1",
       sessionKey: "main",
       deltaText: "D",
-      message: { role: "assistant", content: [{ type: "text", text: "ABCD" }] },
+      message: textMessage("ABCD"),
     });
     const staleFrame = frames.get(2);
     emitGatewayEvent(state, "session.operation", {});
@@ -2706,7 +2536,7 @@ describe("chat state render lifecycle", () => {
         runId: "run-1",
         sessionKey: "main",
         deltaText: text.slice(-1),
-        message: { role: "assistant", content: [{ type: "text", text }] },
+        message: textMessage(text),
       });
     }
 
@@ -3075,7 +2905,7 @@ describe("session pull request refresh", () => {
       state: "final",
       ...(runId ? { runId } : {}),
       sessionKey: sessionKey ?? "main",
-      message: { role: "assistant", content: [{ type: "text", text }] },
+      message: textMessage(text),
     });
 
     if (refresh) {
@@ -3577,51 +3407,15 @@ describe("refreshChatMetadata", () => {
   });
 
   it.each([
-    {
-      pickerPending: false,
-      scopedAfterGlobal: false,
-      metadataPending: false,
-      hidden: false,
-      empty: false,
-    },
-    {
-      pickerPending: true,
-      scopedAfterGlobal: false,
-      metadataPending: false,
-      hidden: false,
-      empty: false,
-    },
-    {
-      pickerPending: false,
-      scopedAfterGlobal: true,
-      metadataPending: false,
-      hidden: false,
-      empty: false,
-    },
-    {
-      pickerPending: false,
-      scopedAfterGlobal: true,
-      metadataPending: true,
-      hidden: false,
-      empty: false,
-    },
-    {
-      pickerPending: false,
-      scopedAfterGlobal: true,
-      metadataPending: true,
-      hidden: true,
-      empty: false,
-    },
-    {
-      pickerPending: false,
-      scopedAfterGlobal: true,
-      metadataPending: true,
-      hidden: false,
-      empty: true,
-    },
+    [false, false, false, false, false],
+    [true, false, false, false, false],
+    [false, true, false, false, false],
+    [false, true, true, false, false],
+    [false, true, true, true, false],
+    [false, true, true, false, true],
   ])(
-    "converges catalog invalidation with pending picker=$pickerPending, metadata=$metadataPending, scoped follow-up=$scopedAfterGlobal, hidden=$hidden and empty=$empty",
-    async ({ pickerPending, scopedAfterGlobal, metadataPending, hidden, empty }) => {
+    "converges catalog invalidation with pending picker=%s, scoped follow-up=%s, metadata=%s, hidden=%s and empty=%s",
+    async (pickerPending, scopedAfterGlobal, metadataPending, hidden, empty) => {
       const prepared = { id: "model", name: "Model", provider: "test", contextWindow: 8_192 };
       const discovered = { ...prepared, contextWindow: 262_144 };
       const acceptedModels = empty ? [] : [discovered];
