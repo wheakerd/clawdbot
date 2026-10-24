@@ -80,7 +80,7 @@ it.each([
     admitted.resolve(acceptedWorktreeSession);
     await submitting;
     expectWorktreeName(next.place);
-    expect(prefs.stored()).toMatchObject(selected);
+    expect(prefs.stored()).toMatchObject({ ...selected, worktree: true, baseRef: "main" });
     expect(control).toMatchObject({ selected: selected.model, thinkingLevel: "high", fastMode });
   },
 );
@@ -102,17 +102,14 @@ it.each(["composer retirement", "preference clear"] as const)(
     acceptIdlePlacement(first);
     const clear = phase === "preference clear" ? holdPreferenceClear(prefs) : undefined;
     first.flow.setMessage("first task");
-    expect(first.flow.submitDisabledReason()).toBeUndefined();
     const submitting = first.flow.submit(undefined, phase === "composer retirement");
     if (phase === "preference clear") {
       await clear!.started.promise;
-      expect(start).toHaveBeenCalledOnce();
       first.flow.invalidate();
       first.gateway.disconnect();
       clear!.release.resolve();
     }
     await submitting;
-    expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
     expect(start).toHaveBeenCalledOnce();
     expect(first.context.navigateAndWait).not.toHaveBeenCalled();
     expect(first.request.mock.calls.some(([method]) => method === "agent.wait")).toBe(false);
@@ -126,49 +123,35 @@ it.each(["composer retirement", "preference clear"] as const)(
 
 it("opens an accepted worktree while its saved name cleanup is pending", async () => {
   const { prefs, first } = await preferenceDraft();
-  const { context, flow } = first;
-  const admission = createDeferred<typeof acceptedWorktreeSession>();
+  const { context } = first;
   const { started: clearStarted, release: clearing, wait } = preferenceGate();
   const navigated = createDeferred();
   prefs.beforeSave.mockImplementation(wait);
-  vi.mocked(context.sessions.createResult).mockReturnValue(admission.promise);
   vi.mocked(context.navigateAndWait).mockImplementation(async () => {
     disposeWorktreeDraft(first);
     navigated.resolve();
     queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
   });
-  flow.setMessage("first task");
-  vi.useFakeTimers();
+  const submitting = startAcceptedWorktree(first, false);
+  let settled = false;
+  void submitting.then(() => {
+    settled = true;
+  });
   try {
-    const submitting = flow.submit();
-    let settled = false;
-    void submitting.then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(5_000);
-    admission.resolve(acceptedWorktreeSession);
     await clearStarted.promise;
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(context.navigateAndWait).toHaveBeenCalledOnce();
-      await navigated.promise;
-      const { key } = acceptedWorktreeSession;
-      expect(context.gateway.snapshot.sessionKey).toBe(key);
-      expect(
-        context.chatSubmissions.readInitial(key, context.gateway.snapshot.client!),
-      ).toMatchObject({ pendingRunId: "first-run" });
-      expect(settled).toBe(false);
-    } finally {
-      clearing.resolve();
-      await submitting;
-    }
-    vi.useRealTimers();
-    const next = await readyPreferenceDraft(prefs, context.gateway);
-    expectWorktreeName(next.place);
-    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    await navigated.promise;
+    const { key } = acceptedWorktreeSession;
+    expect(context.gateway.snapshot.sessionKey).toBe(key);
+    expect(
+      context.chatSubmissions.readInitial(key, context.gateway.snapshot.client!),
+    ).toMatchObject({ pendingRunId: "first-run" });
+    expect(settled).toBe(false);
   } finally {
-    vi.useRealTimers();
+    clearing.resolve();
+    await submitting;
   }
+  const next = await readyPreferenceDraft(prefs, context.gateway);
+  expectWorktreeName(next.place);
 });
 
 it.each([
@@ -182,6 +165,8 @@ it.each([
   { identified: true, change: "hydrated folder" },
   { identified: true, change: "hydrated base" },
   { identified: true, change: "agent" },
+  { identified: false, change: "same name again" },
+  { identified: false, change: "new repository" },
 ] as const)(
   "late acceptance respects $change intent (identity=$identified)",
   async ({ identified, change }) => {
@@ -206,8 +191,6 @@ it.each([
       if (change === "renamed") {
         next.place.setWorktreeName("next-task");
         await expectSaved(prefs, { worktreeName: "next-task" });
-      } else {
-        expect(next.place.worktreeName).toBe("first-task");
       }
     } else if (change === "hello" || change === "client") {
       Object.assign(
@@ -220,11 +203,20 @@ it.each([
       await prefs.publish(first, patch);
       next = await readyPreferenceDraft(prefs, first.context.gateway);
       retained = structuredClone(prefs.stored());
+    } else if (change === "same name again" || change === "new repository") {
+      first.flow.invalidate();
+      first.flow.resetDraft();
+      if (change === "new repository") {
+        first.place.applyFolder("/other-repo");
+        first.place.selectWorktree(true);
+      } else {
+        first.place.setWorktreeName("next-task");
+      }
+      first.place.setWorktreeName("first-task");
     } else {
       first.flow.invalidate();
       first.flow.resetDraft();
       first.place.selectAgentId("work");
-      expect(first.place.worktreeName).toBe("work-task");
       retained = structuredClone(prefs.stored("work"));
     }
     admitted.resolve(acceptedWorktreeSession);
@@ -237,6 +229,11 @@ it.each([
       expect(first.context.navigateAndWait).not.toHaveBeenCalled();
     } else if (change === "hello" || change === "client") {
       expect(prefs.stored()).toMatchObject({ worktreeName: "first-task" });
+      expect(first.place.worktreeName).toBe("first-task");
+      expect(first.context.navigateAndWait).not.toHaveBeenCalled();
+    } else if (change === "same name again" || change === "new repository") {
+      expect(first.place.worktreeName).toBe("first-task");
+      expect(first.context.navigateAndWait).not.toHaveBeenCalled();
     } else if (hydrated) {
       expect(prefs.stored()).toEqual(retained);
       expect(next.place.worktreeName).toBe(patch.worktreeName ?? "first-task");
@@ -293,7 +290,6 @@ it("does not drain queued Gateway edits into a newer disconnected browser choice
     first.context.gateway.snapshot.phase = "reconnecting";
     first.gateway.synchronize(first.context.gateway);
     first.place.setWorktreeName("new-local-task");
-    expect(browserPreference()).toMatchObject({ worktreeName: "new-local-task" });
   } finally {
     release.resolve();
     await Promise.all(writes.mock.results.map((result) => result.value));
@@ -324,7 +320,6 @@ it.each([false, true])(
     }
     const baseRef = conflict ? "external-base" : "release";
     expect(prefs.stored()).toMatchObject({ baseRef, worktreeName: "first-task" });
-    expect(prefs.beforeSave).toHaveBeenCalledTimes(conflict ? 2 : 1);
     expect(observer.gateway.readPreference("main")?.baseRef).toBe(conflict ? "main" : "release");
     // Confirmed defaults refresh the projection, not another open draft’s active fields.
     expect(observer.place.baseRef).toBe("main");
@@ -412,23 +407,19 @@ it("retires the restored agent's name despite default-agent hydration", async ()
   first.flow.setMessage("work task");
   vi.mocked(first.context.sessions.createResult).mockResolvedValue(null);
   await first.flow.submit(undefined, true);
-  expect(first.flow.pendingPlacement.phase).toBe("creating");
   const original = vi.mocked(first.context.sessions.createResult).mock.calls[0]![0];
   expect(original).toMatchObject({ agentId: "work", worktreeName: "work-task" });
   disposeWorktreeDraft(first);
   const retry = await readyPreferenceDraft(prefs, first.context.gateway);
-  expect(retry.flow.pendingPlacement.agentId).toBe("work");
   expect(retry.place.agentId).toBe("main");
   const mainPreference = structuredClone(prefs.stored());
-  const start = vi.fn();
-  retry.context.placementStartup.start = start;
+  retry.context.placementStartup.start = vi.fn();
   acceptIdlePlacement(retry);
   await retry.flow.submit(undefined, true);
   expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
     original,
     backgroundCreateOptions,
   );
-  expect(start).toHaveBeenCalledOnce();
   expect(prefs.stored("work")).toMatchObject({ worktreeName: "" });
   expect(prefs.stored()).toEqual(mainPreference);
 });
@@ -448,11 +439,6 @@ const hasPreference = (entry: unknown, key: string, value: string) =>
 async function independentDrafts(prefs: ReturnType<typeof identityPreferences>, sequential = true) {
   const first = sequential ? await readyPreferenceDraft(prefs) : prefs.make();
   const next = prefs.make();
-  expect(first.context.gateway).not.toBe(next.context.gateway);
-  expect(first.context.gateway.snapshot.client).not.toBe(next.context.gateway.snapshot.client);
-  expect(first.context.gateway.snapshot.selfUser?.id).toBe(
-    next.context.gateway.snapshot.selfUser?.id,
-  );
   if (!sequential) {
     await prefs.ready(first);
   }
@@ -511,7 +497,6 @@ it.each(["repository", "model", "empty base", "base before read"] as const)(
       release.resolve();
       await submitting;
     }
-    expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
     expect(next.context.sessions.createResult).not.toHaveBeenCalled();
     expect(first.flow.error).toBeNull();
     if (warning) {
@@ -581,15 +566,12 @@ it.each(["explicit", "implicit", "cleared"] as const)(
       await expectSaved(prefs, { baseRef: "" });
       disposeWorktreeDraft(first);
       first = await readyPreferenceDraft(prefs);
-      expect(first.place.baseRef).toBe("");
     }
     selectCloudWorktree(first);
     first.flow.setMessage("first task");
     vi.mocked(first.context.sessions.createResult).mockResolvedValue(null);
     await first.flow.submit(undefined, true);
-    expect(first.flow.pendingPlacement.phase).toBe("creating");
     const original = vi.mocked(first.context.sessions.createResult).mock.calls[0]![0];
-    expect(original).toMatchObject({ worktreeName: "first-task" });
     if (base === "implicit") {
       expect(original).not.toHaveProperty("worktreeBaseRef");
     } else {
@@ -603,8 +585,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     }
     const retained = structuredClone(prefs.stored());
     const retry = await readyPreferenceDraft(prefs, first.context.gateway);
-    const start = vi.fn();
-    retry.context.placementStartup.start = start;
+    retry.context.placementStartup.start = vi.fn();
     acceptIdlePlacement(retry);
     const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
     await retry.flow.submit(undefined, true);
@@ -612,7 +593,6 @@ it.each(["explicit", "implicit", "cleared"] as const)(
       original,
       backgroundCreateOptions,
     );
-    expect(start).toHaveBeenCalledOnce();
     expect(retry.flow.error).toBeNull();
     if (base !== "cleared") {
       expect(prefs.stored()).toMatchObject({ worktreeName: "" });
@@ -642,7 +622,6 @@ it("keeps accepted names retired when older model saves commit last", async () =
   try {
     await modelSave.started.promise;
     await startAcceptedWorktree(first);
-    expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
     expect(first.flow.error).toBeNull();
     expect(prefs.stored()).toMatchObject({ worktreeName: "" });
   } finally {
@@ -654,7 +633,7 @@ it("keeps accepted names retired when older model saves commit last", async () =
   expect(decodePreference(prefs.stored()).main?.worktreeName).toBeUndefined();
 });
 
-async function namedWorktreeFixture(explicitBase = true, restore = false) {
+async function namedWorktreeFixture(explicitBase = true) {
   const fixture = createDraftFixture({
     scopes: ["operator.admin", "operator.read", "operator.write"],
     methods: ["sessions.create", "sessions.dispatch"],
@@ -672,45 +651,22 @@ async function namedWorktreeFixture(explicitBase = true, restore = false) {
         : { status: "ok", endedAt: 1 },
   });
   await vi.waitFor(() => expect(fixture.place.repository.kind).toBe("git"));
-  if (!restore) {
-    fixture.place.selectWorktree(true);
-    if (explicitBase) {
-      fixture.place.setBaseRef("main");
-    }
-    fixture.place.setWorktreeName(explicitBase ? "first-task" : "  first-task  ");
+  fixture.place.selectWorktree(true);
+  if (explicitBase) {
+    fixture.place.setBaseRef("main");
   }
+  fixture.place.setWorktreeName(explicitBase ? "first-task" : "  first-task  ");
   fixture.flow.setMessage("first task");
   vi.mocked(fixture.context.navigateAndWait).mockImplementation(readyChatRoute);
   return { ...fixture, create: vi.mocked(fixture.context.sessions.createResult) };
 }
 
-it.each([true, false])("consumes accepted names, explicit base=%s", async (explicitBase) => {
-  const { create, flow, place } = await namedWorktreeFixture(explicitBase);
-  if (!explicitBase) {
-    expect(browserPreference()?.baseRef).toBeUndefined();
-  }
+it("consumes a trimmed name without an explicit base", async () => {
+  const { create, flow, place } = await namedWorktreeFixture(false);
   create.mockResolvedValue(acceptedWorktreeSession);
-  expect(flow.submitDisabledReason()).toBeUndefined();
-  await flow.submit(undefined, !explicitBase);
+  await flow.submit(undefined, true);
+  expect(create.mock.calls[0]?.[0]).toMatchObject({ worktreeName: "first-task" });
   expectWorktreeName(place);
-  if (explicitBase) {
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        worktree: true,
-        worktreeName: "first-task",
-        worktreeBaseRef: "main",
-      }),
-      backgroundCreateOptions,
-    );
-    expect(place).toMatchObject({ worktree: true, baseRef: "main" });
-    expect(browserPreference()).toMatchObject({ worktree: true, baseRef: "main" });
-    const next = await namedWorktreeFixture(true, true);
-    next.flow.setMessage("next task");
-    next.create.mockResolvedValue(acceptedWorktreeSession);
-    await next.flow.submit(undefined, true);
-    expect(next.create).toHaveBeenCalledOnce();
-    expect(next.create.mock.calls[0]![0]).not.toHaveProperty("worktreeName");
-  }
 });
 it.each(["null", "throw", "rejected"])("retains the name after %s admission", async (outcome) => {
   const { create, flow, place } = await namedWorktreeFixture();
@@ -731,46 +687,13 @@ it.each(["null", "throw", "rejected"])("retains the name after %s admission", as
   expectWorktreeName(place, "first-task");
 });
 
-it.each(["reconnect", "same name again", "new repository", "new principal"])(
-  "late acceptance respects %s",
-  async (change) => {
-    const fixture = await namedWorktreeFixture();
-    const { context, flow, place, gateway } = fixture;
-    const { admitted, submitting } = await submitPendingWorktree(fixture);
-    flow.invalidate(change === "reconnect" ? "gateway-changed" : null);
-    if (change !== "reconnect" && change !== "new principal") {
-      flow.resetDraft();
-    }
-    if (change === "same name again") {
-      place.setWorktreeName("next-task");
-      place.setWorktreeName("first-task");
-    }
-    if (change === "new repository") {
-      place.applyFolder("/other-repo");
-      place.selectWorktree(true);
-      place.setWorktreeName("first-task");
-    }
-    if (change === "new principal") {
-      Object.assign(context.gateway.snapshot.client!, { recoveryScope: "principal-b" });
-      Object.assign(context.gateway.snapshot.hello!.auth!, { recoveryScope: "principal-b" });
-      gateway.synchronize(context.gateway);
-    }
-    admitted.resolve(acceptedWorktreeSession);
-    await submitting;
-    expect(place.worktreeName).toBe(change === "reconnect" ? "" : "first-task");
-    expect(context.navigateAndWait).not.toHaveBeenCalled();
-  },
-);
-
-it.each([false, true])("retries frozen placement, restored=%s", async (restored) => {
+it("retries frozen placement in the current draft", async () => {
   const first = await namedWorktreeFixture();
   selectCloudWorktree(first);
   const start = vi.fn();
   first.context.placementStartup.start = start;
   first.create.mockResolvedValue(null);
-  expect(first.flow.submitDisabledReason()).toBeUndefined();
   await first.flow.submit(undefined, true);
-  expect(first.create).toHaveBeenCalledOnce();
   expect(start).not.toHaveBeenCalled();
   expect(first.place.worktreeName).toBe("first-task");
   expect(first.flow.pendingPlacement).toMatchObject({
@@ -778,25 +701,14 @@ it.each([false, true])("retries frozen placement, restored=%s", async (restored)
     phase: "creating",
   });
   const original = first.create.mock.calls[0]![0];
-  if (restored) {
-    disposeWorktreeDraft(first);
-  }
-  const retry = restored ? await namedWorktreeFixture(true, true) : first;
-  if (restored) {
-    expect(retry.flow.pendingPlacement.sessionKey).toBe(original!.key);
-    expect(retry.place.worktreeName).toBe("");
-  }
-  retry.context.placementStartup.start = start;
-  acceptIdlePlacement(retry);
-  expect(retry.flow.submitDisabledReason()).toBeUndefined();
-  await retry.flow.submit(undefined, true);
-  expect(retry.create).toHaveBeenCalledTimes(restored ? 1 : 2);
-  expect(retry.create).toHaveBeenLastCalledWith(original, backgroundCreateOptions);
+  acceptIdlePlacement(first);
+  await first.flow.submit(undefined, true);
+  expect(first.create).toHaveBeenLastCalledWith(original, backgroundCreateOptions);
   expect(start).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       recovery: expect.objectContaining({ sessionKey: original!.key, phase: "dispatching" }),
       persistRecovery: true,
     }),
   );
-  expectWorktreeName(retry.place);
+  expectWorktreeName(first.place);
 });

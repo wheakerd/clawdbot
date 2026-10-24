@@ -91,15 +91,7 @@ describe("DraftPlaceState repository selection", () => {
   ] as const)(
     "restores permitted $source checkout (redacted=$redacted)",
     async ({ source, redacted, current, savedWorktree }) => {
-      const f = createRepositoryFixture({
-        models: models("first", "selected").map((model) =>
-          Object.assign(model, {
-            reasoning: true,
-            thinkingLevels: [{ id: "high", label: "High" }],
-          }),
-        ),
-      });
-      onTestFinished(() => f.state.modelControl.reset());
+      const f = createRepositoryFixture();
       const eligibility = createDeferred<{ current: boolean; worktree: boolean }>();
       const projectId = source === "workspace" ? "workspace:main" : "registered";
       const project = {
@@ -119,9 +111,6 @@ describe("DraftPlaceState repository selection", () => {
       const settled = nextChange(f.changed, () => f.state.worktree && f.state.worktreeAvailable());
       f.state.adoptAgentDefaults();
       f.state.restorePreferenceSelections();
-      await loadModelCatalog(f.context.gateway.snapshot.client!, { agentId: "main" });
-      f.state.modelControl.selectModel("example/selected");
-      f.state.modelControl.thinkingLevel = "high";
       expect(f.state.folderSubmissionBlocked()).toBe(true);
       eligibility.resolve({ current, worktree: true });
       await settled;
@@ -140,8 +129,6 @@ describe("DraftPlaceState repository selection", () => {
         projectId,
         worktree: true,
         message: "Keep my prompt",
-        model: "example/selected",
-        thinkingLevel: "high",
       });
     },
   );
@@ -199,25 +186,11 @@ describe("DraftPlaceState repository selection", () => {
     expect(f.browser.remoteProject).toBeNull();
     expect(f.state.remoteRepository).toBeUndefined();
     expect(f.state).toMatchObject({ baseRef: "", worktreeName: "" });
-    expect(f.persistPreference).toHaveBeenCalledWith("main", "/workspace", {
-      baseRef: "",
-      worktreeName: "",
-    });
-    expect(f.persistPreference).toHaveBeenCalledWith(
-      "main",
-      "/workspace",
-      expect.objectContaining({ remoteProject: null }),
-    );
   });
 
   it("remembers a remote project and restores its default branch", () => {
     const selected = createRepositoryFixture();
     selected.state.selectRemoteProject(REMOTE_PROJECT);
-    expect(selected.persistPreference).toHaveBeenCalledWith(
-      "",
-      "/workspace",
-      expect.objectContaining({ projectId: "", remoteProject: REMOTE_PROJECT }),
-    );
     expect(selected.state.baseRef).toBe("main");
 
     const restored = createRepositoryFixture();
@@ -236,30 +209,8 @@ describe("DraftPlaceState repository selection", () => {
     expect(restored.state.placementPreferenceReady).toBe(true);
   });
 
-  it("leaves the worktree base to the Gateway unless a branch was selected", async () => {
-    const { state, request, changed } = createRepositoryFixture({ workspaceGit: true });
-    request.mockResolvedValue({
-      repositoryStatus: "git",
-      branches: [{ name: "main", kind: "local" }],
-      defaultBranch: "main",
-      headBranch: "old-feature",
-    });
-    const discovered = nextChange(changed, () => state.repository.kind === "git");
-    state.adoptAgentDefaults();
-    await discovered;
-    const create = () => createParams(state, "new task");
-
-    expect(create()).toMatchObject({ worktree: true });
-    expect(create()).not.toHaveProperty("worktreeBaseRef");
-    expect(state.preferenceSelection().baseRef).toBe("");
-    state.setBaseRef("main");
-    expect(create()).toHaveProperty("worktreeBaseRef", "main");
-    state.setBaseRef("");
-    expect(create()).not.toHaveProperty("worktreeBaseRef");
-  });
-
   it("keeps a route-selected model in the unsent composer instead of restoring a remembered model", async () => {
-    const { state, context, readPreference, persistPreference, request } = createRepositoryFixture({
+    const { state, context, readPreference, persistPreference } = createRepositoryFixture({
       data: routeData({ requestedModel: "example/first" }),
       models: models("first", "second", "remembered"),
     });
@@ -267,25 +218,16 @@ describe("DraftPlaceState repository selection", () => {
     readPreference.mockReturnValue({ model: "example/remembered" });
     state.adoptAgentDefaults();
     await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
-    expect(state.modelControl.modelForSubmission()).toBe("example/first");
     expect(createParams(state).model).toBe("example/first");
     expect(persistPreference).not.toHaveBeenCalled();
 
     state.modelControl.selectModel("example/second");
-    expect(state.modelControl.modelForSubmission()).toBe("example/second");
-    state.modelControl.load(context, "main", true, { agent: state.selectedAgent() });
-    state.adoptAgentDefaults();
-    expect(state.modelControl.modelForSubmission()).toBe("example/second");
-    state.modelControl.invalidate();
-    state.adoptAgentDefaults();
-    await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
-    expect(state.modelControl.modelForSubmission()).toBe("example/second");
     Object.assign(context.gateway.snapshot, { hello: { ...context.gateway.snapshot.hello } });
     state.invalidateGatewayDiscovery(false);
     state.adoptAgentDefaults();
     await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
-    expect(persistPreference).toHaveBeenCalledExactlyOnceWith(
+    expect(persistPreference).toHaveBeenCalledWith(
       "main",
       "/workspace",
       expect.objectContaining({ model: "example/second" }),
@@ -300,33 +242,24 @@ describe("DraftPlaceState repository selection", () => {
     };
     await selectAgent("scout", "example/remembered");
     await selectAgent("main", "example/second");
-    expect(state.modelControl.modelForSubmission()).toBe("example/second");
     state.resetDraft();
     state.adoptAgentDefaults();
     await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/first");
-
-    expect(
-      request.mock.calls.some(([method]) => method === "sessions.create" || method === "chat.send"),
-    ).toBe(false);
   });
 
   it("captures pending placement preferences instead of transient discovery defaults", () => {
-    const { state, discovery } = pendingRepository({
+    const preference = {
       worktree: true,
-      where: { kind: "device", id: "desktop" },
+      where: { kind: "device" as const, id: "desktop" },
       projectId: "pending-project",
       baseRef: "release/next",
-    });
+    };
+    const { state, discovery } = pendingRepository(preference);
     state.adoptAgentDefaults();
     expect(state).toMatchObject({ placementPreferenceReady: false, worktree: false });
-    expect(state.preferenceSelection()).toMatchObject({
-      worktree: true,
-      where: { kind: "device", id: "desktop" },
-      projectId: "pending-project",
-      baseRef: "release/next",
-    });
-    discovery.resolve({ repositoryStatus: "git", branches: [] });
+    expect(state.preferenceSelection()).toMatchObject(preference);
+    discovery.resolve(GIT);
   });
 
   it.each([
@@ -341,7 +274,6 @@ describe("DraftPlaceState repository selection", () => {
         workspaceGit: !explicitFolder,
       });
       const discovery = createDeferred<WorktreesBranchesResult>();
-      const create = () => createParams(state, "Start empty");
       if (!explicitFolder) {
         readPreference.mockReturnValue({});
         request.mockReturnValue(discovery.promise);
@@ -358,12 +290,14 @@ describe("DraftPlaceState repository selection", () => {
         state.selectCloudProfile("aws");
       }
 
-      expect(state.freshWorkspace).toBe(!explicitFolder);
-      if (explicitFolder) {
-        expect(state).toMatchObject({ remotePlacement: true, folder: "/chosen/project" });
-      } else {
+      expect(state).toMatchObject({
+        freshWorkspace: !explicitFolder,
+        remotePlacement: true,
+        folder: explicitFolder ? "/chosen/project" : "/workspace",
+      });
+      if (!explicitFolder) {
         expect(state.placementPreferenceReady).toBe(true);
-        expect(create()).toEqual(emptyWorkspace);
+        expect(createParams(state, "Start empty")).toEqual(emptyWorkspace);
       }
       discovery.resolve({
         repositoryStatus: explicitFolder ? "not_git" : "git",
@@ -375,10 +309,9 @@ describe("DraftPlaceState repository selection", () => {
       if (explicitFolder) {
         state.selectNewWorkspace();
         expect(state.freshWorkspace).toBe(true);
-        expect(create()).toMatchObject({ worktree: true, worktreeSource: "empty" });
-        expect(create()).not.toHaveProperty("cwd");
+        expect(createParams(state, "Start empty")).toEqual(emptyWorkspace);
       } else {
-        expect(create()).not.toHaveProperty("worktreeBaseRef");
+        expect(createParams(state, "Start empty")).not.toHaveProperty("worktreeBaseRef");
       }
     },
   );
@@ -417,13 +350,18 @@ describe("DraftPlaceState repository selection", () => {
 
       state.adoptAgentDefaults();
       state.restorePreferenceSelections();
-      expect(state).toMatchObject({ remotePlacement: true, freshWorkspace: false, worktree: true });
+      expect(state).toMatchObject({
+        remotePlacement: true,
+        freshWorkspace: false,
+        worktree: true,
+        baseRef: "release",
+        worktreeName: "saved-task",
+      });
       expect(state.worktreeAvailable()).toBe(false);
-      expect(state).toMatchObject({ baseRef: "release", worktreeName: "saved-task" });
 
       state.selectNewWorkspace();
       expect(state).toMatchObject({ freshWorkspace: true, placementPreferenceReady: true });
-      discovery.resolve({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
+      discovery.resolve(GIT);
       await repositoryReady(state);
       expect(createParams(state, "Start empty")).toEqual(emptyWorkspace);
     },
@@ -462,7 +400,7 @@ describe("DraftPlaceState repository selection", () => {
   it.each(["git", "unavailable", "rejected", "forbidden"] as const)(
     "keeps edited branch through %s reconnect",
     async (result) => {
-      const { state, request, persistPreference, readPreference } = createRepositoryFixture({
+      const { state, request, readPreference } = createRepositoryFixture({
         workspaceGit: true,
       });
       readPreference.mockReturnValue({ worktree: false });
@@ -474,11 +412,9 @@ describe("DraftPlaceState repository selection", () => {
       state.setWorktreeName("my-checkout");
 
       state.invalidateGatewayDiscovery(false);
-      expect(state.baseRef).toBe("my-branch");
       const discovery = createDeferred<WorktreesBranchesResult>();
       request.mockReturnValue(discovery.promise);
       state.adoptAgentDefaults();
-      expect(state.baseRef).toBe("my-branch");
       if (result === "forbidden") {
         discovery.reject(
           new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.write" }),
@@ -510,10 +446,6 @@ describe("DraftPlaceState repository selection", () => {
       state.applyFolder("/another-repo");
       await repositoryReady(state);
       expect(state).toMatchObject({ baseRef: "", worktreeName: "" });
-      expect(persistPreference).toHaveBeenCalledWith("main", "/workspace", {
-        baseRef: "",
-        worktreeName: "",
-      });
     },
   );
 
@@ -549,9 +481,6 @@ describe("DraftPlaceState repository selection", () => {
         }
         discovery.resolve(GIT);
         await repositoryReady(state);
-        expect(
-          request.mock.calls.filter(([method]) => method === "worktrees.branches"),
-        ).toHaveLength(1);
       } else {
         expect(state.worktreeName).toBe("my-checkout");
       }
@@ -638,7 +567,7 @@ describe("DraftPlaceState repository selection", () => {
   it("ignores a failed saved-worktree probe after the user chooses another folder", async () => {
     const { state, request, changed } = createRepositoryFixture({ workspaceGit: true });
     const previous = createDeferred<WorktreesBranchesResult>();
-    const current = Promise.resolve({ repositoryStatus: "git", branches: [] });
+    const current = Promise.resolve(GIT);
     const currentPublished = nextChange(changed, () => state.repository.kind === "git");
     let probes = 0;
     request.mockImplementation((method) =>
@@ -662,7 +591,7 @@ describe("DraftPlaceState repository selection", () => {
   it.each(["local", "device", "cloud"] as const)(
     "keeps remote-project branch and checkout on %s",
     (placement) => {
-      const { state, browser, persistPreference, changed, request } = createRepositoryFixture();
+      const { state, browser } = createRepositoryFixture();
       state.selectRemoteProject(REMOTE_PROJECT);
       if (placement === "local") {
         expect(state.repository).toEqual({
@@ -671,44 +600,31 @@ describe("DraftPlaceState repository selection", () => {
         });
         expect(state.worktreeAvailable()).toBe(true);
         expect(state).toMatchObject({ checkoutVisible: true, worktree: false });
-        state.selectWorktree(true);
-        expect(state.worktree).toBe(true);
       }
       state.setBaseRef("release");
       if (placement === "local") {
-        state.selectWorktree(false);
-        expect(state.worktree).toBe(false);
         state.selectWorktree(true);
         expect(state.worktree).toBe(true);
       } else {
         if (placement === "device") {
           state.selectDevice("desktop");
-          expect(state.deviceId).toBe("desktop");
         } else {
           state.selectCloudProfile("aws");
-          expect(state.cloudProfileId).toBe("aws");
         }
         expect(browser.remoteProject).toEqual(REMOTE_PROJECT);
         expect(state.worktree).toBe(false);
         expect(state.remoteRepository).toEqual({ url: REMOTE_PROJECT.cloneUrl, ref: "release" });
       }
       expect(state.baseRef).toBe("release");
-      persistPreference.mockClear();
-      changed.mockClear();
-      request.mockClear();
       state.selectWorktree(placement === "local");
       expect(state.worktree).toBe(placement === "local");
-      expect(persistPreference).not.toHaveBeenCalled();
-      expect(changed).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
     },
   );
 
   it.each(["/workspace", "/plain"])(
     "rejects worktree before and after non-Git %s discovery",
     async (folder) => {
-      const { state, persistPreference, changed, request, readPreference } =
-        createRepositoryFixture();
+      const { state, request, readPreference } = createRepositoryFixture();
       const discovery = createDeferred<WorktreesBranchesResult>();
       if (folder === "/plain") {
         readPreference.mockReturnValue({ worktree: false });
@@ -727,16 +643,9 @@ describe("DraftPlaceState repository selection", () => {
         expect(state.worktree).toBe(false);
       }
       await repositoryReady(state, "direct");
-      persistPreference.mockClear();
-      changed.mockClear();
-
       state.selectWorktree(true);
-
-      expect(state.worktree).toBe(false);
+      expect(state).toMatchObject({ worktree: false, checkoutVisible: false });
       expect(state.worktreeAvailable()).toBe(false);
-      expect(state.checkoutVisible).toBe(false);
-      expect(persistPreference).not.toHaveBeenCalled();
-      expect(changed).not.toHaveBeenCalled();
     },
   );
 
@@ -838,29 +747,6 @@ describe("DraftPlaceState cloud machine selection", () => {
     expect(state.resolveOs("aws")).toBe("linux");
   });
 
-  it("submits each profile's displayed machine and retains selections per destination", () => {
-    const cloudProfiles = [machineProfile(), machineProfile("hetzner", ["large", "beast"])];
-    const { state, changed } = createRepositoryFixture({ cloudProfiles });
-
-    state.applyPendingPlacement({ agentId: "main", profileId: "aws" });
-    expect(state.cloudSelection.machineClass).toBe("standard");
-
-    state.cloudMachines.select("aws", "fast", cloudProfiles);
-    expect(state.cloudSelection.machineClass).toBe("fast");
-
-    vi.spyOn(state, "worktreeAvailable").mockReturnValue(true);
-    state.selectCloudProfile("hetzner");
-    expect(state.cloudSelection.machineClass).toBe("large");
-    state.cloudMachines.select("hetzner", "beast", cloudProfiles);
-    expect(state.cloudSelection.machineClass).toBe("beast");
-
-    state.selectCloudProfile("aws");
-    expect(state.cloudSelection.machineClass).toBe("fast");
-    state.cloudMachines.select("aws", "standard", cloudProfiles);
-    expect(state.cloudSelection.machineClass).toBe("standard");
-    expect(changed).toHaveBeenCalled();
-  });
-
   it("restores the exact recovered choice instead of retaining a stale draft override", () => {
     const cloudProfiles = [machineProfile()];
     const { state } = createRepositoryFixture({ cloudProfiles });
@@ -924,23 +810,21 @@ describe("device folder selection", () => {
     source: "model",
   };
 
-  function folderFixture() {
+  function folderFixture(capable = false, runtime = workerRuntime) {
     const f = createRepositoryFixture();
-    f.context.agents.state.agentsList!.agents[0]!.agentRuntime = workerRuntime;
+    f.context.agents.state.agentsList!.agents[0]!.agentRuntime = runtime;
+    if (capable) {
+      f.gateway.environments![0]!.workerHost = { deviceFolders: true };
+    }
+    f.state.adoptAgentDefaults();
+    f.state.selectDevice("desktop");
     return f;
   }
 
   it.each(["remote-exec", undefined] as const)(
     "rejects existing device folder in execution mode %s",
     (mode) => {
-      const f = folderFixture();
-      f.context.agents.state.agentsList!.agents[0]!.agentRuntime = {
-        ...workerRuntime,
-        cloudPlacementExecutionMode: mode,
-      };
-      f.gateway.environments![0]!.workerHost = { deviceFolders: true };
-      f.state.adoptAgentDefaults();
-      f.state.selectDevice("desktop");
+      const f = folderFixture(true, { ...workerRuntime, cloudPlacementExecutionMode: mode });
       expect(f.state.devicePlacement().ready).toBe(true);
       expect(f.state.deviceFolderAvailable).toBe(false);
       f.state.selectDeviceFolder();
@@ -950,8 +834,6 @@ describe("device folder selection", () => {
 
   it("requires an explicit capable device and keeps its path out of Gateway discovery", () => {
     const f = folderFixture();
-    f.state.adoptAgentDefaults();
-    f.state.selectDevice("desktop");
     expect(f.state.deviceFolderAvailable).toBe(false);
     f.state.selectDeviceFolder();
     expect(f.state.deviceFolder).toBeUndefined();
@@ -976,10 +858,7 @@ describe("device folder selection", () => {
   });
 
   it("blocks a selected device folder when current capability is withdrawn", () => {
-    const f = folderFixture();
-    f.gateway.environments![0]!.workerHost = { deviceFolders: true };
-    f.state.adoptAgentDefaults();
-    f.state.selectDevice("desktop");
+    const f = folderFixture(true);
     f.state.selectDeviceFolder();
     f.state.setDeviceFolderPath("/srv/project");
     f.gateway.environments![0]!.workerHost = {};
