@@ -274,93 +274,62 @@ it("leaves Memory through RouterOutlet while an add-on mutation is pending", asy
   }
 });
 
-it.each(["reconnect", "boot", "admin scope", "read-only catalog"])(
-  "drops an add-on mutation queued before a %s change",
-  async (change) => {
-    const pendingWrites = deferred<void>();
-    const setEnabled = vi.fn((pluginId: string, enabled: boolean) =>
-      Promise.resolve(committed(pluginId, enabled)),
-    );
-    let mutationAllowed = true;
-    const {
-      element,
-      runExternalMutation,
-      setPhase,
-      setBootId,
-      setScopes,
-      publishPluginGeneration,
-    } = createMemoryPage({
+it.each([
+  ["reconnect", true],
+  ["boot", true],
+  ["admin scope", true],
+  ["read-only catalog", true],
+  ["admin scope", false],
+  ["read-only catalog", false],
+] as const)("retires an add-on mutation after %s changes (queued=%s)", async (change, queued) => {
+  const pendingWrites = deferred<void>();
+  const oldReply = createDeferred<unknown>();
+  let mutationCalls = 0;
+  const setEnabled = vi.fn((pluginId: string, enabled: boolean) =>
+    !queued && mutationCalls++ === 0
+      ? oldReply.promise
+      : Promise.resolve(committed(pluginId, enabled)),
+  );
+  let mutationAllowed = true;
+  const { element, runExternalMutation, setPhase, setBootId, setScopes, publishPluginGeneration } =
+    createMemoryPage({
       configObject: {},
       listCatalog: () =>
         Promise.resolve({
           plugins: [addon("active-memory", true)],
           mutationAllowed,
         }),
-      waitForPendingWrites: () => pendingWrites.promise,
+      waitForPendingWrites: queued ? () => pendingWrites.promise : undefined,
       setEnabled,
     });
-    mountMemoryPage(element);
-    try {
-      await waitForAddon(element);
-      toggleAddon(element, "Active memory", false);
-      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledOnce());
-
-      if (change === "reconnect") {
-        setPhase("disconnected");
-        setPhase("connected");
-      } else if (change === "boot") {
-        setBootId("memory-boot-b");
-      } else if (change === "admin scope") {
-        setScopes(["operator.read"]);
-      } else {
-        mutationAllowed = false;
-        publishPluginGeneration(1);
-        await waitForSolid(() => expect(addonSwitch(element, "Active memory")).toBeNull());
-      }
+  mountMemoryPage(element);
+  try {
+    await waitForAddon(element);
+    toggleAddon(element, "Active memory", false);
+    await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledOnce());
+    if (!queued) {
+      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
+    }
+    if (change === "reconnect") {
+      setPhase("disconnected");
+      setPhase("connected");
+    } else if (change === "boot") {
+      setBootId("memory-boot-b");
+    } else if (change === "admin scope") {
+      setScopes(["operator.read"]);
+    } else {
+      mutationAllowed = false;
+      publishPluginGeneration(1);
+      await waitForSolid(() => expect(addonSwitch(element, "Active memory")).toBeNull());
+    }
+    if (queued) {
       pendingWrites.resolve();
       await runExternalMutation.mock.results[0]?.value;
-
       expect(setEnabled).not.toHaveBeenCalled();
       if (change === "reconnect" || change === "boot") {
         expect(element.textContent).not.toContain("Could not update Active memory");
       }
-    } finally {
-      pendingWrites.resolve();
-
-      await finishMemory(element, runExternalMutation);
-    }
-  },
-);
-
-it.each(["admin scope", "read-only catalog"])(
-  "keeps a retired %s failure out of its replacement add-on action",
-  async (change) => {
-    const oldReply = createDeferred<unknown>();
-    let mutationAllowed = true;
-    let mutationCalls = 0;
-    const setEnabled = vi.fn((pluginId: string, enabled: boolean) =>
-      mutationCalls++ === 0 ? oldReply.promise : Promise.resolve(committed(pluginId, enabled)),
-    );
-    const { element, runExternalMutation, setScopes, publishPluginGeneration } = createMemoryPage({
-      configObject: {},
-      listCatalog: () =>
-        Promise.resolve({
-          plugins: [addon("active-memory", true)],
-          mutationAllowed,
-        }),
-      setEnabled,
-    });
-    mountMemoryPage(element);
-    try {
-      await waitForAddon(element);
-      toggleAddon(element, "Active memory", false);
-      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
-      if (change === "admin scope") {
-        setScopes(["operator.read"]);
-      } else {
-        mutationAllowed = false;
-        publishPluginGeneration(1);
-      }
+    } else {
       await waitForSolid(() => expect(addonSwitch(element, "Active memory")).toBeNull());
       if (change === "admin scope") {
         setScopes(["operator.admin"]);
@@ -376,13 +345,13 @@ it.each(["admin scope", "read-only catalog"])(
       await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
       flush();
       expect(element.textContent).not.toContain("retired add-on failure");
-    } finally {
-      oldReply.resolve(committed("active-memory", false));
-
-      await finishMemory(element, runExternalMutation);
     }
-  },
-);
+  } finally {
+    pendingWrites.resolve();
+    oldReply.resolve(committed("active-memory", false));
+    await finishMemory(element, runExternalMutation);
+  }
+});
 
 it.each(["queued", "in flight"])(
   "preserves a %s add-on mutation and its busy state across plugin publications",

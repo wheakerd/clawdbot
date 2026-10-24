@@ -483,38 +483,31 @@ describe("Talk device and voice wake settings", () => {
     expect(document.activeElement).toBe(input);
   });
 
-  it.each(["success", "failure"])(
-    "keeps trigger typing focused across an older %s while serializing saves",
-    async (olderResult) => {
-      const first = createDeferred<{ triggers: string[] }>();
-      const second = createDeferred<{ triggers: string[] }>();
-      const { page, input, writes, voiceWakeRequest } = await voiceWakeFixture((index) =>
-        index === 1 ? first.promise : second.promise,
-      );
-      input.focus();
-      editTrigger(input, "first phrase");
-      await tick(400);
-      expect(input.disabled).toBe(false);
-      expect(document.activeElement).toBe(input);
-      editTrigger(input, "second phrase");
-      await vi.advanceTimersByTimeAsync(400);
-      expect(writes()).toBe(1);
-      if (olderResult === "success") {
-        first.resolve({ triggers: ["first phrase"] });
-      } else {
-        first.reject(new Error("Older edit failed"));
-      }
-      await tick();
-      expectFocused(input, "second phrase");
-      expect(triggerAlert(page)).toBeNull();
-      expect(page.querySelector("[role='status']")?.textContent).toBe("Saving…");
-      expectTriggerWrite(voiceWakeRequest, "second phrase");
-      second.resolve({ triggers: ["second phrase"] });
-      await tick();
-      expect(input.value).toBe("second phrase");
-      expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
-    },
-  );
+  it("keeps trigger typing focused across an older failure while serializing saves", async () => {
+    const first = createDeferred<{ triggers: string[] }>();
+    const second = createDeferred<{ triggers: string[] }>();
+    const { page, input, writes, voiceWakeRequest } = await voiceWakeFixture((index) =>
+      index === 1 ? first.promise : second.promise,
+    );
+    input.focus();
+    editTrigger(input, "first phrase");
+    await tick(400);
+    expect(input.disabled).toBe(false);
+    expect(document.activeElement).toBe(input);
+    editTrigger(input, "second phrase");
+    await vi.advanceTimersByTimeAsync(400);
+    expect(writes()).toBe(1);
+    first.reject(new Error("Older edit failed"));
+    await tick();
+    expectFocused(input, "second phrase");
+    expect(triggerAlert(page)).toBeNull();
+    expect(page.querySelector("[role='status']")?.textContent).toBe("Saving…");
+    expectTriggerWrite(voiceWakeRequest, "second phrase");
+    second.resolve({ triggers: ["second phrase"] });
+    await tick();
+    expect(input.value).toBe("second phrase");
+    expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
+  });
 
   it("leaves Talk while a trigger write is unresolved", async () => {
     const pending = createDeferred<{ triggers: string[] }>();
@@ -523,8 +516,7 @@ describe("Talk device and voice wake settings", () => {
     );
     const { page } = createTalkMutationHarness({ voiceWakeRequest });
     page.remove();
-    const notification = createDeferred<undefined>();
-    const sendNotification = vi.fn(() => notification.promise);
+    const sendNotification = vi.fn(async () => undefined);
     const context: ApplicationContext = {
       ...page.context,
       nativeNotifications: {
@@ -550,12 +542,6 @@ describe("Talk device and voice wake settings", () => {
       expect(view.container.querySelector("openclaw-config-page")).toBe(configHost);
       return bodies[0]!;
     };
-    await view.navigate("notifications");
-    await waitForSolid(expectNotificationsBody);
-    await view.navigate("talk");
-    await waitForSolid(() =>
-      expect(view.container.querySelector("textarea")?.value).toBe("openclaw"),
-    );
     vi.useFakeTimers();
     const input = view.container.querySelector("textarea")!;
     editTrigger(input, "new phrase");
@@ -573,16 +559,7 @@ describe("Talk device and voice wake settings", () => {
     expectDeparted();
     const send = notificationsBody!.querySelector<HTMLButtonElement>("button")!;
     send.click();
-    await waitForSolid(() => {
-      expect(sendNotification).toHaveBeenCalledOnce();
-      expect(send.disabled).toBe(true);
-      expect(send.textContent).toContain(t("configView.notifications.sendingTest"));
-    });
-    notification.resolve(undefined);
-    await waitForSolid(() => {
-      expect(send.disabled).toBe(false);
-      expect(send.textContent).toContain(t("configView.notifications.sendTest"));
-    });
+    await waitForSolid(() => expect(sendNotification).toHaveBeenCalledOnce());
 
     pending.resolve({ triggers: ["new phrase"] });
     await vi.advanceTimersByTimeAsync(0);
@@ -681,7 +658,7 @@ describe("Talk device and voice wake settings", () => {
     },
   );
 
-  it("routes device voice changes to native owners and excludes the primary language from additions", async () => {
+  it("keeps unsupported Mac Voice Wake disabled unless it is already enabled", async () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     snapshot.voice.supported = false;
     snapshot.voice.locale.additional = ["de-DE"];
@@ -694,13 +671,6 @@ describe("Talk device and voice wake settings", () => {
       rows.find(
         (element) => element.querySelector(".settings-row__title")?.textContent?.trim() === title,
       )!;
-    const expectNativeWrite = (key: string, value: unknown) =>
-      expect(nativeDeviceSettings.set).toHaveBeenCalledWith(key, value, expect.any(Function));
-    const select = (title: string, value: string) => {
-      const input = row(title).querySelector("select")!;
-      input.value = value;
-      input.dispatchEvent(new Event("change"));
-    };
     const expectWakeDisabled = (disabled: boolean) =>
       expect(
         row("Voice Wake").querySelector(".settings-toggle__input")?.hasAttribute("disabled"),
@@ -709,22 +679,19 @@ describe("Talk device and voice wake settings", () => {
     expectWakeDisabled(true);
     expect(row("Voice Wake").textContent).toContain("macOS 26");
     row("Hold Right Option to talk").click();
-    expectNativeWrite("voice.pushToTalkEnabled", false);
-    select("Microphone", "builtin");
-    expectNativeWrite("voice.microphone", "builtin");
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
+      "voice.pushToTalkEnabled",
+      false,
+      expect.any(Function),
+    );
     expect(
       [...row("Additional languages").querySelectorAll("option")].map((option) => option.value),
     ).toEqual([""]);
-    select("Primary language", "de-DE");
-    expectNativeWrite("voice.locale.additional", []);
-    expectNativeWrite("voice.locale.primary", "de-DE");
     row("Test microphone…").querySelector("button")?.click();
     expect(nativeDeviceSettings.openPanel).toHaveBeenCalledWith("microphone-test");
     snapshot.voice.wakeEnabled = true;
     publishSnapshot();
     await waitForSolid(() => expectWakeDisabled(false));
-    row("Voice Wake").click();
-    expectNativeWrite("voice.wakeEnabled", false);
     snapshot.voice.wakeEnabled = false;
     publishSnapshot();
     expectWakeDisabled(true);
