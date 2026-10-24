@@ -76,6 +76,39 @@ const connectedGateway = (methods: string[]) => ({
   },
 });
 
+function buttonNamed(container: ParentNode, label: string) {
+  return [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === label,
+  )!;
+}
+function chooseCamera(select: HTMLSelectElement) {
+  select.value = "camera-1";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+function expectCameraFocus(container: ParentNode, select: HTMLSelectElement) {
+  expect(container.querySelector("[data-settings-camera]")).toBe(select);
+  expect(document.activeElement).toBe(select);
+}
+function updateReadContext(
+  first: Promise<boolean>,
+  second: Promise<boolean>,
+  text = "Current update status",
+  source?: "read",
+) {
+  const refreshUpdateStatus = vi
+    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
+    .mockReturnValueOnce(first)
+    .mockReturnValueOnce(second);
+  const context = configContext({
+    gateway: connectedGateway(["update.status"]),
+    overlays: {
+      refreshUpdateStatus,
+      snapshot: { updateStatusBanner: { ...(source ? { source } : {}), tone: "warn", text } },
+    },
+  });
+  return { context, refreshUpdateStatus };
+}
+
 function profileContext(
   gatewayUrl: string,
   profileId: string | null,
@@ -227,9 +260,7 @@ it("renders Web Push registration publications and dispatches Unsubscribe withou
   expect(
     container.querySelector<HTMLInputElement>('input[aria-label="Notification label"]')?.value,
   ).toBe("Settings test browser");
-  const unsubscribe = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-    (button) => button.textContent?.trim() === "Unsubscribe",
-  )!;
+  const unsubscribe = buttonNamed(container, "Unsubscribe");
   expect(unsubscribe.disabled).toBe(false);
   unsubscribe.click();
   expect(run).toHaveBeenCalledExactlyOnceWith({ kind: "disable" });
@@ -570,33 +601,27 @@ it("keeps the camera select mounted through pending, rejected, and retried selec
   const select = container.querySelector<HTMLSelectElement>("[data-settings-camera]")!;
   await waitForSolid(() => expect(select.options).toHaveLength(2));
   select.focus();
-  select.value = "camera-1";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  chooseCamera(select);
   await waitForSolid(() => expect(select.value).toBe("camera-1"));
   expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
   pending.reject(new Error("Synthetic camera unavailable"));
   const alert = () => select.closest(".settings-row")?.querySelector('[role="alert"]');
   await waitForSolid(() => expect(alert()?.textContent).toContain("Synthetic camera unavailable"));
   expect(select.value).toBe("");
-  expect(container.querySelector("[data-settings-camera]")).toBe(select);
-  expect(document.activeElement).toBe(select);
-  select.value = "camera-1";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  expectCameraFocus(container, select);
+  chooseCamera(select);
   await waitForSolid(() => expect(alert()).toBeNull());
   retry.reject(new Error("Synthetic second camera failure"));
   await waitForSolid(() => expect(alert()?.textContent).toBe("Synthetic second camera failure"));
   expect(select.value).toBe("");
-  expect(container.querySelector("[data-settings-camera]")).toBe(select);
-  expect(document.activeElement).toBe(select);
-  select.value = "camera-1";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  expectCameraFocus(container, select);
+  chooseCamera(select);
   await waitForSolid(() => expect(alert()).toBeNull());
   recovery.resolve();
   await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
   expect(alert()).toBeNull();
   expect(select.value).toBe("camera-1");
-  expect(container.querySelector("[data-settings-camera]")).toBe(select);
-  expect(document.activeElement).toBe(select);
+  expectCameraFocus(container, select);
 });
 
 it("leaves Appearance while a camera selection is unresolved", async () => {
@@ -606,8 +631,7 @@ it("leaves Appearance while a camera selection is unresolved", async () => {
   const view = mountConfigPage(configContext(), { pageId: "appearance" });
   const select = view.container.querySelector<HTMLSelectElement>("[data-settings-camera]")!;
   await waitForSolid(() => expect(select.options).toHaveLength(2));
-  select.value = "camera-1";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  chooseCamera(select);
   await waitForSolid(() =>
     expect(switchActiveRealtimeTalkCameras).toHaveBeenCalledWith("camera-1"),
   );
@@ -710,8 +734,7 @@ it("leaves the settings route before a camera switch settles and still records i
       ).toHaveLength(2),
     );
     const select = outlet.querySelector<HTMLSelectElement>("[data-settings-camera]")!;
-    select.value = "camera-1";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    chooseCamera(select);
     await waitForSolid(() =>
       expect(switchActiveRealtimeTalkCameras).toHaveBeenCalledWith("camera-1"),
     );
@@ -789,39 +812,15 @@ it.each([
   expect(state.mutationDisabled()).toBe(true);
 });
 
-it("refreshes update status once when the page becomes active", async () => {
-  const refreshUpdateStatus = vi.fn(async () => {});
-  const context = configContext({
-    gateway: connectedGateway(["update.status"]),
-    overlays: { refreshUpdateStatus },
-  });
-
-  const view = mountConfigPage(context, { pageId: "updates" });
-  publishConfigSource(context.gateway);
-  publishConfigSource(context.overlays);
-  await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledOnce());
-
-  view.update({ pageId: "advanced" });
-  view.update({ pageId: "updates" });
-  await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledTimes(2));
-});
-
 it("presents initial and manual update status reads without hiding policy controls", async () => {
   const initial = deferred<boolean>();
   const manual = deferred<boolean>();
-  const refreshUpdateStatus = vi
-    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
-    .mockReturnValueOnce(initial.promise)
-    .mockReturnValueOnce(manual.promise);
-  const context = configContext({
-    gateway: connectedGateway(["update.status"]),
-    overlays: {
-      refreshUpdateStatus,
-      snapshot: {
-        updateStatusBanner: { source: "read", tone: "warn", text: "Recorded update status" },
-      },
-    },
-  });
+  const { context, refreshUpdateStatus } = updateReadContext(
+    initial.promise,
+    manual.promise,
+    "Recorded update status",
+    "read",
+  );
   const { container } = mountConfigPage(context, { pageId: "updates" });
   const status = () => container.querySelector(".settings-status")?.textContent;
   await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
@@ -830,9 +829,7 @@ it("presents initial and manual update status reads without hiding policy contro
 
   initial.resolve(true);
   await waitForSolid(() => expect(status()).toContain("Recorded update status"));
-  const check = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === "Check status",
-  )!;
+  const check = buttonNamed(container, "Check status");
   check.click();
   await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
   expect(check.disabled).toBe(true);
@@ -848,20 +845,14 @@ it("presents initial and manual update status reads without hiding policy contro
 it("retires an update status receipt when the page leaves and re-enters", async () => {
   const first = deferred<boolean>();
   const second = deferred<boolean>();
-  const refreshUpdateStatus = vi
-    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
-    .mockReturnValueOnce(first.promise)
-    .mockReturnValueOnce(second.promise);
-  const context = configContext({
-    gateway: connectedGateway(["update.status"]),
-    overlays: {
-      refreshUpdateStatus,
-      snapshot: { updateStatusBanner: { tone: "warn", text: "Current update status" } },
-    },
-  });
+  const { context, refreshUpdateStatus } = updateReadContext(first.promise, second.promise);
   const view = mountConfigPage(context, { pageId: "updates" });
-  const status = () => view.container.querySelector(".settings-status")?.textContent;
+  const { container } = view;
+  const status = () => container.querySelector(".settings-status")?.textContent;
   await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  publishConfigSource(context.gateway);
+  publishConfigSource(context.overlays);
+  expect(refreshUpdateStatus).toHaveBeenCalledOnce();
   view.update({ pageId: "advanced" });
   view.update({ pageId: "updates" });
   expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
@@ -874,18 +865,9 @@ it("retires an update status receipt when the page leaves and re-enters", async 
 it("retries a rejected update status read without hiding policy controls", async () => {
   const failed = deferred<boolean>();
   const retried = deferred<boolean>();
-  const refreshUpdateStatus = vi
-    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
-    .mockReturnValueOnce(failed.promise)
-    .mockReturnValueOnce(retried.promise);
-  const context = configContext({
-    gateway: connectedGateway(["update.status"]),
-    overlays: {
-      refreshUpdateStatus,
-      snapshot: { updateStatusBanner: { tone: "warn", text: "Current update status" } },
-    },
-  });
+  const { context, refreshUpdateStatus } = updateReadContext(failed.promise, retried.promise);
   const { container } = mountConfigPage(context, { pageId: "updates" });
+  const status = () => container.querySelector(".settings-status")?.textContent;
   await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledOnce());
   failed.reject(new Error("Synthetic status read failed"));
   await waitForSolid(() =>
@@ -897,15 +879,11 @@ it("retries a rejected update status read without hiding policy controls", async
   container.querySelector<HTMLButtonElement>(".updates-status-check-failed button")!.click();
   await waitForSolid(() => {
     expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
-    expect(container.querySelector(".settings-status")?.textContent).toContain(
-      "Checking for updates…",
-    );
+    expect(status()).toContain("Checking for updates…");
   });
   retried.resolve(true);
   await waitForSolid(() => {
-    expect(container.querySelector(".settings-status")?.textContent).toContain(
-      "Current update status",
-    );
+    expect(status()).toContain("Current update status");
     expect(container.querySelector(".updates-status-check-failed")).toBeNull();
   });
 });
@@ -938,10 +916,7 @@ it("stages policy changes through patchForm and confirms Update Gateway… befor
   });
   const { container } = mountConfigPage(context, { pageId: "updates" });
   const restoreDialogPolyfill = installDialogPolyfill();
-  const updateButton = () =>
-    [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Update Gateway…",
-    )!;
+  const updateButton = () => buttonNamed(container, "Update Gateway…");
   const status = () => container.querySelector(".settings-status")?.textContent;
 
   context.overlays.snapshot.updateStatusRefreshing = true;
