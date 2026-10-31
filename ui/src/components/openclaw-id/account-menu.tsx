@@ -150,18 +150,25 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
   ];
 }
 
+// Runs a lazily loaded dialog; a failed load or dialog error shows one toast.
+function openDialog(open: () => Promise<unknown>) {
+  open().catch((error: unknown) =>
+    showToast({
+      message: t("openclawId.actionFailed", { error: formatUiError(error) }),
+      durationMs: 12_000,
+    }),
+  );
+}
+
 // Opens Make reachable, with the link code taken from the account when signed in.
 function startMakeReachable(client: GatewayBrowserClient, loaderDomain: string) {
-  void import("./make-reachable-dialog.tsx")
-    .then(({ showMakeReachableDialog }) =>
-      showMakeReachableDialog({ client, loaderDomain, signedIn: openClawIdAccount() }),
-    )
-    .catch((error: unknown) =>
-      showToast({
-        message: t("openclawId.makeReachableFailed", { error: formatUiError(error) }),
-        durationMs: 12_000,
-      }),
-    );
+  openDialog(async () =>
+    (await import("./make-reachable-dialog.tsx")).showMakeReachableDialog({
+      client,
+      loaderDomain,
+      signedIn: openClawIdAccount(),
+    }),
+  );
 }
 
 // After sign-in on an unlinked claw: offer Make reachable (dismissing is "Not now").
@@ -204,14 +211,9 @@ export function selectOpenClawIdMenuValue(
   if (value === PEOPLE) {
     context.onNavigate("plugin", pluginTabLocation(OPENCLAW_ID_PEOPLE_PAGE, context.basePath));
   } else if (value === DEVICES && client) {
-    void import("./owner-devices-dialog.tsx")
-      .then(({ showOwnerDevicesDialog }) => showOwnerDevicesDialog({ client }))
-      .catch((error: unknown) =>
-        showToast({
-          message: t("openclawId.devicesFailed", { error: formatUiError(error) }),
-          durationMs: 12_000,
-        }),
-      );
+    openDialog(async () =>
+      (await import("./owner-devices-dialog.tsx")).showOwnerDevicesDialog({ client }),
+    );
   } else if (value === SIGN_OUT) {
     signOutOfOpenClawId();
   } else if (value === SIGN_IN && client) {

@@ -50,14 +50,6 @@
   flex: 1 1 240px;
 }
 
-.ocid-access__link {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md, 8px);
-}
-
 .ocid-access__url {
   overflow-wrap: anywhere;
   font-family: var(--mono);
@@ -90,13 +82,4 @@
   gap: var(--space-2);
   color: var(--text-strong);
   font-weight: 600;
-}
-
-.ocid-access__badge {
-  padding: 1px var(--space-2);
-  border-radius: 999px;
-  background: var(--bg-elevated, var(--border));
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
 }

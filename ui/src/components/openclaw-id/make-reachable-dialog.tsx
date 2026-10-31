@@ -1,7 +1,7 @@
 import "../../styles/secret-reveal.css";
-import "../../styles/openclaw-id.css";
 import { createSignal, For, Match, Show, Switch } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { requestOpenClawIdLinkCode } from "../../lib/openclaw-id/account.ts";
 import { generateOwnerDeviceKey, saveOwnerDeviceKey } from "../../lib/openclaw-id/device-key.ts";
@@ -25,12 +25,14 @@ import type {
   OpenClawIdSignedIn,
   OpenClawIdStatusResult,
 } from "../../lib/openclaw-id/types.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { CopyButton } from "../solid/copy-button.tsx";
 import { Icon } from "../solid/icon.tsx";
 import { SettingsRow, SettingsToggleRow } from "../solid/settings-ui.tsx";
 import { clawNameFromHostname } from "./claw-name.ts";
+
+registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
 
 type Step =
   | { kind: "name" }
@@ -47,9 +49,18 @@ async function readRelayOnline(client: GatewayBrowserClient): Promise<boolean> {
   return result.status.state === "on" && tunnel?.state === "running" && tunnel.relayOnline === true;
 }
 
-// The dot of a linking step: waiting, running, done or a problem.
+// The mark of a linking step: waiting, running, done or a problem.
 function stepMark(state: LinkStepState["state"]): string {
   return state === "done" ? "✓" : state === "running" ? "…" : state === "waiting" ? "○" : "!";
+}
+
+// The chip style of a linking step's mark.
+function stepChip(state: LinkStepState["state"]): string {
+  return state === "done"
+    ? "chip chip-ok"
+    : state === "warning" || state === "failed"
+      ? "chip chip-warn"
+      : "chip";
 }
 
 /** The address Discovery offers for a claw name (openclawId.authority check_name). */
@@ -340,20 +351,28 @@ export function showMakeReachableDialog(params: {
                 {(ownerKey) => (
                   <>
                     <div class="secret-reveal__body openclaw-id-owner-key">
-                      <p class="openclaw-id-step__title">{t("openclawId.ownerKeyTitle")}</p>
+                      <p>
+                        <strong>{t("openclawId.ownerKeyTitle")}</strong>
+                      </p>
                       <p>{t("openclawId.ownerKeyBody")}</p>
-                      <dl class="openclaw-id-facts">
-                        <dt>{t("openclawId.ownerKeyFactKey")}</dt>
-                        <dd>{t("openclawId.ownerKeyFactKeyValue")}</dd>
-                        <dt>{t("openclawId.ownerKeyFactBrowser")}</dt>
-                        <dd>{t("openclawId.ownerKeyFactBrowserValue")}</dd>
-                        <dt>
-                          {t("openclawId.ownerKeyFactClaw", {
-                            name: clawNameFromHostname(ownerKey().preparation.hostname),
-                          })}
-                        </dt>
-                        <dd>{t("openclawId.ownerKeyFactClawValue")}</dd>
-                      </dl>
+                      <div class="list openclaw-id-facts">
+                        <div>
+                          <span class="muted">{t("openclawId.ownerKeyFactKey")}</span>{" "}
+                          {t("openclawId.ownerKeyFactKeyValue")}
+                        </div>
+                        <div>
+                          <span class="muted">{t("openclawId.ownerKeyFactBrowser")}</span>{" "}
+                          {t("openclawId.ownerKeyFactBrowserValue")}
+                        </div>
+                        <div>
+                          <span class="muted">
+                            {t("openclawId.ownerKeyFactClaw", {
+                              name: clawNameFromHostname(ownerKey().preparation.hostname),
+                            })}
+                          </span>{" "}
+                          {t("openclawId.ownerKeyFactClawValue")}
+                        </div>
+                      </div>
                     </div>
                     <openclaw-modal-actions class="exec-approval-actions">
                       <button type="button" class="btn" onClick={() => finish(false)}>
@@ -375,35 +394,44 @@ export function showMakeReachableDialog(params: {
                 {(kitStep) => (
                   <>
                     <div class="secret-reveal__body">
-                      <p class="openclaw-id-step__title">{t("openclawId.kitTitle")}</p>
+                      <p>
+                        <strong>{t("openclawId.kitTitle")}</strong>
+                      </p>
                       <p>{t("openclawId.kitBody")}</p>
                     </div>
-                    <div class="openclaw-id-kit" aria-label={t("openclawId.kitTitle")}>
-                      <div class="openclaw-id-kit__head">{t("openclawId.kitHeading")}</div>
+                    <div class="stack openclaw-id-kit" aria-label={t("openclawId.kitTitle")}>
+                      <strong>{t("openclawId.kitHeading")}</strong>
                       <code class="secret-reveal__code openclaw-id-kit__secret">
                         {kitStep().details.kit.text}
                       </code>
-                      <dl class="openclaw-id-facts">
-                        <dt>{t("openclawId.kitOwnerFingerprint")}</dt>
-                        <dd>{kitStep().details.kit.rootFingerprint}</dd>
+                      <div class="list openclaw-id-facts">
+                        <div>
+                          <span class="muted">{t("openclawId.kitOwnerFingerprint")}</span>{" "}
+                          {kitStep().details.kit.rootFingerprint}
+                        </div>
                         <Show when={kitStep().details.owner}>
                           {(owner) => (
                             <>
-                              <dt>{t("openclawId.kitOwner")}</dt>
-                              <dd>{owner()}</dd>
+                              <div>
+                                <span class="muted">{t("openclawId.kitOwner")}</span> {owner()}
+                              </div>
                             </>
                           )}
                         </Show>
-                        <dt>{t("openclawId.kitClaw")}</dt>
-                        <dd>https://{kitStep().details.hostname}</dd>
-                        <dt>{t("openclawId.kitCreated")}</dt>
-                        <dd>{kitStep().details.createdAt.toLocaleDateString()}</dd>
-                      </dl>
+                        <div>
+                          <span class="muted">{t("openclawId.kitClaw")}</span> https://
+                          {kitStep().details.hostname}
+                        </div>
+                        <div>
+                          <span class="muted">{t("openclawId.kitCreated")}</span>{" "}
+                          {kitStep().details.createdAt.toLocaleDateString()}
+                        </div>
+                      </div>
                     </div>
                     <div class="callout info secret-reveal__callout">
                       {t("openclawId.kitWarning")}
                     </div>
-                    <div class="openclaw-id-kit__actions">
+                    <div class="chip-row openclaw-id-kit__actions">
                       <button
                         type="button"
                         class="btn btn--sm"
@@ -467,18 +495,21 @@ export function showMakeReachableDialog(params: {
               >
                 {(linking) => (
                   <div class="secret-reveal__body" role="status">
-                    <p class="openclaw-id-step__title">
+                    <p class="openclaw-id-linking__title">
                       {t("openclawId.linkingTitle", {
                         name: clawNameFromHostname(linking().hostname),
                       })}
                     </p>
-                    <ol class="openclaw-id-steps">
+                    <div class="list openclaw-id-steps" role="list">
                       <For each={LINK_STEPS}>
                         {(id) => {
                           const current = () => linkStates()[id];
                           return (
-                            <li class={`openclaw-id-steps__item is-${current().state}`}>
-                              <span class="openclaw-id-steps__mark" aria-hidden="true">
+                            <div
+                              role="listitem"
+                              class={`row openclaw-id-steps__item is-${current().state}`}
+                            >
+                              <span class={stepChip(current().state)} aria-hidden="true">
                                 {stepMark(current().state)}
                               </span>
                               <div>
@@ -486,17 +517,17 @@ export function showMakeReachableDialog(params: {
                                   name: clawNameFromHostname(linking().hostname),
                                   host: linking().hostname,
                                 })}
-                                <small>
+                                <div class="muted">
                                   {"message" in current()
                                     ? (current() as { message: string }).message
                                     : t(`openclawId.step_${id}_hint`)}
-                                </small>
+                                </div>
                               </div>
-                            </li>
+                            </div>
                           );
                         }}
                       </For>
-                    </ol>
+                    </div>
                   </div>
                 )}
               </Match>

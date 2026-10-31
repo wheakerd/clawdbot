@@ -1,13 +1,13 @@
 // "Your devices" from the account menu (OCF-280): the claw's active owner
 // devices, which one is this browser, and Revoke for the others. Revoking also
 // ends the devices the revoked one approved; the dialog names them first.
-import "../../styles/openclaw-id.css";
 import { createSignal, For, Show } from "solid-js";
 import {
   displayFingerprint,
   fingerprint,
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   devicesApprovedBy,
@@ -15,8 +15,10 @@ import {
   thisOwnerDevice,
 } from "../../lib/openclaw-id/owner-devices.ts";
 import type { OpenClawIdOwnerDevice, OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
+
+registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
 
 type Link = OpenClawIdStatusResult["link"];
 
@@ -45,21 +47,21 @@ function DeviceRow(props: {
 }) {
   const [confirming, setConfirming] = createSignal(false);
   return (
-    <li class="openclaw-id-devices__row">
-      <div class="openclaw-id-devices__text">
-        <div class="openclaw-id-devices__label">
+    <div role="listitem" class="row openclaw-id-devices__row">
+      <div class="stack openclaw-id-devices__text">
+        <strong class="openclaw-id-devices__label">
           {props.device.label}
           <Show when={props.isThisBrowser}>
-            <span class="openclaw-id-devices__badge">{t("openclawId.thisBrowser")}</span>
+            <span class="chip">{t("openclawId.thisBrowser")}</span>
           </Show>
-        </div>
-        <div class="openclaw-id-devices__hint">
+        </strong>
+        <div class="muted openclaw-id-devices__hint">
           {props.device.peerKeys.length > 0
             ? t("openclawId.deviceRemote")
             : t("openclawId.deviceLocal")}
         </div>
         <Show when={confirming()}>
-          <p class="openclaw-id-devices__hint" role="note">
+          <p class="muted openclaw-id-devices__hint" role="note">
             {props.approved.length > 0
               ? t("openclawId.revokeCascade", {
                   devices: props.approved.map((device) => device.label).join(", "),
@@ -95,7 +97,7 @@ function DeviceRow(props: {
           </button>
         </Show>
       </Show>
-    </li>
+    </div>
   );
 }
 
@@ -148,7 +150,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
         >
           <div class="exec-approval-card openclaw-id-devices">
             <div class="exec-approval-title">{t("openclawId.yourDevices")}</div>
-            <p class="openclaw-id-devices__hint">{t("openclawId.yourDevicesBody")}</p>
+            <p class="muted openclaw-id-devices__hint">{t("openclawId.yourDevicesBody")}</p>
             <Show when={error()}>
               {(message) => (
                 <div class="callout danger" role="alert">
@@ -161,7 +163,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                 {t("openclawId.notOwnerDevice")}
               </div>
             </Show>
-            <ul class="openclaw-id-devices__list">
+            <div class="list openclaw-id-devices__list" role="list">
               <For each={devices()}>
                 {(device) => (
                   <DeviceRow
@@ -174,10 +176,10 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                   />
                 )}
               </For>
-            </ul>
+            </div>
             <Show when={ownerFp()}>
               {(fp) => (
-                <p class="openclaw-id-devices__hint">
+                <p class="muted openclaw-id-devices__hint">
                   {t("openclawId.recoveryKitLine", { fingerprint: fp() })}
                 </p>
               )}

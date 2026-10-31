@@ -82,7 +82,7 @@ export function InviteForm(props: {
       </div>
       <Show when={created()}>
         {(made) => (
-          <div class="ocid-access__link" role="status">
+          <div class="callout info stack ocid-access__link" role="status">
             <div>
               Invite link for {made().email} · expires {formatDay(made().expiresAt, props.locale)}
             </div>
@@ -204,7 +204,7 @@ function MemberRow(props: {
         </Show>
       </div>
       <div class="ocid-access__actions">
-        <span class="ocid-access__badge">{props.member.role}</span>
+        <span class="chip">{props.member.role}</span>
         <Show
           when={confirming()}
           fallback={
@@ -259,7 +259,7 @@ export function Members(props: {
             <div class="ocid-access__title">You</div>
             <div class="ocid-access__hint">{countDevices(props.ownerDevices)}</div>
           </div>
-          <span class="ocid-access__badge">owner</span>
+          <span class="chip">owner</span>
         </li>
         <For each={props.members}>
           {(member) => (
@@ -283,8 +283,8 @@ export function Members(props: {
                 </div>
               </div>
               <div class="ocid-access__actions">
-                <span class="ocid-access__badge">{invite.role}</span>
-                <span class="ocid-access__badge">Invited</span>
+                <span class="chip">{invite.role}</span>
+                <span class="chip">Invited</span>
               </div>
             </li>
           )}
