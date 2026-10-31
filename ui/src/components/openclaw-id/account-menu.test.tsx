@@ -67,14 +67,14 @@ describe("OpenClaw ID account menu", () => {
     expect(menu(null)).toEqual([]);
   });
 
-  it("signed out: local operator, sign-in, Make reachable and Devices & people", () => {
+  it("signed out: local operator, sign-in, Make reachable and People", () => {
     const entries = menu(status());
     expect(texts(entries)).toContain("Local operator · Not signed in · this computer only");
     expect(texts(entries)).toContain("Your conversations stay on this computer");
     expect(rows(entries).map((row) => row.label)).toEqual([
       "Sign in with OpenClaw ID",
       "Make reachable",
-      "Devices & people",
+      "People",
     ]);
     expect(rows(entries).every((row) => !row.disabled)).toBe(true);
   });
@@ -83,7 +83,7 @@ describe("OpenClaw ID account menu", () => {
     const entries = rows(menu(status({ channel: "tunnel" })));
     expect(entries.find((row) => row.label === "Sign in with OpenClaw ID")?.disabled).toBe(true);
     expect(entries.find((row) => row.label === "Make reachable")?.disabled).toBe(true);
-    expect(entries.find((row) => row.label === "Devices & people")?.disabled).toBeFalsy();
+    expect(entries.find((row) => row.label === "People")?.disabled).toBeFalsy();
   });
 
   it("signs in through the popup and shows the account until sign-out", async () => {
@@ -120,7 +120,8 @@ describe("OpenClaw ID account menu", () => {
       expect(labels(menu(current))).toEqual([
         "Signed in to OpenClaw ID as owner@example.test",
         "studio is reachable",
-        "Devices & people",
+        "Your devices",
+        "People",
         "Sign out of OpenClaw ID",
       ]),
     );
@@ -145,9 +146,9 @@ describe("OpenClaw ID account menu", () => {
     await vi.waitFor(() => expect(labels(menu(current))[0]).toBe("Sign in with OpenClaw ID"));
   });
 
-  it("opens the Devices & people plugin page", () => {
+  it("opens the People plugin page", () => {
     const onNavigate = vi.fn();
-    const handled = selectOpenClawIdMenuValue("openclaw-id:members", {
+    const handled = selectOpenClawIdMenuValue("openclaw-id:people", {
       status: status(),
       client: null,
       basePath: "",

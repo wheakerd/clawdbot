@@ -46,6 +46,12 @@ export async function generateOwnerDeviceKey(): Promise<{
   return { pair, signer: await toSigner(pair) };
 }
 
+/** This origin's owner device signer for a claw, or undefined when it holds none. */
+export async function loadOwnerDeviceSigner(clawId: string): Promise<StatementSigner | undefined> {
+  const pair = await run<StoredDeviceKey | undefined>("readonly", (store) => store.get(clawId));
+  return pair ? await toSigner(pair) : undefined;
+}
+
 /** Stores this origin's owner device key for a claw. */
 export async function saveOwnerDeviceKey(clawId: string, pair: StoredDeviceKey): Promise<void> {
   await run("readwrite", (store) => store.put(pair, clawId));

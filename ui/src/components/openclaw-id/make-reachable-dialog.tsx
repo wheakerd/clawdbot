@@ -1,51 +1,55 @@
 import "../../styles/secret-reveal.css";
-import { createSignal, Match, Show, Switch } from "solid-js";
+import "../../styles/openclaw-id.css";
+import { createSignal, For, Match, Show, Switch } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { requestOpenClawIdLinkCode } from "../../lib/openclaw-id/account.ts";
 import { generateOwnerDeviceKey, saveOwnerDeviceKey } from "../../lib/openclaw-id/device-key.ts";
 import {
-  createOpenClawIdCeremony,
-  linkCodePageUrl,
-  type OpenClawIdKit,
-} from "../../lib/openclaw-id/link.ts";
+  canStoreRecoveryKit,
+  downloadRecoveryKit,
+  printRecoveryKit,
+  storeRecoveryKit,
+  type RecoveryKitDetails,
+} from "../../lib/openclaw-id/kit-export.ts";
+import {
+  LINK_STEPS,
+  runLinkSteps,
+  type LinkStep,
+  type LinkStepState,
+} from "../../lib/openclaw-id/link-steps.ts";
+import { createOpenClawIdCeremony, linkCodePageUrl } from "../../lib/openclaw-id/link.ts";
 import type {
   OpenClawIdLinkPreparation,
   OpenClawIdPublication,
   OpenClawIdSignedIn,
+  OpenClawIdStatusResult,
 } from "../../lib/openclaw-id/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { CopyButton } from "../solid/copy-button.tsx";
 import { Icon } from "../solid/icon.tsx";
 import { SettingsRow, SettingsToggleRow } from "../solid/settings-ui.tsx";
+import { clawNameFromHostname } from "./claw-name.ts";
 
 type Step =
   | { kind: "name" }
-  | { kind: "intro"; preparation: OpenClawIdLinkPreparation }
-  | { kind: "kit"; preparation: OpenClawIdLinkPreparation; kit: OpenClawIdKit }
-  | { kind: "linking" }
+  | { kind: "ownerKey"; preparation: OpenClawIdLinkPreparation }
+  | { kind: "kit"; preparation: OpenClawIdLinkPreparation; details: RecoveryKitDetails }
+  | { kind: "linking"; hostname: string }
   | { kind: "done"; hostname: string; publication: OpenClawIdPublication | null }
   | { kind: "error"; message: string };
 
-// Offers the kit as a text file so the owner can store it with their passwords.
-function downloadKit(kit: OpenClawIdKit, hostname: string) {
-  const text = [
-    "OpenClaw recovery kit",
-    "",
-    `Kit: ${kit.text}`,
-    `Owner fingerprint: ${kit.rootFingerprint}`,
-    `First claw: https://${hostname}`,
-    "",
-    "Anyone with this kit can take ownership of your claws. Keep it private.",
-    "",
-  ].join("\n");
-  const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "openclaw-recovery-kit.txt";
-  link.click();
-  URL.revokeObjectURL(url);
+// Whether the claw's outbound relay connection is up (openclawId.status tunnel).
+async function readRelayOnline(client: GatewayBrowserClient): Promise<boolean> {
+  const result = await client.request<OpenClawIdStatusResult>("openclawId.status", {});
+  const tunnel = result.status.tunnel;
+  return result.status.state === "on" && tunnel?.state === "running" && tunnel.relayOnline === true;
+}
+
+// The dot of a linking step: waiting, running, done or a problem.
+function stepMark(state: LinkStepState["state"]): string {
+  return state === "done" ? "✓" : state === "running" ? "…" : state === "waiting" ? "○" : "!";
 }
 
 /** The address Discovery offers for a claw name (openclawId.authority check_name). */
@@ -55,11 +59,13 @@ type NameCheck = { name: string; accountTag: string; hostname: string; available
 const DEFAULT_CLAW_NAME = "claw";
 
 /**
- * "Make reachable" (spec section 4): the owner names the claw (Discovery assigns
- * "<name>-<account tag>.<loader domain>" for the link code's account), then
- * creates the recovery kit, blocks until the
- * owner confirms it is saved, signs the claw's binding with the kit's root and
- * hands only signed statements to the Gateway. Resolves true once linked.
+ * "Make reachable" (spec section 4; onboarding mockup steps 5-8): the owner
+ * names the claw (Discovery assigns "<name>-<account tag>.<loader domain>" for
+ * the link code's account); reads what the owner key is; gets the recovery kit
+ * and Continue unlocks only after a save action or the confirmation; then four
+ * linking steps run in view: signing with the owner key, pinning it on the
+ * claw, registration (possession proof and address reservation) and the relay
+ * connection. Only signed statements reach the Gateway. Resolves true once linked.
  * When the Control UI is signed in to OpenClaw ID, the link code comes from the
  * account; otherwise (or if that fails) the owner pastes one.
  */
@@ -126,7 +132,7 @@ export function showMakeReachableDialog(params: {
             "openclawId.authority",
             { action: "prepare", ...nameRequest() },
           );
-          setStep({ kind: "intro", preparation });
+          setStep({ kind: "ownerKey", preparation });
         } catch (error) {
           setNameError(formatUiError(error));
         }
@@ -137,36 +143,74 @@ export function showMakeReachableDialog(params: {
       };
       const createKit = async (preparation: OpenClawIdLinkPreparation) => {
         try {
-          setStep({ kind: "kit", preparation, kit: await ceremony.createKit() });
+          const kit = await ceremony.createKit();
+          const owner = params.signedIn?.email ?? params.signedIn?.name ?? null;
+          setStep({
+            kind: "kit",
+            preparation,
+            details: { kit, hostname: preparation.hostname, owner, createdAt: new Date() },
+          });
         } catch (error) {
           setStep({ kind: "error", message: formatUiError(error) });
         }
       };
-      const link = async (preparation: OpenClawIdLinkPreparation) => {
-        setStep({ kind: "linking" });
+      const [linkStates, setLinkStates] = createSignal<Record<LinkStep, LinkStepState>>(
+        Object.fromEntries(LINK_STEPS.map((id) => [id, { state: "waiting" }])) as Record<
+          LinkStep,
+          LinkStepState
+        >,
+      );
+      const [kitNote, setKitNote] = createSignal<string | null>(null);
+      // Marks the kit saved after a save action, as ticking the box does.
+      const kitAction = async (action: () => boolean | Promise<boolean>) => {
+        setKitNote(null);
         try {
-          const device = await generateOwnerDeviceKey();
-          const statements = await ceremony.sign(
-            preparation,
-            device.signer,
-            t("openclawId.thisBrowser"),
-          );
-          // R is no longer needed once the statements are signed.
-          ceremony.discard();
-          const result = await params.client.request<{ publication: OpenClawIdPublication | null }>(
-            "openclawId.authority",
+          if (await action()) {
+            setSaved(true);
+          } else {
+            setKitNote(t("openclawId.kitActionUnavailable"));
+          }
+        } catch (error) {
+          setKitNote(t("openclawId.kitActionFailed", { error: formatUiError(error) }));
+        }
+      };
+      // The four honest linking steps (lib/openclaw-id/link-steps.ts).
+      const link = async (preparation: OpenClawIdLinkPreparation) => {
+        setStep({ kind: "linking", hostname: preparation.hostname });
+        const device = await generateOwnerDeviceKey();
+        let signed: Awaited<ReturnType<typeof ceremony.sign>> | undefined;
+        try {
+          const publication = await runLinkSteps(
             {
-              action: "commit",
-              ...statements,
-              enrollmentCode: nameRequest().enrollmentCode,
+              sign: async () => {
+                signed = await ceremony.sign(
+                  preparation,
+                  device.signer,
+                  t("openclawId.thisBrowser"),
+                );
+                // The owner key is no longer needed once the statements are signed.
+                ceremony.discard();
+              },
+              commit: async () => {
+                const result = await params.client.request<{
+                  publication: OpenClawIdPublication | null;
+                }>("openclawId.authority", {
+                  action: "commit",
+                  ...signed,
+                  enrollmentCode: nameRequest().enrollmentCode,
+                });
+                await saveOwnerDeviceKey(preparation.claw_id, device.pair);
+                return result.publication;
+              },
+              relayOnline: () => readRelayOnline(params.client),
             },
+            {
+              notPublished: (detail) => t("openclawId.stepNotPublished", { detail }),
+              relayOffline: t("openclawId.stepRelayOffline"),
+            },
+            (id, state) => setLinkStates((current) => ({ ...current, [id]: state })),
           );
-          await saveOwnerDeviceKey(preparation.claw_id, device.pair);
-          setStep({
-            kind: "done",
-            hostname: preparation.hostname,
-            publication: result.publication,
-          });
+          setStep({ kind: "done", hostname: preparation.hostname, publication });
         } catch (error) {
           ceremony.discard();
           setStep({ kind: "error", message: formatUiError(error) });
@@ -290,12 +334,26 @@ export function showMakeReachableDialog(params: {
                   </button>
                 </openclaw-modal-actions>
               </Match>
-              <Match when={step().kind === "intro" && (step() as Extract<Step, { kind: "intro" }>)}>
-                {(intro) => (
+              <Match
+                when={step().kind === "ownerKey" && (step() as Extract<Step, { kind: "ownerKey" }>)}
+              >
+                {(ownerKey) => (
                   <>
-                    <div class="secret-reveal__body">
-                      <p>{t("openclawId.introBody", { host: intro().preparation.hostname })}</p>
-                      <p>{t("openclawId.introKit")}</p>
+                    <div class="secret-reveal__body openclaw-id-owner-key">
+                      <p class="openclaw-id-step__title">{t("openclawId.ownerKeyTitle")}</p>
+                      <p>{t("openclawId.ownerKeyBody")}</p>
+                      <dl class="openclaw-id-facts">
+                        <dt>{t("openclawId.ownerKeyFactKey")}</dt>
+                        <dd>{t("openclawId.ownerKeyFactKeyValue")}</dd>
+                        <dt>{t("openclawId.ownerKeyFactBrowser")}</dt>
+                        <dd>{t("openclawId.ownerKeyFactBrowserValue")}</dd>
+                        <dt>
+                          {t("openclawId.ownerKeyFactClaw", {
+                            name: clawNameFromHostname(ownerKey().preparation.hostname),
+                          })}
+                        </dt>
+                        <dd>{t("openclawId.ownerKeyFactClawValue")}</dd>
+                      </dl>
                     </div>
                     <openclaw-modal-actions class="exec-approval-actions">
                       <button type="button" class="btn" onClick={() => finish(false)}>
@@ -305,9 +363,9 @@ export function showMakeReachableDialog(params: {
                         type="button"
                         class="btn primary"
                         autofocus
-                        onClick={() => void createKit(intro().preparation)}
+                        onClick={() => void createKit(ownerKey().preparation)}
                       >
-                        {t("openclawId.createKit")}
+                        {t("openclawId.createOwnerKey")}
                       </button>
                     </openclaw-modal-actions>
                   </>
@@ -317,27 +375,72 @@ export function showMakeReachableDialog(params: {
                 {(kitStep) => (
                   <>
                     <div class="secret-reveal__body">
+                      <p class="openclaw-id-step__title">{t("openclawId.kitTitle")}</p>
                       <p>{t("openclawId.kitBody")}</p>
                     </div>
-                    <div class="secret-reveal__value">
-                      <code class="secret-reveal__code">{kitStep().kit.text}</code>
-                      <CopyButton text={kitStep().kit.text} idleLabel={t("common.copy")} />
+                    <div class="openclaw-id-kit" aria-label={t("openclawId.kitTitle")}>
+                      <div class="openclaw-id-kit__head">{t("openclawId.kitHeading")}</div>
+                      <code class="secret-reveal__code openclaw-id-kit__secret">
+                        {kitStep().details.kit.text}
+                      </code>
+                      <dl class="openclaw-id-facts">
+                        <dt>{t("openclawId.kitOwnerFingerprint")}</dt>
+                        <dd>{kitStep().details.kit.rootFingerprint}</dd>
+                        <Show when={kitStep().details.owner}>
+                          {(owner) => (
+                            <>
+                              <dt>{t("openclawId.kitOwner")}</dt>
+                              <dd>{owner()}</dd>
+                            </>
+                          )}
+                        </Show>
+                        <dt>{t("openclawId.kitClaw")}</dt>
+                        <dd>https://{kitStep().details.hostname}</dd>
+                        <dt>{t("openclawId.kitCreated")}</dt>
+                        <dd>{kitStep().details.createdAt.toLocaleDateString()}</dd>
+                      </dl>
                     </div>
-                    <p class="secret-reveal__note">
-                      {t("openclawId.kitFingerprint", {
-                        fingerprint: kitStep().kit.rootFingerprint,
-                      })}
-                    </p>
                     <div class="callout info secret-reveal__callout">
                       {t("openclawId.kitWarning")}
                     </div>
-                    <button
-                      type="button"
-                      class="btn btn--sm"
-                      onClick={() => downloadKit(kitStep().kit, kitStep().preparation.hostname)}
-                    >
-                      {t("openclawId.downloadKit")}
-                    </button>
+                    <div class="openclaw-id-kit__actions">
+                      <button
+                        type="button"
+                        class="btn btn--sm"
+                        onClick={() =>
+                          void kitAction(() => {
+                            downloadRecoveryKit(kitStep().details);
+                            return true;
+                          })
+                        }
+                      >
+                        {t("openclawId.downloadKit")}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn--sm"
+                        onClick={() => void kitAction(() => printRecoveryKit(kitStep().details))}
+                      >
+                        {t("openclawId.printKit")}
+                      </button>
+                      <Show when={canStoreRecoveryKit()}>
+                        <button
+                          type="button"
+                          class="btn btn--sm"
+                          onClick={() => void kitAction(() => storeRecoveryKit(kitStep().details))}
+                        >
+                          {t("openclawId.storeKit")}
+                        </button>
+                      </Show>
+                      <CopyButton text={kitStep().details.kit.text} idleLabel={t("common.copy")} />
+                    </div>
+                    <Show when={kitNote()}>
+                      {(note) => (
+                        <p class="secret-reveal__note" role="status">
+                          {note()}
+                        </p>
+                      )}
+                    </Show>
                     <SettingsToggleRow
                       title={t("openclawId.kitSaved")}
                       checked={saved()}
@@ -353,16 +456,49 @@ export function showMakeReachableDialog(params: {
                         disabled={!saved()}
                         onClick={() => void link(kitStep().preparation)}
                       >
-                        {t("openclawId.makeReachable")}
+                        {t("openclawId.continue")}
                       </button>
                     </openclaw-modal-actions>
                   </>
                 )}
               </Match>
-              <Match when={step().kind === "linking"}>
-                <div class="secret-reveal__body" role="status">
-                  <p>{t("openclawId.linking")}</p>
-                </div>
+              <Match
+                when={step().kind === "linking" && (step() as Extract<Step, { kind: "linking" }>)}
+              >
+                {(linking) => (
+                  <div class="secret-reveal__body" role="status">
+                    <p class="openclaw-id-step__title">
+                      {t("openclawId.linkingTitle", {
+                        name: clawNameFromHostname(linking().hostname),
+                      })}
+                    </p>
+                    <ol class="openclaw-id-steps">
+                      <For each={LINK_STEPS}>
+                        {(id) => {
+                          const current = () => linkStates()[id];
+                          return (
+                            <li class={`openclaw-id-steps__item is-${current().state}`}>
+                              <span class="openclaw-id-steps__mark" aria-hidden="true">
+                                {stepMark(current().state)}
+                              </span>
+                              <div>
+                                {t(`openclawId.step_${id}`, {
+                                  name: clawNameFromHostname(linking().hostname),
+                                  host: linking().hostname,
+                                })}
+                                <small>
+                                  {"message" in current()
+                                    ? (current() as { message: string }).message
+                                    : t(`openclawId.step_${id}_hint`)}
+                                </small>
+                              </div>
+                            </li>
+                          );
+                        }}
+                      </For>
+                    </ol>
+                  </div>
+                )}
               </Match>
               <Match when={step().kind === "done" && (step() as Extract<Step, { kind: "done" }>)}>
                 {(done) => (

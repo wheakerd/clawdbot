@@ -1,9 +1,9 @@
 // The OpenClaw ID section of the sidebar account (identity) menu. It appears
 // only while the Labs flag (gateway.openclawId.enabled) is on and follows the
-// link-flow mockup (steps 2, 4 and 9): Sign in with OpenClaw ID, the account,
-// Make reachable or the linked address, Devices & people (the
-// openclaw-id-access plugin page) and Sign out. The link-code path of Make
-// reachable stays available when signed out.
+// onboarding mockup (steps 2, 4 and 9): Sign in with OpenClaw ID, the account,
+// Make reachable or the linked address, People (the openclaw-id-access plugin
+// page), Your devices (owner devices, revoke) and Sign out. The link-code path
+// of Make reachable stays available when signed out.
 import { createSignal } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pluginTabLocation } from "../../app-route-paths.ts";
@@ -20,16 +20,18 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
 import { renderSidebarMenuAction } from "../app-sidebar-dropdown.tsx";
 import type { MenuEntry } from "../solid/menu.tsx";
+import { clawNameFromHostname } from "./claw-name.ts";
 
 registerEnglishCatalog(registerOpenClawIdEnglish);
 
-/** The bundled plugin page ("Devices & people") for invites, requests, members and owner devices. */
-export const OPENCLAW_ID_MEMBERS_PAGE = { pluginId: "openclaw-id-access", id: "members" } as const;
+/** The bundled plugin page ("People") for invites, requests and members. */
+export const OPENCLAW_ID_PEOPLE_PAGE = { pluginId: "openclaw-id-access", id: "people" } as const;
 
 const VALUE_PREFIX = "openclaw-id:";
 const SIGN_IN = `${VALUE_PREFIX}sign-in`;
 const MAKE_REACHABLE = `${VALUE_PREFIX}make-reachable`;
-const MEMBERS = `${VALUE_PREFIX}members`;
+const PEOPLE = `${VALUE_PREFIX}people`;
+const DEVICES = `${VALUE_PREFIX}devices`;
 const SIGN_OUT = `${VALUE_PREFIX}sign-out`;
 const ACCOUNT = `${VALUE_PREFIX}account`;
 
@@ -73,16 +75,6 @@ function infoLine(id: string, text: string, className = "sidebar-openclaw-id__in
   };
 }
 
-/**
- * The claw's name from its address "<name>-<account tag>.<domain>", or the
- * whole first label when it carries no tag.
- */
-export function clawNameFromHostname(hostname: string): string {
-  const label = hostname.split(".")[0] ?? hostname;
-  const dash = label.lastIndexOf("-");
-  return dash > 0 ? label.slice(0, dash) : label;
-}
-
 // Signed-out, signed-in or linked account lines (link-flow mockup steps 2 and 9).
 function accountEntries(status: OpenClawIdStatusResult): MenuEntry[] {
   const account = openClawIdAccount();
@@ -119,6 +111,7 @@ function reachabilityEntries(status: OpenClawIdStatusResult): MenuEntry[] {
       ),
       infoLine("address", `https://${host}`),
       infoLine("encrypted", t("openclawId.encrypted")),
+      renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "key"),
     ];
   }
   const blocker = makeReachableBlocker(status);
@@ -134,7 +127,8 @@ function reachabilityEntries(status: OpenClawIdStatusResult): MenuEntry[] {
  * Menu entries for the OpenClaw ID section; empty while the flag is off.
  * Signed out: local operator, Sign in, "conversations stay on this computer".
  * Signed in: the account. Then Make reachable, or once linked the address and
- * transport; Devices & people (the openclaw-id-access plugin page); Sign out.
+ * transport and Your devices; People (the openclaw-id-access plugin page);
+ * Sign out. Unlink is not offered yet (OCF-281 needs a Discovery endpoint).
  */
 export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
   if (!status) {
@@ -144,7 +138,7 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
     infoLine("title", t("openclawId.menuTitle"), "sidebar-openclaw-id__title"),
     ...accountEntries(status),
     ...reachabilityEntries(status),
-    renderSidebarMenuAction(MEMBERS, t("openclawId.devicesAndPeople"), "users"),
+    renderSidebarMenuAction(PEOPLE, t("openclawId.people"), "users"),
     ...(openClawIdAccount()
       ? [renderSidebarMenuAction(SIGN_OUT, t("openclawId.signOut"), "x")]
       : []),
@@ -207,8 +201,17 @@ export function selectOpenClawIdMenuValue(
     return false;
   }
   const { client, status } = context;
-  if (value === MEMBERS) {
-    context.onNavigate("plugin", pluginTabLocation(OPENCLAW_ID_MEMBERS_PAGE, context.basePath));
+  if (value === PEOPLE) {
+    context.onNavigate("plugin", pluginTabLocation(OPENCLAW_ID_PEOPLE_PAGE, context.basePath));
+  } else if (value === DEVICES && client) {
+    void import("./owner-devices-dialog.tsx")
+      .then(({ showOwnerDevicesDialog }) => showOwnerDevicesDialog({ client }))
+      .catch((error: unknown) =>
+        showToast({
+          message: t("openclawId.devicesFailed", { error: formatUiError(error) }),
+          durationMs: 12_000,
+        }),
+      );
   } else if (value === SIGN_OUT) {
     signOutOfOpenClawId();
   } else if (value === SIGN_IN && client) {
