@@ -127,6 +127,24 @@ Failure codes (stable; callers match codes, never detail text): `malformed`,
 `conflicting_rotation`, `wrong_claw`, `host_mismatch`, `rollback`, `server_key_revoked`,
 `bad_proof`.
 
+## Revoking an owner device (OCF-280)
+
+An owner device is active only while its certificate is in the current root epoch and no
+fingerprint in its chain is revoked (`isOwnerDeviceActive`). A Revocation of an owner device
+therefore also ends every owner device it approved, directly or further down the chain
+(phone approved by a laptop approved by the first browser). The Gateway lists, admits and
+accepts statements from active owner devices only, and it cuts the connections of every
+device that stops being active.
+
+The Control UI says this before it signs: "Your devices" (account menu) names the devices that
+will lose access with the one being revoked. A device can come back only with the recovery
+kit (which re-certifies it directly under R) or a fresh approval from another active owner
+device. This browser cannot revoke itself from the Control UI.
+
+**Decision pending (Josh):** this cascade is the current behaviour, chosen on 2026-10-31 by
+the coordinator. The alternative is to revoke only the target and re-certify the devices it
+approved under the approver's own approver (or R). Handoff README section 4a left this open.
+
 ## Pins and rollback (spec section 5, step 3)
 
 A client stores per origin `ClawPin = { claw_id, root_fp, root_epoch, binding_seq }`. A pin
