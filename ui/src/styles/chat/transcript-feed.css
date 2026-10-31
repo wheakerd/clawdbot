@@ -13,9 +13,7 @@
 
 .chat-task-feed__icon,
 .chat-task-feed__time,
-.chat-task-feed__summary,
-.chat-task-feed__user,
-.chat-task-feed__block {
+.chat-task-feed__summary {
   color: var(--muted);
 }
 
@@ -46,11 +44,6 @@
 .chat-task-feed__body :is(pre, table) {
   max-width: 100%;
   overflow-x: auto;
-}
-
-.chat-task-feed__user {
-  border-inline-start: 2px solid var(--border);
-  padding-inline-start: 8px;
 }
 
 .chat-task-feed__tool-group > summary,

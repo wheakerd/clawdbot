@@ -62,12 +62,6 @@
   text-align: right;
 }
 
-.chat-subagents__finished-toggle svg {
-  flex-shrink: 0;
-  width: 12px;
-  height: 12px;
-}
-
 .chat-subagents__error {
   display: flex;
   flex-direction: column;
@@ -127,15 +121,13 @@
 }
 
 .chat-subagents__stop:hover:enabled,
-.chat-subagent-detail__back:hover,
-.chat-subagents__finished-toggle:hover {
+.chat-subagent-detail__back:hover {
   background: var(--bg-hover);
   color: var(--text-strong);
 }
 
 @media (pointer: coarse) {
   .chat-subagents__open,
-  .chat-subagents__finished-toggle,
   .chat-subagent-detail__back {
     min-height: 44px;
   }

@@ -1,7 +1,7 @@
 .chat-mobile-host {
   --mobile-list-surface: color-mix(in srgb, var(--popover) 95%, var(--text) 5%);
   --mobile-list-separator: var(--border-strong);
-  --mobile-list-radius: 14px;
+  --mobile-list-radius: var(--radius-lg);
   --mobile-list-icon: 18px;
   --mobile-list-gap: 12px;
 }
@@ -33,7 +33,7 @@
 
 .chat-details-mobile-root__group {
   min-width: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--mobile-list-surface);
 }
 
@@ -42,13 +42,13 @@
 }
 
 .chat-details-mobile-root__group > :first-child {
-  border-start-start-radius: 14px;
-  border-start-end-radius: 14px;
+  border-start-start-radius: var(--radius-lg);
+  border-start-end-radius: var(--radius-lg);
 }
 
 .chat-details-mobile-root__group > :last-child {
-  border-end-start-radius: 14px;
-  border-end-end-radius: 14px;
+  border-end-start-radius: var(--radius-lg);
+  border-end-end-radius: var(--radius-lg);
 }
 
 .chat-details-mobile-root__group > * + *::before {

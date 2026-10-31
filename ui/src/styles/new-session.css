@@ -63,24 +63,13 @@ openclaw-new-session-page,
   height: 19px;
 }
 
-:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
-:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active):hover:not(
+.new-session-page__draft-toggle--active,
+.new-session-page__draft-toggle--active:hover:not(
     :disabled
   ) {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
-}
-
-.new-session-page__incognito-toggle--active.shell-chrome-controls__button {
-  width: auto;
-  padding-inline: 10px;
-  gap: 7px;
-}
-
-.new-session-page__incognito-toggle-label {
-  font-size: 12px;
-  font-weight: 600;
 }
 
 html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__incognito-rail {
