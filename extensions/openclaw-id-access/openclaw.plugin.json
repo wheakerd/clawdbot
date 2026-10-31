@@ -1,0 +1,23 @@
+{
+  "id": "openclaw-id-access",
+  "name": "OpenClaw ID members",
+  "description": "Invite people to this claw, approve their requests, and manage members and owner devices.",
+  "categories": [
+    "security"
+  ],
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": false
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/32948dd9135f5c18e63ba1514507138e4e32d352ec89b62133999fb32132396c/index.js",
+    "styles": [
+      "dist/control-ui/32948dd9135f5c18e63ba1514507138e4e32d352ec89b62133999fb32132396c/index.css"
+    ]
+  }
+}
