@@ -8,6 +8,7 @@ describe("gateway.openclawId", () => {
     const openclawId = {
       enabled: true,
       issuerUrl: "https://issuer.example.test/api/auth",
+      clientId: "control-ui-client",
       discoveryUrl: "https://discovery.example.test",
       relayUrl: "https://relay.example.test/",
       loaderDomain: "loader.example.test",

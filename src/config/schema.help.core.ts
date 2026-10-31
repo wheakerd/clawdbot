@@ -115,6 +115,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Turns on experimental OpenClaw ID remote access (default: false). Changes apply without restarting the Gateway. Remote access also needs relayUrl; linking a claw additionally needs issuerUrl, discoveryUrl and loaderDomain.",
   "gateway.openclawId.issuerUrl":
     "OpenClaw ID issuer used to sign in for identity only while linking a claw. It is never trusted for membership, device approval or which server a client dials.",
+  "gateway.openclawId.clientId":
+    "Public OAuth client (authorization code with PKCE) the Control UI uses for Sign in with OpenClaw ID in its account menu. Its redirect URI is <Control UI origin>/openclaw-id/callback; sign-in works only from the Control UI on this machine.",
   "gateway.openclawId.discoveryUrl":
     "Discovery service that mirrors the claw descriptor and membership snapshot and relays mailbox messages. It is untrusted: every statement it returns is verified against the claw's pinned owner root.",
   "gateway.openclawId.relayUrl":

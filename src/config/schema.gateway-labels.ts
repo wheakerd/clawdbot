@@ -12,6 +12,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.openclawId": "OpenClaw ID Remote Access",
   "gateway.openclawId.enabled": "OpenClaw ID Remote Access Enabled",
   "gateway.openclawId.issuerUrl": "OpenClaw ID Issuer URL",
+  "gateway.openclawId.clientId": "OpenClaw ID Control UI Client ID",
   "gateway.openclawId.discoveryUrl": "OpenClaw ID Discovery URL",
   "gateway.openclawId.relayUrl": "OpenClaw ID Relay URL",
   "gateway.openclawId.loaderDomain": "OpenClaw ID Loader Domain",

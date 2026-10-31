@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { Ed25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { isEd25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { createOpenClawIdSignIn } from "../openclaw-id/account-sign-in.js";
 import { resolveOpenClawIdClientChannel } from "../openclaw-id/channel.js";
 import { decodeInviteProofKey } from "../openclaw-id/tunnel-api.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -35,6 +36,85 @@ function optionalCode(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+// Pending Control UI sign-ins live only in this process, for ten minutes each.
+const accountSignIn = createOpenClawIdSignIn();
+
+// Responds with a sign-in step's result, or maps its refusal to an RPC error.
+function respondSignIn<T extends object>(
+  opts: GatewayRequestHandlerOptions,
+  result: T | { ok: false; code: string; detail: string },
+) {
+  if ("ok" in result && result.ok === false) {
+    refuse(opts, result);
+    return;
+  }
+  opts.respond(true, result);
+}
+
+// The Control UI's OpenClaw ID account, direct loopback only, by action:
+// - account_begin: PKCE authorization URL for the sign-in popup (redirectUri
+//   ends with /openclaw-id/callback on the Control UI origin);
+// - account_complete: redeems the popup's code once; returns the account and ID token;
+// - account_link_code: a Discovery link code for the signed-in account, so Make
+//   reachable needs no pasted code.
+async function handleAccount(opts: GatewayRequestHandlerOptions, action: string) {
+  const config = opts.context.getRuntimeConfig().gateway?.openclawId;
+  if (config?.enabled !== true) {
+    opts.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "OpenClaw ID is off"));
+    return;
+  }
+  if (resolveOpenClawIdClientChannel(opts.client) !== "local_operator") {
+    refuse(opts, {
+      code: "not_local_operator",
+      detail: "Sign in with OpenClaw ID from the Control UI on this machine",
+    });
+    return;
+  }
+  const params = isRecord(opts.params) ? opts.params : {};
+  try {
+    if (action === "account_begin") {
+      if (!config.issuerUrl || !config.clientId) {
+        refuse(opts, { code: "unconfigured", detail: "set issuerUrl and clientId to sign in" });
+        return;
+      }
+      respondSignIn(
+        opts,
+        await accountSignIn.begin({
+          issuerUrl: config.issuerUrl,
+          clientId: config.clientId,
+          redirectUri: params.redirectUri,
+        }),
+      );
+      return;
+    }
+    if (action === "account_complete") {
+      respondSignIn(opts, await accountSignIn.complete({ state: params.state, code: params.code }));
+      return;
+    }
+    if (action === "account_link_code") {
+      if (!config.discoveryUrl) {
+        refuse(opts, { code: "unconfigured", detail: "set discoveryUrl to get a link code" });
+        return;
+      }
+      respondSignIn(
+        opts,
+        await accountSignIn.enrollmentCode({
+          discoveryUrl: config.discoveryUrl,
+          idToken: params.idToken,
+        }),
+      );
+      return;
+    }
+    refuse(opts, { code: "malformed", detail: `unknown account action ${action}` });
+  } catch (error) {
+    opts.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, `OpenClaw ID sign-in failed: ${String(error)}`),
+    );
+  }
+}
+
 export const openclawIdHandlers: GatewayRequestHandlers = {
   "openclawId.status": async (opts) => {
     const service = requireService(opts);
@@ -50,6 +130,7 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
         issuerUrl: config?.issuerUrl ?? null,
         discoveryUrl: config?.discoveryUrl ?? null,
         loaderDomain: config?.loaderDomain ?? null,
+        clientId: config?.clientId ?? null,
       },
     });
   },
@@ -64,13 +145,18 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
   //   verifies signature, chain, capability and seq; the mailbox never reaches here.
   //   Approving (`add` with invite_id) or denying (`deny_invite`) a pending
   //   redemption is a submit too;
-  // - register_invite: an owner-signed InviteCap and its base64url proof key.
+  // - register_invite: an owner-signed InviteCap and its base64url proof key;
+  // - account_*: the Control UI's OpenClaw ID sign-in (see handleAccount).
   "openclawId.authority": async (opts) => {
     const service = requireService(opts);
     if (!service) {
       return;
     }
     const params = isRecord(opts.params) ? opts.params : {};
+    if (typeof params.action === "string" && params.action.startsWith("account_")) {
+      await handleAccount(opts, params.action);
+      return;
+    }
     const channel = resolveOpenClawIdClientChannel(opts.client);
     const nameRequest = {
       enrollmentCode: optionalCode(params.enrollmentCode),

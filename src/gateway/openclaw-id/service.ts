@@ -420,6 +420,8 @@ export function createOpenClawIdService(params: {
       }
       const record = await (await getAuthority()).load();
       const state = record?.authority;
+      const { isOwnerDeviceActive } =
+        await import("../../../packages/openclaw-id-protocol/src/index.js");
       return {
         linked: Boolean(state),
         clawId: record?.claw_id,
@@ -427,14 +429,17 @@ export function createOpenClawIdService(params: {
         rootPub: state?.anchor.root_pub,
         rootEpoch: state?.anchor.root_epoch,
         seq: state?.seq,
+        // Revoked and earlier-epoch devices stay in the record but are no longer owners.
         ownerDevices: state
-          ? Object.values(state.owner_devices).map((device) => ({
-              devicePub: device.cert.body.device_pub,
-              label: device.cert.body.label,
-              peerKeys: device.cert.body.peer_keys,
-              // Public and signed: owner devices need it as the chain of their own changes.
-              cert: device.cert,
-            }))
+          ? Object.values(state.owner_devices)
+              .filter((device) => isOwnerDeviceActive(state, device))
+              .map((device) => ({
+                devicePub: device.cert.body.device_pub,
+                label: device.cert.body.label,
+                peerKeys: device.cert.body.peer_keys,
+                // Public and signed: owner devices need it as the chain of their own changes.
+                cert: device.cert,
+              }))
           : [],
         members: state
           ? Object.entries(state.members).map(([accountId, member]) => ({

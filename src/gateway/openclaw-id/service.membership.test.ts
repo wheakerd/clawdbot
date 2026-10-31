@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   deriveRootSigner,
+  fingerprint,
   formatEd25519PublicKey,
   formatIrohEndpointKey,
   generateEd25519Signer,
@@ -213,5 +214,49 @@ describe("Gateway membership authority and enforcement", () => {
     );
     expect(result).toMatchObject({ ok: false, code: "not_direct" });
     expect((await claw.authority.admittedPeerKeys()).admitted).not.toContain(bob);
+  });
+  it("lists only active owner devices after an owner device revokes another", async () => {
+    const claw = await linkedClaw();
+    const { service } = serviceFor(claw.authority);
+    const laptop = await generateEd25519Signer();
+    const laptopCert = await signStatement(
+      "OwnerDeviceCert",
+      {
+        device_pub: formatEd25519PublicKey(laptop.publicKey),
+        peer_keys: [formatIrohEndpointKey(randomBytes(32))],
+        label: "laptop",
+        scope: "owner",
+        caps: [...OWNER_CAPABILITIES],
+        issued_at: now(),
+        expires_at: null,
+        root_epoch: 1,
+      },
+      claw.root,
+    );
+    const added = await service.submitStatement(
+      "local_operator",
+      await claw.sign(2, { op: "add_owner_device", cert: laptopCert }, claw.root),
+    );
+    expect(added).toMatchObject({ ok: true });
+    expect((await service.linkStatus()).ownerDevices?.map((device) => device.label)).toEqual([
+      "phone",
+      "laptop",
+    ]);
+    const revocation = await signStatement(
+      "Revocation",
+      {
+        target_fp: await fingerprint(laptopCert.body.device_pub),
+        target_kind: "owner_device",
+        reason: "lost",
+        root_epoch: 1,
+        issued_at: now(),
+      },
+      claw.device,
+      [claw.cert],
+    );
+    expect(await service.submitStatement("tunnel", revocation)).toMatchObject({ ok: true });
+    expect((await service.linkStatus()).ownerDevices?.map((device) => device.label)).toEqual([
+      "phone",
+    ]);
   });
 });

@@ -30,6 +30,8 @@ export const GatewayOpenClawIdConfigSchema = z.strictObject({
   enabled: z.boolean().optional(),
   /** OpenClaw ID issuer used to sign in for identity only. */
   issuerUrl: ServiceUrlSchema.optional(),
+  /** Public OAuth client (PKCE) the Control UI signs in with from its account menu. */
+  clientId: z.string().trim().min(1).max(128).optional(),
   /** Discovery mirror and per-claw mailbox. */
   discoveryUrl: ServiceUrlSchema.optional(),
   /** The only iroh relay in the tunnel endpoint's relay map. */
