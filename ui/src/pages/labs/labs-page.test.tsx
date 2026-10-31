@@ -264,6 +264,15 @@ describe("LabsPage", () => {
     },
   );
 
+  it("shows OpenClaw ID as a flag only, pointing to the account menu", async () => {
+    const { page } = await mountPage(openclawId({ enabled: true }));
+    const toggle = labToggle(page, "OpenClaw ID remote access");
+    expect(toggle.checked).toBe(true);
+    expect(page.textContent).toContain("from the account menu");
+    expect(page.textContent).not.toContain("Make reachable");
+    expect(page.textContent).not.toContain("Invite someone");
+  });
+
   it("does not publish a retired save failure after a same-client reconnect", async () => {
     const { gateway, page, runtimeConfig, pendingPatch, toggle } = await startSave();
     await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());

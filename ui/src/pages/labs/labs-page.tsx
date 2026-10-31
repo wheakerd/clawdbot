@@ -36,7 +36,6 @@ import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
 import { resolveLabFeatureState, type LabFeature } from "./labs-feature-state.ts";
 import { labFeatureMergePatch, labFeatureResetPatch, LAB_FEATURES } from "./labs-registry.ts";
-import { OpenClawIdPanel } from "./openclaw-id-panel.tsx";
 
 registerEnglishCatalog(registerLabsEnglish);
 
@@ -354,7 +353,6 @@ export function LabsPage() {
             ]}
           />
         ) : null}
-        {props.feature.id === "openclawId" && featureState().enabled ? <OpenClawIdPanel /> : null}
         {props.feature.id === "codeMode" ? (
           <SettingsSelectRow
             nested

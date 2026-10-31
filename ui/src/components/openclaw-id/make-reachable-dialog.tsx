@@ -1,19 +1,24 @@
 import "../../styles/secret-reveal.css";
 import { createSignal, Match, Show, Switch } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { withPromiseModalHost } from "../../components/promise-modal-host.ts";
-import { CopyButton } from "../../components/solid/copy-button.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsRow, SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
-import { t } from "../../lib/reactive/i18n.ts";
-import { generateOwnerDeviceKey, saveOwnerDeviceKey } from "./openclaw-id-device-key.ts";
+import { requestOpenClawIdLinkCode } from "../../lib/openclaw-id/account.ts";
+import { generateOwnerDeviceKey, saveOwnerDeviceKey } from "../../lib/openclaw-id/device-key.ts";
 import {
   createOpenClawIdCeremony,
   linkCodePageUrl,
   type OpenClawIdKit,
-} from "./openclaw-id-link.ts";
-import type { OpenClawIdLinkPreparation, OpenClawIdPublication } from "./openclaw-id-types.ts";
+} from "../../lib/openclaw-id/link.ts";
+import type {
+  OpenClawIdLinkPreparation,
+  OpenClawIdPublication,
+  OpenClawIdSignedIn,
+} from "../../lib/openclaw-id/types.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { withPromiseModalHost } from "../promise-modal-host.ts";
+import { CopyButton } from "../solid/copy-button.tsx";
+import { Icon } from "../solid/icon.tsx";
+import { SettingsRow, SettingsToggleRow } from "../solid/settings-ui.tsx";
 
 type Step =
   | { kind: "name" }
@@ -55,10 +60,13 @@ const DEFAULT_CLAW_NAME = "claw";
  * creates the recovery kit, blocks until the
  * owner confirms it is saved, signs the claw's binding with the kit's root and
  * hands only signed statements to the Gateway. Resolves true once linked.
+ * When the Control UI is signed in to OpenClaw ID, the link code comes from the
+ * account; otherwise (or if that fails) the owner pastes one.
  */
 export function showMakeReachableDialog(params: {
   client: GatewayBrowserClient;
   loaderDomain: string;
+  signedIn?: OpenClawIdSignedIn | null;
 }): Promise<boolean> {
   const ceremony = createOpenClawIdCeremony();
   return withPromiseModalHost<boolean>(undefined, (modal) => {
@@ -69,6 +77,8 @@ export function showMakeReachableDialog(params: {
       const [name, setName] = createSignal(DEFAULT_CLAW_NAME);
       const [check, setCheck] = createSignal<NameCheck | null>(null);
       const [nameError, setNameError] = createSignal<string | null>(null);
+      const [codeFromAccount, setCodeFromAccount] = createSignal(false);
+      const [codeNote, setCodeNote] = createSignal<string | null>(null);
       const nameRequest = () => ({
         enrollmentCode: enrollmentCode().trim(),
         name: name().trim().toLowerCase(),
@@ -91,6 +101,21 @@ export function showMakeReachableDialog(params: {
           setNameError(formatUiError(error));
         }
       };
+      // Fills the link code from the signed-in account, then checks the default name.
+      const fillCodeFromAccount = async (signedIn: OpenClawIdSignedIn) => {
+        const account = signedIn.email ?? signedIn.name ?? signedIn.sub;
+        try {
+          setEnrollmentCode(await requestOpenClawIdLinkCode(params.client, signedIn));
+          setCodeFromAccount(true);
+          setCodeNote(t("openclawId.signedInLinkCode", { account }));
+          await checkName();
+        } catch (error) {
+          setCodeNote(t("openclawId.linkCodeFailed", { error: formatUiError(error) }));
+        }
+      };
+      if (params.signedIn) {
+        void fillCodeFromAccount(params.signedIn);
+      }
       // Records the address the owner root will sign; Discovery assigns it at registration.
       const prepare = async () => {
         setNameError(null);
@@ -122,7 +147,7 @@ export function showMakeReachableDialog(params: {
           const statements = await ceremony.sign(
             preparation,
             device.signer,
-            t("labsPage.openclawId.thisBrowser"),
+            t("openclawId.thisBrowser"),
           );
           // R is no longer needed once the statements are signed.
           ceremony.discard();
@@ -155,8 +180,8 @@ export function showMakeReachableDialog(params: {
       };
       return (
         <openclaw-modal-dialog
-          label={t("labsPage.openclawId.dialogTitle")}
-          description={t("labsPage.openclawId.dialogDescription")}
+          label={t("openclawId.dialogTitle")}
+          description={t("openclawId.dialogDescription")}
           onModal-cancel={cancel}
         >
           <div class="exec-approval-card">
@@ -166,48 +191,57 @@ export function showMakeReachableDialog(params: {
                   <Icon name="check" />
                 </span>
               </Show>
-              <div class="exec-approval-title">{t("labsPage.openclawId.dialogTitle")}</div>
+              <div class="exec-approval-title">{t("openclawId.dialogTitle")}</div>
             </div>
             <Switch>
               <Match when={step().kind === "name"}>
                 <div class="secret-reveal__body">
-                  <p>{t("labsPage.openclawId.nameBody")}</p>
+                  <p>{t("openclawId.nameBody")}</p>
                 </div>
+                <Show when={codeNote()}>
+                  {(note) => (
+                    <p class="secret-reveal__note" role="status">
+                      {note()}
+                    </p>
+                  )}
+                </Show>
+                <Show when={!codeFromAccount()}>
+                  <SettingsRow
+                    title={t("openclawId.enrollmentCode")}
+                    description={t("openclawId.enrollmentCodeHint")}
+                    control={
+                      <input
+                        class="settings-input"
+                        type="text"
+                        aria-label={t("openclawId.enrollmentCode")}
+                        autocomplete="off"
+                        spellcheck="false"
+                        value={enrollmentCode()}
+                        onInput={(event) => {
+                          setEnrollmentCode(event.currentTarget.value);
+                          setCheck(null);
+                        }}
+                        onChange={() => void checkName()}
+                      />
+                    }
+                  />
+                  <a
+                    class="btn btn--sm"
+                    href={linkCodePageUrl(params.loaderDomain)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {t("openclawId.getLinkCode")}
+                  </a>
+                </Show>
                 <SettingsRow
-                  title={t("labsPage.openclawId.enrollmentCode")}
-                  description={t("labsPage.openclawId.enrollmentCodeHint")}
+                  title={t("openclawId.clawName")}
+                  description={t("openclawId.clawNameHint")}
                   control={
                     <input
                       class="settings-input"
                       type="text"
-                      aria-label={t("labsPage.openclawId.enrollmentCode")}
-                      autocomplete="off"
-                      spellcheck="false"
-                      value={enrollmentCode()}
-                      onInput={(event) => {
-                        setEnrollmentCode(event.currentTarget.value);
-                        setCheck(null);
-                      }}
-                      onChange={() => void checkName()}
-                    />
-                  }
-                />
-                <a
-                  class="btn btn--sm"
-                  href={linkCodePageUrl(params.loaderDomain)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {t("labsPage.openclawId.getLinkCode")}
-                </a>
-                <SettingsRow
-                  title={t("labsPage.openclawId.clawName")}
-                  description={t("labsPage.openclawId.clawNameHint")}
-                  control={
-                    <input
-                      class="settings-input"
-                      type="text"
-                      aria-label={t("labsPage.openclawId.clawName")}
+                      aria-label={t("openclawId.clawName")}
                       autocomplete="off"
                       spellcheck="false"
                       maxlength={57}
@@ -224,8 +258,8 @@ export function showMakeReachableDialog(params: {
                   {(checked) => (
                     <p class="secret-reveal__note" role="status">
                       {checked().available
-                        ? t("labsPage.openclawId.nameAvailable", { host: checked().hostname })
-                        : t("labsPage.openclawId.nameTaken", { host: checked().hostname })}
+                        ? t("openclawId.nameAvailable", { host: checked().hostname })
+                        : t("openclawId.nameTaken", { host: checked().hostname })}
                     </p>
                   )}
                 </Show>
@@ -250,7 +284,7 @@ export function showMakeReachableDialog(params: {
                     }
                     onClick={() => void prepare()}
                   >
-                    {t("labsPage.openclawId.continue")}
+                    {t("openclawId.continue")}
                   </button>
                 </openclaw-modal-actions>
               </Match>
@@ -258,10 +292,8 @@ export function showMakeReachableDialog(params: {
                 {(intro) => (
                   <>
                     <div class="secret-reveal__body">
-                      <p>
-                        {t("labsPage.openclawId.introBody", { host: intro().preparation.hostname })}
-                      </p>
-                      <p>{t("labsPage.openclawId.introKit")}</p>
+                      <p>{t("openclawId.introBody", { host: intro().preparation.hostname })}</p>
+                      <p>{t("openclawId.introKit")}</p>
                     </div>
                     <openclaw-modal-actions class="exec-approval-actions">
                       <button type="button" class="btn" onClick={() => finish(false)}>
@@ -273,7 +305,7 @@ export function showMakeReachableDialog(params: {
                         autofocus
                         onClick={() => void createKit(intro().preparation)}
                       >
-                        {t("labsPage.openclawId.createKit")}
+                        {t("openclawId.createKit")}
                       </button>
                     </openclaw-modal-actions>
                   </>
@@ -283,29 +315,29 @@ export function showMakeReachableDialog(params: {
                 {(kitStep) => (
                   <>
                     <div class="secret-reveal__body">
-                      <p>{t("labsPage.openclawId.kitBody")}</p>
+                      <p>{t("openclawId.kitBody")}</p>
                     </div>
                     <div class="secret-reveal__value">
                       <code class="secret-reveal__code">{kitStep().kit.text}</code>
                       <CopyButton text={kitStep().kit.text} idleLabel={t("common.copy")} />
                     </div>
                     <p class="secret-reveal__note">
-                      {t("labsPage.openclawId.kitFingerprint", {
+                      {t("openclawId.kitFingerprint", {
                         fingerprint: kitStep().kit.rootFingerprint,
                       })}
                     </p>
                     <div class="callout info secret-reveal__callout">
-                      {t("labsPage.openclawId.kitWarning")}
+                      {t("openclawId.kitWarning")}
                     </div>
                     <button
                       type="button"
                       class="btn btn--sm"
                       onClick={() => downloadKit(kitStep().kit, kitStep().preparation.hostname)}
                     >
-                      {t("labsPage.openclawId.downloadKit")}
+                      {t("openclawId.downloadKit")}
                     </button>
                     <SettingsToggleRow
-                      title={t("labsPage.openclawId.kitSaved")}
+                      title={t("openclawId.kitSaved")}
                       checked={saved()}
                       onChange={(next) => setSaved(next)}
                     />
@@ -319,7 +351,7 @@ export function showMakeReachableDialog(params: {
                         disabled={!saved()}
                         onClick={() => void link(kitStep().preparation)}
                       >
-                        {t("labsPage.openclawId.makeReachable")}
+                        {t("openclawId.makeReachable")}
                       </button>
                     </openclaw-modal-actions>
                   </>
@@ -327,16 +359,16 @@ export function showMakeReachableDialog(params: {
               </Match>
               <Match when={step().kind === "linking"}>
                 <div class="secret-reveal__body" role="status">
-                  <p>{t("labsPage.openclawId.linking")}</p>
+                  <p>{t("openclawId.linking")}</p>
                 </div>
               </Match>
               <Match when={step().kind === "done" && (step() as Extract<Step, { kind: "done" }>)}>
                 {(done) => (
                   <>
                     <div class="secret-reveal__body">
-                      <p>{t("labsPage.openclawId.doneBody", { host: done().hostname })}</p>
+                      <p>{t("openclawId.doneBody", { host: done().hostname })}</p>
                       <Show when={done().publication?.state !== "published"}>
-                        <p>{t("labsPage.openclawId.doneNotPublished")}</p>
+                        <p>{t("openclawId.doneNotPublished")}</p>
                       </Show>
                     </div>
                     <openclaw-modal-actions class="exec-approval-actions">
@@ -346,7 +378,7 @@ export function showMakeReachableDialog(params: {
                         autofocus
                         onClick={() => finish(true)}
                       >
-                        {t("labsPage.openclawId.done")}
+                        {t("openclawId.done")}
                       </button>
                     </openclaw-modal-actions>
                   </>

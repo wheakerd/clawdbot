@@ -4,8 +4,16 @@ import { unsupportedControlUiBrowser } from "./app/boot-capabilities.ts";
 import { prepareApplicationStartup } from "./app/bootstrap-connection.ts";
 import { initializeControlUiDocumentHead } from "./app/control-ui-document-head.ts";
 import { startEarlyApplicationGateway } from "./app/early-gateway.ts";
+import {
+  finishOpenClawIdCallback,
+  isOpenClawIdCallbackPath,
+} from "./lib/openclaw-id/sign-in-callback.ts";
 
-if (!unsupportedControlUiBrowser) {
+// The OpenClaw ID sign-in popup returns to the SPA document; it only hands the
+// code back to the tab that opened it and never starts the application.
+if (isOpenClawIdCallbackPath(window.location.pathname)) {
+  finishOpenClawIdCallback();
+} else if (!unsupportedControlUiBrowser) {
   const initial = prepareApplicationStartup();
   initializeControlUiDocumentHead();
   const early = startEarlyApplicationGateway(initial);

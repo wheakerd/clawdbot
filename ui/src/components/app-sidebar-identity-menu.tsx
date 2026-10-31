@@ -1,5 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
@@ -7,10 +8,12 @@ import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
+import type { OpenClawIdStatusResult } from "../lib/openclaw-id/types.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
 import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
+import { openClawIdMenuEntries, selectOpenClawIdMenuValue } from "./openclaw-id/account-menu.tsx";
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import {
   COMMAND_VALUE_PREFIX,
@@ -91,6 +94,9 @@ type SidebarIdentityMenuParams = {
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
   onRetryConnect?: () => void;
+  /** OpenClaw ID status for this menu; null hides the section (Labs flag off). */
+  openclawIdStatus?: OpenClawIdStatusResult | null;
+  gatewayClient?: GatewayBrowserClient | null;
 };
 
 // The slot shares the command icon column so dots, glyphs, and labels line up.
@@ -241,6 +247,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
         ),
       },
       profileSeparator,
+      ...openClawIdMenuEntries(params.openclawIdStatus ?? null),
       ...(gateways ? [gatewayTitle, gateways, gatewaySeparator] : []),
       renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
         details: (
@@ -351,6 +358,16 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
         }
         params.onClose(false);
         if (selectSidebarHelpLink(value)) {
+          return;
+        }
+        if (
+          selectOpenClawIdMenuValue(value, {
+            status: params.openclawIdStatus ?? null,
+            client: params.gatewayClient,
+            basePath: params.basePath,
+            onNavigate: params.onNavigate,
+          })
+        ) {
           return;
         }
         const capability = nativeGatewaysCapability();

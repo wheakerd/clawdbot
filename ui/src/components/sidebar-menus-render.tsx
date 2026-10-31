@@ -44,6 +44,7 @@ import {
   renderSidebarSessionSortMenuForMenus,
 } from "./app-sidebar-session-menu-renderers.tsx";
 import { canRetryGatewayStatus } from "./gateway-status.ts";
+import { createOpenClawIdMenuStatus } from "./openclaw-id/account-menu.tsx";
 import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import { SessionMenu, type SessionMenuAction } from "./session-menu-solid.tsx";
@@ -275,6 +276,8 @@ function renderSidebarMenus(
           const user = selfUser();
           return user ? { ...user, watchedSessions: [] } : undefined;
         });
+        const gatewayClient = view.sessionDataContext?.gateway.snapshot.client;
+        const openclawIdStatus = createOpenClawIdMenuStatus(gatewayClient);
         const updateAvailable = createMemo(
           () =>
             isReleaseUpdateAvailable(
@@ -305,6 +308,8 @@ function renderSidebarMenus(
               onNavigate: (routeId, options) => view.onNavigate?.(routeId, options),
               onPairMobile: () => view.onPairMobile?.(),
               onRetryConnect: view.onRetryConnect,
+              openclawIdStatus: openclawIdStatus(),
+              gatewayClient,
             }}
           />
         );

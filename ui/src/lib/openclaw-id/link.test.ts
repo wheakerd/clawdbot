@@ -10,7 +10,7 @@ import {
   type Ed25519PublicKey,
   type IrohEndpointKey,
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
-import { createOpenClawIdCeremony, type OpenClawIdLinkPreparation } from "./openclaw-id-link.ts";
+import { createOpenClawIdCeremony, type OpenClawIdLinkPreparation } from "./link.ts";
 
 const prep: OpenClawIdLinkPreparation = {
   claw_id: "0123456789abcdef0123456789abcdef",

@@ -310,6 +310,8 @@ access**, or in config:
       issuerUrl: "https://id.example.com/api/auth",
       discoveryUrl: "https://discovery.example.com",
       loaderDomain: "claws.example.com",
+      // Optional: "Sign in with OpenClaw ID" in the account menu.
+      clientId: "<public PKCE client id>",
     },
   },
 }
@@ -317,6 +319,27 @@ access**, or in config:
 
 No service URL has a production default yet; the Gateway reports
 `unconfigured` until `relayUrl` is set. Changes apply without a restart.
+
+Labs only switches the feature on or off. Everything else lives outside Labs:
+
+- **Account menu** (your avatar, bottom left of the sidebar): **Sign in with
+  OpenClaw ID**, **Make reachable**, **Members & invites** and **Sign out**.
+- **Members & invites**: a page from the bundled `openclaw-id-access` plugin
+  (enabled by default) to invite someone, approve or deny their request, remove
+  members, and list or revoke owner devices.
+
+### Sign in with OpenClaw ID
+
+Sign-in uses an OpenID Connect authorization code flow with PKCE for the public
+client `clientId`, in a popup. It works only in a Control UI opened on the
+Gateway machine (direct loopback). The Gateway builds the authorization URL and
+redeems the code, because the issuer does not serve CORS; it keeps nothing but
+the short-lived pending sign-in. The popup returns to
+`<Control UI origin>/openclaw-id/callback`, so register that redirect for the
+client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port). The
+browser keeps the account and its ID token until the token expires or you sign
+out. While signed in, **Make reachable** gets its link code from your account
+instead of asking you to paste one.
 
 ### How the tunnel reaches the Gateway
 
@@ -340,9 +363,9 @@ No service URL has a production default yet; the Gateway reports
 
 ### Make a claw reachable
 
-With the lab on, **Settings → Labs → OpenClaw ID remote access** shows the
-tunnel status and a **Make reachable** button. The button works only in a
-Control UI opened on the Gateway machine itself (direct loopback):
+With the lab on, the account menu shows **Make reachable**. It works only in a
+Control UI opened on the Gateway machine itself (direct loopback). If you are
+not signed in, paste a link code from `https://claws.<loaderDomain>/link`:
 
 1. The Gateway creates the claw id and its signing key, and reports the tunnel's
    endpoint key.
