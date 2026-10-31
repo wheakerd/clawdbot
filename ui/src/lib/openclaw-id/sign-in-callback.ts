@@ -7,14 +7,8 @@
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
   OPENCLAW_ID_CALLBACK_KEY_PREFIX,
-  OPENCLAW_ID_CALLBACK_PATH,
   type OpenClawIdCallbackMessage,
 } from "./callback-contract.ts";
-
-/** True when this document is the sign-in popup's return. */
-export function isOpenClawIdCallbackPath(pathname: string): boolean {
-  return pathname.replace(/\/+$/, "").endsWith(OPENCLAW_ID_CALLBACK_PATH);
-}
 
 /** Hands the callback's result to the opener tab and closes the popup. */
 export function finishOpenClawIdCallback(): void {
