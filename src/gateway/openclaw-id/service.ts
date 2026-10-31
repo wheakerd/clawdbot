@@ -8,6 +8,7 @@ import type {
   Channel,
   Ed25519PublicKey,
   IrohEndpointKey,
+  MemberRole,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import type {
@@ -18,9 +19,11 @@ import type {
   OpenClawIdAuthority,
 } from "./authority.js";
 import { clawOriginOfRecord, setOpenClawIdClawOriginResolver } from "./claw-origin.js";
+import type { StoredClaw } from "./claw-store.js";
 import { setDeviceTokenBindingOwner } from "./device-token-binding.js";
 import type { TunnelApiHandler } from "./ingress-listener.js";
 import { listInviteViews } from "./invites-view.js";
+import type { OpenClawIdPeerActivity } from "./member-activity.js";
 import type { PublishOutcome } from "./publisher.js";
 import { setOpenClawIdTunnelPrincipalResolver } from "./tunnel-principal.js";
 import type { TunnelRuntime, TunnelRuntimeSettings } from "./tunnel-runtime.js";
@@ -40,12 +43,27 @@ export type OpenClawIdEffects = {
    * access is withdrawn, so their runs can still be found by connection.
    */
   captureConnections: (peerKeys: readonly string[]) => string[];
-  /** Cancels the active runs started over these connections; transcripts keep the cut. */
-  cancelRuns?: (connectionIds: readonly string[]) => Promise<void>;
+  /**
+   * Cancels the active runs started over these connections; transcripts keep
+   * the cut. Resolves with the number of runs it stopped.
+   */
+  cancelRuns?: (connectionIds: readonly string[]) => Promise<number>;
   /** Closes these Gateway connections. */
   closeConnections: (connectionIds: readonly string[]) => void;
   /** Revokes device tokens (device id and role) that were bound to removed keys. */
   revokeDeviceTokens: (tokens: ReadonlyArray<{ deviceId: string; role: string }>) => Promise<void>;
+  /** Live activity of these device keys (connections, last seen, active runs). */
+  describeActivity?: (peerKeys: readonly string[]) => Record<string, OpenClawIdPeerActivity>;
+};
+
+/** What an accepted removal cut, so the owner's page can say exactly what changed. */
+export type OpenClawIdRemovalSummary = {
+  /** Device keys whose access was withdrawn. */
+  devices: number;
+  /** Relayed Gateway connections that were closed. */
+  connectionsClosed: number;
+  /** Active runs that were stopped (transcripts keep the cut). */
+  runsCancelled: number;
 };
 
 type OpenClawIdLogger = {
@@ -217,8 +235,11 @@ export function createOpenClawIdService(params: {
 
   // Performs the side effects of an accepted write in a fixed order: find the
   // removed keys' connections, withdraw tunnel access, cancel their runs, close
-  // their sessions, revoke their tokens, then publish a new snapshot.
-  const applyEvents = async (events: AuthorityEvent[]) => {
+  // their sessions, revoke their tokens, then publish a new snapshot. Returns
+  // what a removal cut, or undefined when the write removed no keys.
+  const applyEvents = async (
+    events: AuthorityEvent[],
+  ): Promise<OpenClawIdRemovalSummary | undefined> => {
     effectsPromise ??= loadEffects?.();
     const effects = await effectsPromise;
     const removed = [
@@ -230,13 +251,19 @@ export function createOpenClawIdService(params: {
     ];
     const connections = removed.length > 0 ? (effects?.captureConnections(removed) ?? []) : [];
     await pushMembership();
+    let summary: OpenClawIdRemovalSummary | undefined;
     if (removed.length > 0) {
-      if (events.some((event) => event.type === "cancel_runs")) {
-        await effects?.cancelRuns?.(connections);
-      }
+      const runsCancelled = events.some((event) => event.type === "cancel_runs")
+        ? ((await effects?.cancelRuns?.(connections)) ?? 0)
+        : 0;
       effects?.closeConnections(connections);
       const tokens = await (await getAuthority()).unbindPeers(removed);
       await effects?.revokeDeviceTokens(tokens);
+      summary = {
+        devices: removed.length,
+        connectionsClosed: connections.length,
+        runsCancelled,
+      };
     }
     void notifyOwners(events).catch((error: unknown) =>
       params.log.warn(`openclaw-id: owner notices failed: ${String(error)}`),
@@ -246,6 +273,37 @@ export function createOpenClawIdService(params: {
         params.log.warn(`openclaw-id: publication failed: ${String(error)}`),
       );
     }
+    return summary;
+  };
+
+  // Members for the owner's People page: role, the name and email OpenClaw ID
+  // reported when they joined by invite (display only), when the owner approved
+  // them (seconds), and each device key's live activity read from this Gateway.
+  const describeMembers = async (
+    members: Record<string, { role: MemberRole; peer_keys: IrohEndpointKey[] }>,
+    reports: StoredClaw["invite_reports"],
+  ) => {
+    effectsPromise ??= loadEffects?.();
+    const effects = await effectsPromise;
+    const keys = Object.values(members).flatMap((member) => member.peer_keys);
+    const activity = effects?.describeActivity?.(keys) ?? {};
+    return Object.entries(members).map(([accountId, member]) => {
+      const report = Object.values(reports ?? {}).find(
+        (entry) => entry.account_id === accountId && entry.resolution === "approved",
+      );
+      return {
+        accountId,
+        role: member.role,
+        peerKeys: member.peer_keys,
+        email: report?.email ?? null,
+        displayName: report?.display_name ?? null,
+        approvedAt: report?.resolved_at ?? null,
+        devices: member.peer_keys.map((peerKey) => ({
+          peerKey,
+          ...(activity[peerKey] ?? { connections: 0, lastSeenAt: null, runs: [] }),
+        })),
+      };
+    });
   };
 
   // Mails owner notices through Discovery once the claw is registered there.
@@ -319,7 +377,9 @@ export function createOpenClawIdService(params: {
         redeem: (redemption, sender) => owner.redeem(redemption, sender),
         saveCursor: (cursor) => owner.recordDiscovery({ mailbox_cursor: cursor }),
       },
-      onApplied: (result) => applyEvents(result.events),
+      onApplied: async (result) => {
+        await applyEvents(result.events);
+      },
       log: params.log,
     });
   };
@@ -441,18 +501,7 @@ export function createOpenClawIdService(params: {
                 cert: device.cert,
               }))
           : [],
-        members: state
-          ? Object.entries(state.members).map(([accountId, member]) => ({
-              accountId,
-              role: member.role,
-              peerKeys: member.peer_keys,
-              // Reported by OpenClaw ID when the member joined by invite; display only.
-              email:
-                Object.values(record?.invite_reports ?? {}).find(
-                  (report) => report.account_id === accountId && report.resolution === "approved",
-                )?.email ?? null,
-            }))
-          : [],
+        members: state ? await describeMembers(state.members, record?.invite_reports) : [],
         invites: listInviteViews(record, Math.floor(Date.now() / 1000)),
         // After a restart, the last publication recorded with the claw stands in.
         publication:
@@ -528,15 +577,16 @@ export function createOpenClawIdService(params: {
     async submitStatement(
       channel: Channel | undefined,
       input: unknown,
-    ): Promise<AuthorityAccepted | AuthorityRefusal> {
+    ): Promise<(AuthorityAccepted & { removal?: OpenClawIdRemovalSummary }) | AuthorityRefusal> {
       if (!channel) {
         return refusal("not_direct", "membership changes come from an owner device on this claw");
       }
       const result = await (await getAuthority()).submit(input, channel);
-      if (result.ok) {
-        await applyEvents(result.events);
+      if (!result.ok) {
+        return result;
       }
-      return result;
+      const removal = await applyEvents(result.events);
+      return removal ? { ...result, removal } : result;
     },
 
     /**

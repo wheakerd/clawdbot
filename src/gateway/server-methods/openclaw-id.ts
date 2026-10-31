@@ -192,7 +192,12 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
         refuse(opts, result);
         return;
       }
-      opts.respond(true, { status: result.status, link: await service.linkStatus() });
+      opts.respond(true, {
+        status: result.status,
+        // What a removal cut (connections closed, runs stopped); absent otherwise.
+        removal: result.removal ?? null,
+        link: await service.linkStatus(),
+      });
       return;
     }
     if (params.action === "register_invite") {

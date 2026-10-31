@@ -88,9 +88,21 @@ function serviceFor(authority: Awaited<ReturnType<typeof linkedClaw>>["authority
     captureConnections: vi.fn((keys: readonly string[]) =>
       keys.map((key) => `conn-${key.slice(5, 9)}`),
     ),
-    cancelRuns: vi.fn(async () => {}),
+    cancelRuns: vi.fn(async (connections: readonly string[]) => connections.length),
     closeConnections: vi.fn(),
     revokeDeviceTokens: vi.fn(async () => {}),
+    describeActivity: vi.fn((keys: readonly string[]) =>
+      Object.fromEntries(
+        keys.map((key) => [
+          key,
+          {
+            connections: 1,
+            lastSeenAt: 1_700_000_000_000,
+            runs: [{ runId: "r1", sessionKey: "s1" }],
+          },
+        ]),
+      ),
+    ),
   };
   const service = createOpenClawIdService({
     getConfig: () => ({ enabled: true }),
@@ -135,11 +147,29 @@ describe("Gateway membership authority and enforcement", () => {
       }),
     );
     await claw.authority.bindToken("bob-device", "operator", bob);
+    const listed = await service.linkStatus();
+    expect(listed.members).toEqual([
+      expect.objectContaining({
+        accountId: "acct-bob",
+        role: "operator",
+        devices: [
+          {
+            peerKey: bob,
+            connections: 1,
+            lastSeenAt: 1_700_000_000_000,
+            runs: [{ runId: "r1", sessionKey: "s1" }],
+          },
+        ],
+      }),
+    ]);
     const result = await service.submitStatement(
       "local_operator",
       await claw.sign(3, { op: "remove", account_id: "acct-bob" }),
     );
-    expect(result).toMatchObject({ ok: true });
+    expect(result).toMatchObject({
+      ok: true,
+      removal: { devices: 1, connectionsClosed: 1, runsCancelled: 1 },
+    });
     expect((await claw.authority.admittedPeerKeys()).admitted).not.toContain(bob);
     const connection = `conn-${bob.slice(5, 9)}`;
     expect(effects.captureConnections).toHaveBeenCalledWith([bob]);

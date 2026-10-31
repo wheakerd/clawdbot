@@ -73,7 +73,7 @@ describe("removal effects", () => {
     });
     const connections = effects.captureConnections([BOB]);
     expect(connections).toEqual(["c-bob"]);
-    await effects.cancelRuns?.(connections);
+    expect(await effects.cancelRuns?.(connections)).toBe(1);
     expect(mocks.dispatch).toHaveBeenCalledTimes(1);
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "chat.abort",

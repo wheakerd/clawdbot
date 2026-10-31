@@ -41,6 +41,7 @@ export function createOpenClawIdRemovalEffects(params: {
       const context = params.context();
       // An internal admin Stop, like an operator pressing Stop on each run.
       const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
+      let cancelled = 0;
       for (const [runId, ref] of listRpcSourceEntries()) {
         const owner = ref.adapter.requester?.connectionId;
         if (!owner || !connectionIds.includes(owner) || !isRpcSourceActive(ref)) {
@@ -53,10 +54,12 @@ export function createOpenClawIdRemovalEffects(params: {
             { sessionKey, runId },
             { context, client },
           );
+          cancelled += 1;
         } catch (error) {
           params.log.warn(`openclaw-id: could not cancel run ${runId}: ${String(error)}`);
         }
       }
+      return cancelled;
     },
 
     closeConnections(connectionIds) {

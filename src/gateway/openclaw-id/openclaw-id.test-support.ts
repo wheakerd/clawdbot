@@ -103,9 +103,21 @@ export function serviceFor(authority: LinkedClaw["authority"]) {
     captureConnections: vi.fn((keys: readonly string[]) =>
       keys.map((key) => `conn-${key.slice(5, 9)}`),
     ),
-    cancelRuns: vi.fn(async () => {}),
+    cancelRuns: vi.fn(async (connections: readonly string[]) => connections.length),
     closeConnections: vi.fn(),
     revokeDeviceTokens: vi.fn(async () => {}),
+    describeActivity: vi.fn((keys: readonly string[]) =>
+      Object.fromEntries(
+        keys.map((key) => [
+          key,
+          {
+            connections: 1,
+            lastSeenAt: 1_700_000_000_000,
+            runs: [{ runId: "r1", sessionKey: "s1" }],
+          },
+        ]),
+      ),
+    ),
   };
   const log = { info: vi.fn(), warn: vi.fn() };
   const service = createOpenClawIdService({
