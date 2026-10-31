@@ -50,7 +50,7 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
-import { isProcessPresent } from "./run-process.test-support.js";
+import { fixtureReadyBeforeSettlement, isProcessPresent } from "./run-process.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
@@ -429,28 +429,6 @@ async function waitForReaped(pid: number, signal: AbortSignal): Promise<void> {
   }
 }
 
-function fixtureReadyBeforeSettlement(
-  readyPath: string,
-  operation: PromiseLike<unknown>,
-  message = "condition was not met before timeout",
-): Promise<void> {
-  // The durable marker precedes the receipt; process completion can overtake
-  // the socket delivery without making an already-ready fixture a failure.
-  const settled = Promise.resolve(operation).then(
-    () => {
-      if (!existsSync(readyPath)) {
-        throw new Error(message);
-      }
-    },
-    (error: unknown) => {
-      if (!existsSync(readyPath)) {
-        throw error;
-      }
-    },
-  );
-  return Promise.race([receipts.waitFor(readyPath, "ready"), settled]);
-}
-
 async function runReadyTimedCommand<T>(
   start: () => Promise<T>,
   readyPath: string,
@@ -483,7 +461,7 @@ async function runReadyTimedCommand<T>(
   }
   try {
     expect(deadlineMs).toBe(timeoutMs);
-    await withinTest(fixtureReadyBeforeSettlement(readyPath, command), signal);
+    await withinTest(fixtureReadyBeforeSettlement(receipts, readyPath, command), signal);
     ready();
     fireDeadline();
     return await withinTest(command, signal);
@@ -1533,6 +1511,7 @@ await runShellCommand({
       );
       await withinTest(
         fixtureReadyBeforeSettlement(
+          receipts,
           readyPath,
           closed.then(() => {
             throw new Error(`runner exited before readiness:\n${runnerStderr}`);
