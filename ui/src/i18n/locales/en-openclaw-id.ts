@@ -11,8 +11,12 @@ const enOpenClawId = {
     signedIn: "Signed in to OpenClaw ID as {account}",
     signInFailed: "OpenClaw ID sign-in failed: {error}",
     signOut: "Sign out of OpenClaw ID",
-    members: "Members & invites",
-    reachableAt: "Reachable at {host}",
+    localOperator: "Local operator · Not signed in · this computer only",
+    staysLocal: "Your conversations stay on this computer",
+    devicesAndPeople: "Devices & people",
+    isReachable: "{name} is reachable",
+    encrypted: "End-to-end encrypted · relays can't read it",
+    reachOffer: "Signed in as {account}. Reach this claw from anywhere?",
     makeReachableLocalOnly:
       "Open the Control UI on this machine (127.0.0.1) to make it reachable. Linking never runs over a remote connection.",
     needsLoaderDomain:

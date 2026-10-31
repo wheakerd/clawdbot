@@ -38,6 +38,14 @@ function rows(entries: ReturnType<typeof openClawIdMenuEntries>) {
     .map((entry) => entry as { id: string; label: string; disabled?: boolean });
 }
 
+// The text of the section's non-interactive lines.
+function texts(entries: ReturnType<typeof openClawIdMenuEntries>) {
+  return entries
+    .filter((entry) => "kind" in entry && entry.kind === "content")
+    .map((entry) => ((entry as { content: unknown }).content as HTMLElement).textContent ?? "")
+    .filter(Boolean);
+}
+
 function labels(entries: ReturnType<typeof openClawIdMenuEntries>) {
   return rows(entries).map((row) => row.label);
 }
@@ -59,21 +67,23 @@ describe("OpenClaw ID account menu", () => {
     expect(menu(null)).toEqual([]);
   });
 
-  it("offers sign-in, Make reachable and Members & invites when signed out", () => {
-    const entries = rows(menu(status()));
-    expect(entries.map((row) => row.label)).toEqual([
+  it("signed out: local operator, sign-in, Make reachable and Devices & people", () => {
+    const entries = menu(status());
+    expect(texts(entries)).toContain("Local operator · Not signed in · this computer only");
+    expect(texts(entries)).toContain("Your conversations stay on this computer");
+    expect(rows(entries).map((row) => row.label)).toEqual([
       "Sign in with OpenClaw ID",
       "Make reachable",
-      "Members & invites",
+      "Devices & people",
     ]);
-    expect(entries.every((row) => !row.disabled)).toBe(true);
+    expect(rows(entries).every((row) => !row.disabled)).toBe(true);
   });
 
   it("keeps sign-in and Make reachable local to this machine", () => {
     const entries = rows(menu(status({ channel: "tunnel" })));
     expect(entries.find((row) => row.label === "Sign in with OpenClaw ID")?.disabled).toBe(true);
     expect(entries.find((row) => row.label === "Make reachable")?.disabled).toBe(true);
-    expect(entries.find((row) => row.label === "Members & invites")?.disabled).toBeFalsy();
+    expect(entries.find((row) => row.label === "Devices & people")?.disabled).toBeFalsy();
   });
 
   it("signs in through the popup and shows the account until sign-out", async () => {
@@ -109,9 +119,15 @@ describe("OpenClaw ID account menu", () => {
     await vi.waitFor(() =>
       expect(labels(menu(current))).toEqual([
         "Signed in to OpenClaw ID as owner@example.test",
-        "Reachable at studio-e61zr.crabd.xyz",
-        "Members & invites",
+        "studio is reachable",
+        "Devices & people",
         "Sign out of OpenClaw ID",
+      ]),
+    );
+    expect(texts(menu(current))).toEqual(
+      expect.arrayContaining([
+        "https://studio-e61zr.crabd.xyz",
+        "End-to-end encrypted · relays can't read it",
       ]),
     );
     expect(request).toHaveBeenLastCalledWith("openclawId.authority", {
@@ -129,7 +145,7 @@ describe("OpenClaw ID account menu", () => {
     await vi.waitFor(() => expect(labels(menu(current))[0]).toBe("Sign in with OpenClaw ID"));
   });
 
-  it("opens the members plugin page", () => {
+  it("opens the Devices & people plugin page", () => {
     const onNavigate = vi.fn();
     const handled = selectOpenClawIdMenuValue("openclaw-id:members", {
       status: status(),

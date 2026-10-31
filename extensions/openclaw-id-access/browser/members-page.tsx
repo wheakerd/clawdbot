@@ -1,5 +1,10 @@
 /** @jsxImportSource @solidjs/web */
-import type { MemberRole } from "@openclaw/openclaw-id-protocol";
+import {
+  displayFingerprint,
+  fingerprint,
+  type MemberRole,
+  type PublicKeyText,
+} from "@openclaw/openclaw-id-protocol";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, For, Show, untrack } from "solid-js";
 import { createInvite, decideInvite, removeMember, type CreatedInvite } from "./invites.js";
@@ -20,6 +25,22 @@ function errorText(error: unknown): string {
 function shortKey(key: string): string {
   const body = key.slice(key.indexOf(":") + 1);
   return `${body.slice(0, 6)}…${body.slice(-4)}`;
+}
+
+// Display fingerprints of the devices pending requests come from, so the owner can
+// compare them with what the invitee's screen shows.
+async function pendingFingerprints(invites: Invite[]): Promise<ReadonlyMap<string, string>> {
+  const keys = invites.flatMap((invite) => (invite.pending ? [invite.pending.devicePub] : []));
+  const entries = await Promise.all(
+    keys.map(async (key) => {
+      try {
+        return [key, displayFingerprint(await fingerprint(key as PublicKeyText))] as const;
+      } catch {
+        return [key, shortKey(key)] as const;
+      }
+    }),
+  );
+  return new Map(entries);
 }
 
 /** Invite form; shows the created link once with a copy button. */
@@ -104,6 +125,8 @@ function InviteForm(props: {
 /** Pending redemptions with approve and deny. */
 function PendingRequests(props: {
   invites: Invite[];
+  /** Display fingerprint by device key, for the device each request comes from. */
+  fingerprints: ReadonlyMap<string, string>;
   disabled: boolean;
   locale: string;
   onDecide: (invite: Invite, approve: boolean) => void;
@@ -128,8 +151,9 @@ function PendingRequests(props: {
                       {who()} wants to join as {invite.role}
                     </div>
                     <div class="ocid-access__hint">
-                      {pending().reported.email ?? pending().accountId} ·{" "}
-                      {pending().reported.locationHint ?? "location unknown"} · as reported by
+                      {pending().reported.email ?? pending().accountId} · device{" "}
+                      {props.fingerprints.get(pending().devicePub) ?? shortKey(pending().devicePub)}{" "}
+                      · {pending().reported.locationHint ?? "location unknown"} · as reported by
                       OpenClaw ID · decide by {formatDay(pending().decideBy, props.locale)}
                     </div>
                   </div>
@@ -265,7 +289,7 @@ function OwnerDevices(props: {
 }
 
 /**
- * The "Members & invites" page: invite someone, approve or deny their request,
+ * The "Devices & people" page: invite someone, approve or deny their request,
  * manage members and owner devices. Every change is a statement this browser's
  * owner device signs and sends straight to the Gateway (openclawId.authority).
  */
@@ -274,6 +298,7 @@ export function MembersPage(props: { host: ControlUiHost }) {
   const host = untrack(() => props.host);
   const [state, setState] = createSignal<StatusResult | null>(null);
   const [ownDevicePub, setOwnDevicePub] = createSignal<string | null>(null);
+  const [fingerprints, setFingerprints] = createSignal<ReadonlyMap<string, string>>(new Map());
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -283,6 +308,7 @@ export function MembersPage(props: { host: ControlUiHost }) {
       const next = await host.request<StatusResult>("openclawId.status", {});
       const own = await thisOwnerDevice(next.link).catch(() => undefined);
       setOwnDevicePub(own?.devicePub ?? null);
+      setFingerprints(await pendingFingerprints(next.link.invites ?? []));
       setState(next);
     } catch (failure) {
       setError(errorText(failure));
@@ -316,7 +342,7 @@ export function MembersPage(props: { host: ControlUiHost }) {
     <section class="ocid-access">
       <header class="ocid-access__header">
         <div>
-          <h1>Members & invites</h1>
+          <h1>Devices & people</h1>
           <Show when={link()?.hostname}>
             {(hostname) => <p class="ocid-access__hint">https://{hostname()}</p>}
           </Show>
@@ -360,6 +386,7 @@ export function MembersPage(props: { host: ControlUiHost }) {
               </Show>
               <PendingRequests
                 invites={(current().link.invites ?? []).filter((i) => i.status === "pending")}
+                fingerprints={fingerprints()}
                 disabled={!canManage()}
                 locale={host.locale}
                 onDecide={(invite, approve) =>

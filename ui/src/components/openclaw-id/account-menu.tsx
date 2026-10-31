@@ -1,6 +1,7 @@
 // The OpenClaw ID section of the sidebar account (identity) menu. It appears
-// only while the Labs flag (gateway.openclawId.enabled) is on: Sign in with
-// OpenClaw ID, then the account with Make reachable, Members & invites (the
+// only while the Labs flag (gateway.openclawId.enabled) is on and follows the
+// link-flow mockup (steps 2, 4 and 9): Sign in with OpenClaw ID, the account,
+// Make reachable or the linked address, Devices & people (the
 // openclaw-id-access plugin page) and Sign out. The link-code path of Make
 // reachable stays available when signed out.
 import { createSignal } from "solid-js";
@@ -22,7 +23,7 @@ import type { MenuEntry } from "../solid/menu.tsx";
 
 registerEnglishCatalog(registerOpenClawIdEnglish);
 
-/** The bundled plugin and page that own invites, requests, members and owner devices. */
+/** The bundled plugin page ("Devices & people") for invites, requests, members and owner devices. */
 export const OPENCLAW_ID_MEMBERS_PAGE = { pluginId: "openclaw-id-access", id: "members" } as const;
 
 const VALUE_PREFIX = "openclaw-id:";
@@ -63,57 +64,129 @@ function makeReachableBlocker(status: OpenClawIdStatusResult): string | undefine
   return status.services.loaderDomain ? undefined : t("openclawId.needsLoaderDomain");
 }
 
-/** Menu entries for the OpenClaw ID section; empty while the flag is off. */
-export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
-  if (!status) {
-    return [];
-  }
-  const account = openClawIdAccount();
-  const title: MenuEntry = {
+// A non-interactive line of the section (status text, not a command).
+function infoLine(id: string, text: string, className = "sidebar-openclaw-id__info"): MenuEntry {
+  return {
     kind: "content",
-    id: "openclaw-id-title",
-    content: <div class="sidebar-customize-menu__title">{t("openclawId.menuTitle")}</div>,
+    id: `openclaw-id-${id}`,
+    content: <div class={`sidebar-customize-menu__title ${className}`}>{text}</div>,
   };
-  const items: MenuEntry[] = [title];
+}
+
+/**
+ * The claw's name from its address "<name>-<account tag>.<domain>", or the
+ * whole first label when it carries no tag.
+ */
+export function clawNameFromHostname(hostname: string): string {
+  const label = hostname.split(".")[0] ?? hostname;
+  const dash = label.lastIndexOf("-");
+  return dash > 0 ? label.slice(0, dash) : label;
+}
+
+// Signed-out, signed-in or linked account lines (link-flow mockup steps 2 and 9).
+function accountEntries(status: OpenClawIdStatusResult): MenuEntry[] {
+  const account = openClawIdAccount();
   if (account) {
     const name = account.email ?? account.name ?? account.sub;
-    items.push(
+    return [
       renderSidebarMenuAction(ACCOUNT, t("openclawId.signedIn", { account: name }), "key", {
         disabled: true,
         className: "sidebar-openclaw-id__account",
       }),
-    );
-  } else {
-    const blocker = signInBlocker(status);
-    items.push(
-      renderSidebarMenuAction(SIGN_IN, t("openclawId.signIn"), "key", {
-        disabled: Boolean(blocker),
-        title: blocker,
+    ];
+  }
+  const blocker = signInBlocker(status);
+  return [
+    infoLine("local-operator", t("openclawId.localOperator")),
+    renderSidebarMenuAction(SIGN_IN, t("openclawId.signIn"), "key", {
+      disabled: Boolean(blocker),
+      title: blocker,
+    }),
+    infoLine("stays-local", t("openclawId.staysLocal")),
+  ];
+}
+
+// Reachability lines: the linked address and transport, or the Make reachable command.
+function reachabilityEntries(status: OpenClawIdStatusResult): MenuEntry[] {
+  if (status.link.linked && status.link.hostname) {
+    const host = status.link.hostname;
+    return [
+      renderSidebarMenuAction(
+        MAKE_REACHABLE,
+        t("openclawId.isReachable", { name: clawNameFromHostname(host) }),
+        "radio",
+        { disabled: true, className: "sidebar-openclaw-id__reachable" },
+      ),
+      infoLine("address", `https://${host}`),
+      infoLine("encrypted", t("openclawId.encrypted")),
+    ];
+  }
+  const blocker = makeReachableBlocker(status);
+  return [
+    renderSidebarMenuAction(MAKE_REACHABLE, t("openclawId.makeReachable"), "radio", {
+      disabled: Boolean(blocker),
+      title: blocker,
+    }),
+  ];
+}
+
+/**
+ * Menu entries for the OpenClaw ID section; empty while the flag is off.
+ * Signed out: local operator, Sign in, "conversations stay on this computer".
+ * Signed in: the account. Then Make reachable, or once linked the address and
+ * transport; Devices & people (the openclaw-id-access plugin page); Sign out.
+ */
+export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
+  if (!status) {
+    return [];
+  }
+  return [
+    infoLine("title", t("openclawId.menuTitle"), "sidebar-openclaw-id__title"),
+    ...accountEntries(status),
+    ...reachabilityEntries(status),
+    renderSidebarMenuAction(MEMBERS, t("openclawId.devicesAndPeople"), "users"),
+    ...(openClawIdAccount()
+      ? [renderSidebarMenuAction(SIGN_OUT, t("openclawId.signOut"), "x")]
+      : []),
+    {
+      kind: "content",
+      id: "openclaw-id-separator",
+      content: <div class="sidebar-customize-menu__separator" role="separator" />,
+    },
+  ];
+}
+
+// Opens Make reachable, with the link code taken from the account when signed in.
+function startMakeReachable(client: GatewayBrowserClient, loaderDomain: string) {
+  void import("./make-reachable-dialog.tsx")
+    .then(({ showMakeReachableDialog }) =>
+      showMakeReachableDialog({ client, loaderDomain, signedIn: openClawIdAccount() }),
+    )
+    .catch((error: unknown) =>
+      showToast({
+        message: t("openclawId.makeReachableFailed", { error: formatUiError(error) }),
+        durationMs: 12_000,
       }),
     );
+}
+
+// After sign-in on an unlinked claw: offer Make reachable (dismissing is "Not now").
+function offerMakeReachable(
+  client: GatewayBrowserClient,
+  status: OpenClawIdStatusResult | null,
+  account: string,
+) {
+  const loaderDomain = status?.services.loaderDomain;
+  if (!status || status.link.linked || !loaderDomain || makeReachableBlocker(status)) {
+    showToast({ message: t("openclawId.signedIn", { account }) });
+    return;
   }
-  if (status.link.linked) {
-    const reachable = t("openclawId.reachableAt", { host: status.link.hostname ?? "" });
-    items.push(renderSidebarMenuAction(MAKE_REACHABLE, reachable, "radio", { disabled: true }));
-  } else {
-    const blocker = makeReachableBlocker(status);
-    items.push(
-      renderSidebarMenuAction(MAKE_REACHABLE, t("openclawId.makeReachable"), "radio", {
-        disabled: Boolean(blocker),
-        title: blocker,
-      }),
-    );
-  }
-  items.push(renderSidebarMenuAction(MEMBERS, t("openclawId.members"), "users"));
-  if (account) {
-    items.push(renderSidebarMenuAction(SIGN_OUT, t("openclawId.signOut"), "x"));
-  }
-  items.push({
-    kind: "content",
-    id: "openclaw-id-separator",
-    content: <div class="sidebar-customize-menu__separator" role="separator" />,
+  showToast({
+    message: t("openclawId.reachOffer", { account }),
+    actionLabel: t("openclawId.makeReachable"),
+    onAction: () => startMakeReachable(client, loaderDomain),
+    durationMs: 30_000,
   });
-  return items;
 }
 
 /**
@@ -141,11 +214,7 @@ export function selectOpenClawIdMenuValue(
   } else if (value === SIGN_IN && client) {
     signInWithOpenClawId({ client, basePath: context.basePath }).then(
       (signedIn) =>
-        showToast({
-          message: t("openclawId.signedIn", {
-            account: signedIn.email ?? signedIn.name ?? signedIn.sub,
-          }),
-        }),
+        offerMakeReachable(client, status, signedIn.email ?? signedIn.name ?? signedIn.sub),
       (error: unknown) =>
         showToast({
           message: t("openclawId.signInFailed", { error: formatUiError(error) }),
@@ -153,17 +222,7 @@ export function selectOpenClawIdMenuValue(
         }),
     );
   } else if (value === MAKE_REACHABLE && client && status?.services.loaderDomain) {
-    const loaderDomain = status.services.loaderDomain;
-    void import("./make-reachable-dialog.tsx")
-      .then(({ showMakeReachableDialog }) =>
-        showMakeReachableDialog({ client, loaderDomain, signedIn: openClawIdAccount() }),
-      )
-      .catch((error: unknown) =>
-        showToast({
-          message: t("openclawId.makeReachableFailed", { error: formatUiError(error) }),
-          durationMs: 12_000,
-        }),
-      );
+    startMakeReachable(client, status.services.loaderDomain);
   }
   return true;
 }

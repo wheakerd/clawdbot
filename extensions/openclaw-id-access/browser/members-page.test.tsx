@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { formatEd25519PublicKey } from "@openclaw/openclaw-id-protocol";
 import type * as UI from "openclaw/plugin-sdk/control-ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StatusResult } from "./types.js";
@@ -28,7 +29,7 @@ const pendingInvite = {
   status: "pending",
   pending: {
     accountId: "acct-member",
-    devicePub: "ed25519:member",
+    devicePub: formatEd25519PublicKey(new Uint8Array(32).fill(7)),
     peerKey: "iroh:member",
     requestedAt: 1_800_000_100,
     decideBy: 1_800_086_400,
@@ -58,7 +59,8 @@ function linked(overrides: Partial<StatusResult["link"]> = {}): StatusResult {
 }
 
 // Activates the plugin, mounts its page and returns the host's request spy.
-async function mountPage(statuses: StatusResult[]) {
+// Activation reads the status once (the flag gate) before the page reads its own.
+function hostFor(statuses: StatusResult[]) {
   const request = vi.fn(async (method: string) => {
     if (method === "openclawId.status") {
       return statuses.length > 1 ? statuses.shift() : statuses[0];
@@ -75,9 +77,15 @@ async function mountPage(statuses: StatusResult[]) {
     subscribe: () => () => {},
     ui: { registerPage },
   } as unknown as UI.ControlUiHost;
+  return { host, request, registerPage, controller };
+}
+
+async function mountPage(statuses: StatusResult[]) {
+  const { host, request, registerPage, controller } = hostFor([statuses[0]!, ...statuses]);
   await plugin.activate(host);
+  await vi.waitFor(() => expect(registerPage).toHaveBeenCalled());
   const [page] = registerPage.mock.calls[0]!;
-  expect(page).toMatchObject({ id: "members", label: "Members & invites" });
+  expect(page).toMatchObject({ id: "members", label: "Devices & people" });
   const container = document.createElement("div");
   document.body.append(container);
   const view = page.mount(container, {
@@ -92,16 +100,24 @@ async function mountPage(statuses: StatusResult[]) {
 const button = (container: HTMLElement, label: string) =>
   [...container.querySelectorAll("button")].find((node) => node.textContent?.trim() === label);
 
-describe("Members & invites page", () => {
+describe("Devices & people page", () => {
   afterEach(() => {
     document.body.replaceChildren();
   });
 
-  it("points to Labs while OpenClaw ID is off", async () => {
-    const { container } = await mountPage([
+  it("registers no page while OpenClaw ID is off", async () => {
+    const { host, request, registerPage } = hostFor([
       { status: { state: "off" }, channel: null, link: { linked: false } },
     ]);
-    await vi.waitFor(() => expect(container.textContent).toContain("OpenClaw ID is off"));
+    await plugin.activate(host);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("openclawId.status", {}));
+    await Promise.resolve();
+    expect(registerPage).not.toHaveBeenCalled();
+  });
+
+  it("shows the requesting device's fingerprint", async () => {
+    const { container } = await mountPage([linked()]);
+    await vi.waitFor(() => expect(container.textContent).toMatch(/· device [0-9A-Z]{5}-/));
   });
 
   it("approves a pending request with an owner-signed change", async () => {

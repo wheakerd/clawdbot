@@ -113,8 +113,10 @@ export function showMakeReachableDialog(params: {
           setCodeNote(t("openclawId.linkCodeFailed", { error: formatUiError(error) }));
         }
       };
-      if (params.signedIn) {
-        void fillCodeFromAccount(params.signedIn);
+      // The account is fixed for this dialog; prefill once it has rendered.
+      const signedIn = params.signedIn;
+      if (signedIn) {
+        queueMicrotask(() => void fillCodeFromAccount(signedIn));
       }
       // Records the address the owner root will sign; Discovery assigns it at registration.
       const prepare = async () => {
