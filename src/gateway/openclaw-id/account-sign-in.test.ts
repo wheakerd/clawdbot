@@ -97,6 +97,59 @@ describe("createOpenClawIdSignIn", () => {
     expect(refused).toMatchObject({ ok: false, code: "malformed" });
   });
 
+  it("refuses a callback on a non-loopback origin", async () => {
+    const signIn = createOpenClawIdSignIn({ fetchImpl: fakeServices(valid).fetchImpl, now });
+    for (const redirectUri of [
+      "https://studio-k7x2q.crabd.xyz/openclaw-id/callback",
+      "http://192.168.1.20:18789/openclaw-id/callback",
+    ]) {
+      expect(await signIn.begin({ issuerUrl: ISSUER, clientId: "ui", redirectUri })).toMatchObject({
+        ok: false,
+        code: "malformed",
+      });
+    }
+    const local = await signIn.begin({
+      issuerUrl: ISSUER,
+      clientId: "ui",
+      redirectUri: "http://localhost:18789/openclaw-id/callback",
+    });
+    expect(local).toHaveProperty("authorizationUrl");
+  });
+
+  it("turns an unreachable or malformed issuer into a refusal", async () => {
+    const offline = createOpenClawIdSignIn({
+      fetchImpl: vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+      now,
+    });
+    expect(
+      await offline.begin({ issuerUrl: ISSUER, clientId: "ui", redirectUri: REDIRECT }),
+    ).toMatchObject({ ok: false, code: "issuer_unavailable" });
+
+    const garbled = createOpenClawIdSignIn({
+      fetchImpl: vi.fn(async () => new Response("<html>", { status: 200 })),
+      now,
+    });
+    expect(
+      await garbled.begin({ issuerUrl: ISSUER, clientId: "ui", redirectUri: REDIRECT }),
+    ).toMatchObject({ ok: false, code: "issuer_unavailable" });
+
+    const foreignToken = createOpenClawIdSignIn({
+      fetchImpl: vi.fn(async () =>
+        Response.json({
+          issuer: ISSUER,
+          authorization_endpoint: `${ISSUER}/oauth2/authorize`,
+          token_endpoint: "https://elsewhere.example.test/token",
+        }),
+      ),
+      now,
+    });
+    expect(
+      await foreignToken.begin({ issuerUrl: ISSUER, clientId: "ui", redirectUri: REDIRECT }),
+    ).toMatchObject({ ok: false, code: "issuer_invalid" });
+  });
+
   it("gets a Discovery link code with the ID token", async () => {
     const signIn = createOpenClawIdSignIn({ fetchImpl: fakeServices(valid).fetchImpl, now });
     const discoveryUrl = "https://discovery.example.test";

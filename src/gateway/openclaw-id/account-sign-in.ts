@@ -61,7 +61,11 @@ function trimSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-// Accepts only a Control UI callback URL: http(s), the fixed path, no query or fragment.
+// Hostnames a Control UI on this machine is served from (RFC 8252 section 7.3).
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+// Accepts only a loopback Control UI callback URL: http(s), the fixed path, no
+// query, fragment or credentials. The issuer must also have it registered.
 function isCallbackUrl(value: unknown): value is string {
   if (typeof value !== "string") {
     return false;
@@ -70,6 +74,7 @@ function isCallbackUrl(value: unknown): value is string {
     const url = new URL(value);
     return (
       (url.protocol === "https:" || url.protocol === "http:") &&
+      LOOPBACK_HOSTNAMES.has(url.hostname) &&
       url.pathname.endsWith(OPENCLAW_ID_CALLBACK_PATH) &&
       !url.search &&
       !url.hash &&
@@ -93,6 +98,50 @@ function decodeClaims(idToken: string): IdTokenClaims | null {
     return claims && typeof claims === "object" ? (claims as IdTokenClaims) : null;
   } catch {
     return null;
+  }
+}
+
+type JsonResponse = { status: number; httpOk: boolean; body: unknown };
+
+// Fetches and parses JSON; a network failure or unreadable body becomes a
+// refusal with `code` instead of an exception.
+async function fetchJson(
+  fetchImpl: typeof fetch,
+  url: string | URL,
+  init: RequestInit,
+  code: string,
+): Promise<JsonResponse | OpenClawIdSignInRefusal> {
+  let response: Response;
+  try {
+    response = await fetchImpl(url, init);
+  } catch (error) {
+    return refusal(code, `${new URL(url).host} is unreachable: ${String(error)}`);
+  }
+  try {
+    const text = await response.text();
+    return { status: response.status, httpOk: response.ok, body: text ? JSON.parse(text) : null };
+  } catch {
+    return refusal(
+      code,
+      `${new URL(url).host} returned an unreadable response (HTTP ${response.status})`,
+    );
+  }
+}
+
+function isRefusal(value: object): value is OpenClawIdSignInRefusal {
+  return "ok" in value && value.ok === false;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+// True when `endpoint` is an absolute URL on the same origin as `issuerUrl`.
+function onIssuerOrigin(endpoint: unknown, issuerUrl: string): endpoint is string {
+  try {
+    return typeof endpoint === "string" && new URL(endpoint).origin === new URL(issuerUrl).origin;
+  } catch {
+    return false;
   }
 }
 
@@ -145,23 +194,32 @@ export function createOpenClawIdSignIn(
   // Reads the issuer's discovery document and checks it names this issuer and
   // keeps its token endpoint on the issuer's origin.
   const metadata = async (issuerUrl: string): Promise<IssuerMetadata | OpenClawIdSignInRefusal> => {
-    const response = await fetchImpl(`${trimSlash(issuerUrl)}/.well-known/openid-configuration`, {
-      headers: { accept: "application/json" },
-    });
-    if (!response.ok) {
+    const response = await fetchJson(
+      fetchImpl,
+      `${trimSlash(issuerUrl)}/.well-known/openid-configuration`,
+      { headers: { accept: "application/json" } },
+      "issuer_unavailable",
+    );
+    if (isRefusal(response)) {
+      return response;
+    }
+    if (!response.httpOk) {
       return refusal("issuer_unavailable", `issuer discovery failed with HTTP ${response.status}`);
     }
-    const meta = (await response.json()) as Partial<IssuerMetadata>;
+    const meta = asRecord(response.body);
     if (
       typeof meta.issuer !== "string" ||
       trimSlash(meta.issuer) !== trimSlash(issuerUrl) ||
       typeof meta.authorization_endpoint !== "string" ||
-      typeof meta.token_endpoint !== "string" ||
-      new URL(meta.token_endpoint).origin !== new URL(issuerUrl).origin
+      !onIssuerOrigin(meta.token_endpoint, issuerUrl)
     ) {
       return refusal("issuer_invalid", "issuer metadata does not match the configured issuer");
     }
-    return meta as IssuerMetadata;
+    return {
+      issuer: meta.issuer,
+      authorization_endpoint: meta.authorization_endpoint,
+      token_endpoint: meta.token_endpoint,
+    };
   };
 
   return {
@@ -172,10 +230,13 @@ export function createOpenClawIdSignIn(
       redirectUri: unknown;
     }): Promise<{ authorizationUrl: string; state: string } | OpenClawIdSignInRefusal> {
       if (!isCallbackUrl(params.redirectUri)) {
-        return refusal("malformed", `redirectUri must end with ${OPENCLAW_ID_CALLBACK_PATH}`);
+        return refusal(
+          "malformed",
+          `redirectUri must be a loopback URL ending with ${OPENCLAW_ID_CALLBACK_PATH}`,
+        );
       }
       const meta = await metadata(params.issuerUrl);
-      if ("ok" in meta) {
+      if (isRefusal(meta)) {
         return meta;
       }
       const verifier = base64url(randomBytes(32));
@@ -222,30 +283,38 @@ export function createOpenClawIdSignIn(
         return refusal("state_mismatch", "sign-in expired or was already used; start again");
       }
       const meta = await metadata(entry.issuerUrl);
-      if ("ok" in meta) {
+      if (isRefusal(meta)) {
         return meta;
       }
-      const response = await fetchImpl(meta.token_endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-www-form-urlencoded",
-          accept: "application/json",
+      const response = await fetchJson(
+        fetchImpl,
+        meta.token_endpoint,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            accept: "application/json",
+          },
+          body: new URLSearchParams({
+            grant_type: "authorization_code",
+            code: params.code,
+            redirect_uri: entry.redirectUri,
+            client_id: entry.clientId,
+            code_verifier: entry.verifier,
+          }),
         },
-        body: new URLSearchParams({
-          grant_type: "authorization_code",
-          code: params.code,
-          redirect_uri: entry.redirectUri,
-          client_id: entry.clientId,
-          code_verifier: entry.verifier,
-        }),
-      });
-      if (!response.ok) {
+        "token_exchange_failed",
+      );
+      if (isRefusal(response)) {
+        return response;
+      }
+      if (!response.httpOk) {
         return refusal(
           "token_exchange_failed",
           `token exchange failed with HTTP ${response.status}`,
         );
       }
-      const tokens = (await response.json()) as { id_token?: unknown };
+      const tokens = asRecord(response.body);
       const idToken = typeof tokens.id_token === "string" ? tokens.id_token : "";
       const claims = decodeClaims(idToken);
       const expected = {
@@ -276,17 +345,25 @@ export function createOpenClawIdSignIn(
       if (typeof params.idToken !== "string" || !params.idToken) {
         return refusal("malformed", "idToken is required");
       }
-      const response = await fetchImpl(new URL("/v1/enrollment-codes", params.discoveryUrl), {
-        method: "POST",
-        headers: { authorization: `Bearer ${params.idToken}`, accept: "application/json" },
-      });
+      const response = await fetchJson(
+        fetchImpl,
+        new URL("/v1/enrollment-codes", params.discoveryUrl),
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${params.idToken}`, accept: "application/json" },
+        },
+        "unavailable",
+      );
+      if (isRefusal(response)) {
+        return response;
+      }
       if (response.status === 401) {
         return refusal("signed_out", "your OpenClaw ID sign-in expired; sign in again");
       }
-      if (!response.ok) {
+      if (!response.httpOk) {
         return refusal("unavailable", `Discovery refused a link code (HTTP ${response.status})`);
       }
-      const body = (await response.json()) as { code?: unknown; expires_at?: unknown };
+      const body = asRecord(response.body);
       if (typeof body.code !== "string" || typeof body.expires_at !== "number") {
         return refusal("unavailable", "Discovery returned no link code");
       }
