@@ -35,6 +35,7 @@ import type {
   QualifiedSessionEntryAccessTarget,
   SessionEntryReadScope,
 } from "../config/sessions/session-accessor.types.js";
+import type { SessionEntrySnapshotField } from "../config/sessions/session-entry-snapshot-values.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
@@ -243,6 +244,7 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   target: QualifiedSessionEntryAccessTarget;
   logicalStorePath: string;
   includeMembership: boolean;
+  snapshotFields?: readonly SessionEntrySnapshotField[];
   transcript?: import("../config/sessions/session-entry-read.types.js").SessionExactEntriesWorkerRequest["transcript"];
   includeLifecycle?: boolean;
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
@@ -251,6 +253,7 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   return withQualifiedGatewaySessionStoreTarget({
     ...params,
     readOptions: {
+      snapshotFields: params.snapshotFields,
       transcript: params.transcript,
       lifecycleSessionKey: params.includeLifecycle ? params.target.storeKey : undefined,
     },

@@ -503,6 +503,7 @@ export function withCurrentChatSendSession<T>(params: {
     cfg: session.cfg,
     target: session.sessionTarget,
     logicalStorePath: session.storePath,
+    snapshotFields: [],
     includeMembership: params.includeMembership,
     includeLifecycle: true,
     transcript:

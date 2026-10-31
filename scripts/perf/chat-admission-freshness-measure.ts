@@ -1,12 +1,11 @@
 /**
- * Ordered admission reader cost with and without unused lifecycle freshness.
+ * Ordered admission reader workload comparisons.
  * Synthetic 10,000-row state only; no Gateway or production access. Prepare once:
  * node --import ./scripts/tsx.mjs scripts/perf/chat-admission-freshness-measure.ts \
  *   --fixture .local/chat-admission-fixture --prepare
  * Then alternate --arm before / --arm after (2,000 reads each), separately for
  * --mode timing and --mode allocation, adding --expose-gc before --import.
- * The before request includes lifecycleSessionKey; after omits it, exactly as
- * non-restart-safe chat admission does. Restart-safe admission is unchanged.
+ * The lifecycle workload includes lifecycleSessionKey before and omits it after.
  * Measures the real ordered reader and main-isolate allocation, not full chat
  * latency. Add --workload preliminary-row to compare ordered preparation (before)
  * with the already-prepared entry (after), followed by the unchanged final ordered read.
@@ -16,6 +15,12 @@
  * It uses 40 synthetic plugin config entries; no plugin loading or policy benchmark.
  * The selected legacy row lacks sessionStartedAt and has a large saved
  * skills snapshot and 128-message history; 9,999 unrelated rows stay in storage.
+ * --workload admission-projection compares full (before) and snapshot-free (after)
+ * entries through the qualified Gateway owner, retaining lifecycle and membership reads,
+ * FIFO admission, and current-source checks in both arms. Reservation timings
+ * include worker dispatch and publication, not just SQL; they are rounded to ms.
+ * Prepare a separate fixture with --session-started to compare modern rows whose
+ * lifecycle facts can be served by the retained replica without a worker request.
  */
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
@@ -30,6 +35,7 @@ const { values } = parseArgs({
   options: {
     fixture: { type: "string" },
     prepare: { type: "boolean", default: false },
+    "session-started": { type: "boolean", default: false },
     arm: { type: "string", default: "after" },
     mode: { type: "string", default: "timing" },
     workload: { type: "string", default: "lifecycle" },
@@ -40,7 +46,9 @@ assert(values.fixture, "--fixture must name synthetic state created by --prepare
 assert(values.arm === "before" || values.arm === "after", "Unknown arm");
 assert(values.mode === "timing" || values.mode === "allocation", "Unknown mode");
 assert(
-  values.workload === "lifecycle" || values.workload === "preliminary-row",
+  values.workload === "lifecycle" ||
+    values.workload === "preliminary-row" ||
+    values.workload === "admission-projection",
   "Unknown workload",
 );
 const iterations = Number(values.iterations);
@@ -65,6 +73,10 @@ const sessionId = "admission-freshness-0";
 const inspector = new Session();
 const reservations = channel("openclaw.agent-database.reservation");
 let orderedReads = 0;
+let queueWaitMs = 0;
+let writerExecutionMs = 0;
+let maxQueueWaitMs = 0;
+let maxWriterExecutionMs = 0;
 const observeReservation = (event: unknown) => {
   if (
     event &&
@@ -73,6 +85,14 @@ const observeReservation = (event: unknown) => {
     event.operation === "ordered-read"
   ) {
     orderedReads++;
+    if ("queueWaitMs" in event && typeof event.queueWaitMs === "number") {
+      queueWaitMs += event.queueWaitMs;
+      maxQueueWaitMs = Math.max(maxQueueWaitMs, event.queueWaitMs);
+    }
+    if ("writerExecutionMs" in event && typeof event.writerExecutionMs === "number") {
+      writerExecutionMs += event.writerExecutionMs;
+      maxWriterExecutionMs = Math.max(maxWriterExecutionMs, event.writerExecutionMs);
+    }
   }
 };
 try {
@@ -90,7 +110,10 @@ try {
           lifecycleRevision: `synthetic-${index}`,
           status: "done",
           ...(index === 0
-            ? { skillsSnapshot: { prompt: "Synthetic saved skill. ".repeat(2048), skills: [] } }
+            ? {
+                ...(values["session-started"] ? { sessionStartedAt: 1 } : {}),
+                skillsSnapshot: { prompt: "Synthetic saved skill. ".repeat(2048), skills: [] },
+              }
             : index % 2
               ? { archivedAt: 2 }
               : {}),
@@ -122,7 +145,7 @@ try {
         fixture,
         sessions: 10_000,
         historyMessages: 128,
-        selectedSessionStartedAt: null,
+        selectedSessionStartedAt: values["session-started"] ? 1 : null,
       }),
     );
   } else {
@@ -154,7 +177,7 @@ try {
         { ordered: true },
       );
     let read: () => Promise<unknown> = lifecycleRead;
-    if (values.workload === "preliminary-row") {
+    if (values.workload !== "lifecycle") {
       const { withQualifiedGatewaySessionEntry } =
         await import("../../src/gateway/session-utils-store.js");
       const { captureAcpSessionEntryBinding } =
@@ -231,12 +254,34 @@ try {
           },
         });
       };
+      if (values.workload === "admission-projection") {
+        read = () =>
+          withQualifiedGatewaySessionEntry({
+            ...readOptions,
+            snapshotFields: candidate ? [] : undefined,
+            includeLifecycle: true,
+            includeMembership: true,
+            consume: (current, members, assertCurrent) => {
+              assertCurrent();
+              assert.equal(current.entry?.sessionId, sessionId);
+              assert.equal(current.entry?.lifecycleRevision, "synthetic-0");
+              assert.equal(current.entry?.skillsSnapshot !== undefined, !candidate);
+              assert.equal(current.lifecycleTimestamps?.sessionStartedAt, 1);
+              assert.deepEqual(members.get(sessionKey), []);
+              consumed++;
+            },
+          });
+      }
     }
     reservations.subscribe(observeReservation);
     for (let index = 0; index < 20; index++) {
       await read();
     }
     orderedReads = 0;
+    queueWaitMs = 0;
+    writerExecutionMs = 0;
+    maxQueueWaitMs = 0;
+    maxWriterExecutionMs = 0;
     consumed = 0;
     globalThis.gc();
     if (values.mode === "allocation") {
@@ -273,6 +318,10 @@ try {
         workload: values.workload,
         node: process.version,
         orderedReads,
+        queueWaitMs,
+        writerExecutionMs,
+        maxQueueWaitMs,
+        maxWriterExecutionMs,
         ...(values.workload === "preliminary-row"
           ? {
               pluginEntries: 40,

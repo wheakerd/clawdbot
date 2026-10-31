@@ -260,7 +260,7 @@ it.each([
   }),
 );
 
-it("uses current worker-prepared admission settings without host SQL", () =>
+it("uses current admission settings without host SQL or saved snapshot payloads", () =>
   withAdmissionTest(
     "chat-admission-read-count",
     async (f) => {
@@ -291,6 +291,9 @@ it("uses current worker-prepared admission settings without host SQL", () =>
             admittedSessionSettings: { permissionMode: "full" },
             admittedSessionId: entry.sessionId,
           });
+          // Final authority needs metadata, not a transported copy of the saved prompt.
+          expect(admitted.value.admittedSessionEntry).toBeDefined();
+          expect("skillsSnapshot" in admitted.value.admittedSessionEntry!).toBe(false);
         });
       } finally {
         cleanupAdmission(admitted, runId);
