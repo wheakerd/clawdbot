@@ -6,15 +6,15 @@ import {
   type ControlUiHost,
   type ControlUiView,
 } from "openclaw/plugin-sdk/control-ui";
-import { MembersPage } from "./members-page.js";
+import { PeoplePage } from "./people-page.js";
 import type { StatusResult } from "./types.js";
 import "./control-ui.css";
 
-/** The page id the Control UI account menu opens ("Devices & people"). */
-export const MEMBERS_PAGE_ID = "members";
+/** The page id the Control UI account menu opens ("People"). */
+export const PEOPLE_PAGE_ID = "people";
 
-const mountMembers: ControlUiView = (container, context) => {
-  const dispose = render(() => <MembersPage host={context.host} />, container);
+const mountPeople: ControlUiView = (container, context) => {
+  const dispose = render(() => <PeoplePage host={context.host} />, container);
   return { dispose };
 };
 
@@ -32,7 +32,7 @@ async function openClawIdEnabled(host: ControlUiHost): Promise<boolean> {
 }
 
 /**
- * Registers the Devices & people page only while the OpenClaw ID flag is on,
+ * Registers the People page only while the OpenClaw ID flag is on,
  * and follows the flag as the connection changes.
  */
 export default defineControlUiPlugin({
@@ -48,9 +48,9 @@ export default defineControlUiPlugin({
       }
       if (enabled && !disposePage) {
         disposePage = host.ui.registerPage({
-          id: MEMBERS_PAGE_ID,
-          label: "Devices & people",
-          mount: mountMembers,
+          id: PEOPLE_PAGE_ID,
+          label: "People",
+          mount: mountPeople,
         });
       } else if (!enabled && disposePage) {
         disposePage();

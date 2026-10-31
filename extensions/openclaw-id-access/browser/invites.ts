@@ -14,7 +14,7 @@ import {
   type PublicKeyText,
 } from "@openclaw/openclaw-id-protocol";
 import { signAsOwner, signMembershipChange } from "./owner-signing.js";
-import type { Invite, Link } from "./types.js";
+import type { Invite, Link, RemovalSummary } from "./types.js";
 
 type Request = <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
 
@@ -81,8 +81,19 @@ export async function decideInvite(
   await request("openclawId.authority", { action: "submit", statement });
 }
 
-/** Removes a member: the Gateway cuts their tunnel access, sessions, tokens and runs. */
-export async function removeMember(request: Request, link: Link, accountId: string) {
+/**
+ * Removes a member: the Gateway cuts their tunnel access, sessions, tokens and
+ * runs, and reports what it cut (null when the Gateway reports nothing).
+ */
+export async function removeMember(
+  request: Request,
+  link: Link,
+  accountId: string,
+): Promise<RemovalSummary | null> {
   const statement = await signMembershipChange(link, { op: "remove", account_id: accountId });
-  await request("openclawId.authority", { action: "submit", statement });
+  const result = await request<{ removal?: RemovalSummary | null }>("openclawId.authority", {
+    action: "submit",
+    statement,
+  });
+  return result?.removal ?? null;
 }

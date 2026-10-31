@@ -1,0 +1,295 @@
+/** @jsxImportSource @solidjs/web */
+// The sections of the People page. Each takes plain data and callbacks, so the
+// page owns all Gateway access and the sections can be restyled independently.
+import type { MemberRole } from "@openclaw/openclaw-id-protocol";
+import { createSignal, For, Show } from "solid-js";
+import type { CreatedInvite } from "./invites.js";
+import {
+  countDevices,
+  formatDay,
+  inviteUsed,
+  memberName,
+  memberPresence,
+  memberRunning,
+} from "./people-format.js";
+import type { Invite, Member } from "./types.js";
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Invite one person with a role ceiling (operator at most); shows the link once. */
+export function InviteForm(props: {
+  disabled: boolean;
+  locale: string;
+  onCreate: (email: string, role: MemberRole) => Promise<CreatedInvite | undefined>;
+}) {
+  const [email, setEmail] = createSignal("");
+  const [role, setRole] = createSignal<MemberRole>("operator");
+  const [created, setCreated] = createSignal<CreatedInvite | null>(null);
+  const [copied, setCopied] = createSignal(false);
+  const submit = async () => {
+    const made = await props.onCreate(email().trim().toLowerCase(), role());
+    if (made) {
+      setCreated(made);
+      setCopied(false);
+      setEmail("");
+    }
+  };
+  // Clipboard access can be refused (permissions, insecure context); the link stays selectable.
+  const copy = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <section class="ocid-access__section" aria-labelledby="ocid-access-invite">
+      <h2 id="ocid-access-invite">Invite someone</h2>
+      <p class="ocid-access__hint">
+        Name one person and how much they can do. Operator is the most an invite can grant. You send
+        the link yourself; they sign in with OpenClaw ID and you approve them here. Invites expire
+        after 7 days.
+      </p>
+      <div class="ocid-access__form">
+        <input
+          class="settings-input"
+          type="email"
+          aria-label="Email address to invite"
+          placeholder="name@example.com"
+          autocomplete="off"
+          spellcheck="false"
+          value={email()}
+          onInput={(event) => setEmail(event.currentTarget.value)}
+        />
+        <select
+          class="settings-input"
+          aria-label="Role"
+          value={role()}
+          onChange={(event) => setRole(event.currentTarget.value as MemberRole)}
+        >
+          <option value="operator">Operator · chat, run tools, use channels</option>
+          <option value="viewer">Viewer · read conversations only</option>
+        </select>
+        <button
+          type="button"
+          class="btn primary btn--sm"
+          disabled={props.disabled || !EMAIL.test(email().trim())}
+          onClick={() => void submit()}
+        >
+          Create invite link
+        </button>
+      </div>
+      <Show when={created()}>
+        {(made) => (
+          <div class="ocid-access__link" role="status">
+            <div>
+              Invite link for {made().email} · expires {formatDay(made().expiresAt, props.locale)}
+            </div>
+            <code class="ocid-access__url">{made().url}</code>
+            <button type="button" class="btn btn--sm" onClick={() => void copy(made().url)}>
+              {copied() ? "Copied" : "Copy link"}
+            </button>
+            <p class="ocid-access__hint">
+              Send it privately. The part after # never reaches OpenClaw. Anyone with the link can
+              ask to join; nobody gets in until you approve.
+            </p>
+          </div>
+        )}
+      </Show>
+    </section>
+  );
+}
+
+/** Pending requests: who is asking, from which device, with which invite. */
+export function PendingRequests(props: {
+  invites: Invite[];
+  /** Display fingerprint by device key, for the device each request comes from. */
+  fingerprints: ReadonlyMap<string, string>;
+  disabled: boolean;
+  locale: string;
+  onDecide: (invite: Invite, approve: boolean) => void;
+}) {
+  return (
+    <section class="ocid-access__section" aria-labelledby="ocid-access-pending">
+      <h2 id="ocid-access-pending">Waiting for you</h2>
+      <Show
+        when={props.invites.length > 0}
+        fallback={<p class="ocid-access__empty">No one is waiting for approval.</p>}
+      >
+        <ul class="ocid-access__list">
+          <For each={props.invites}>
+            {(invite) => {
+              const pending = () => invite.pending!;
+              const who = () =>
+                pending().reported.displayName || pending().reported.email || pending().accountId;
+              return (
+                <li class="ocid-access__row ocid-access__row--request">
+                  <div>
+                    <div class="ocid-access__title">
+                      {who()} wants to join as {invite.role}
+                    </div>
+                    <div class="ocid-access__hint">
+                      {pending().reported.email ?? pending().accountId} · device{" "}
+                      {props.fingerprints.get(pending().devicePub) ?? "unknown"} ·{" "}
+                      {pending().reported.locationHint ?? "location unknown"} (reported by OpenClaw
+                      ID)
+                    </div>
+                    <div class="ocid-access__hint">
+                      {inviteUsed(invite, props.locale)} · decide by{" "}
+                      {formatDay(pending().decideBy, props.locale)}
+                    </div>
+                  </div>
+                  <div class="ocid-access__actions">
+                    <button
+                      type="button"
+                      class="btn btn--sm danger"
+                      disabled={props.disabled}
+                      onClick={() => props.onDecide(invite, false)}
+                    >
+                      Deny
+                    </button>
+                    <button
+                      type="button"
+                      class="btn primary btn--sm"
+                      disabled={props.disabled}
+                      onClick={() => props.onDecide(invite, true)}
+                    >
+                      Approve
+                    </button>
+                  </div>
+                </li>
+              );
+            }}
+          </For>
+        </ul>
+      </Show>
+    </section>
+  );
+}
+
+/** One member row; Remove asks for confirmation and says what removal does. */
+function MemberRow(props: {
+  member: Member;
+  disabled: boolean;
+  nowMs: number;
+  sessionTitle: (sessionKey: string) => string | undefined;
+  onRemove: (member: Member) => void;
+}) {
+  const [confirming, setConfirming] = createSignal(false);
+  const devices = () => props.member.devices ?? [];
+  const running = () => memberRunning(devices(), props.sessionTitle);
+  const details = () =>
+    [
+      props.member.email && props.member.email !== memberName(props.member)
+        ? props.member.email
+        : undefined,
+      countDevices(props.member.peerKeys.length),
+      memberPresence(devices(), props.nowMs),
+      running(),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  return (
+    <li class="ocid-access__row ocid-access__row--member">
+      <div>
+        <div class="ocid-access__title">{memberName(props.member)}</div>
+        <div class="ocid-access__hint">{details()}</div>
+        <Show when={confirming()}>
+          <p class="ocid-access__hint" role="note">
+            Their browser disconnects right away and anything they are running stops (what it
+            finished is kept). Sessions they started stay here. They can come back only with a new
+            invite.
+          </p>
+        </Show>
+      </div>
+      <div class="ocid-access__actions">
+        <span class="ocid-access__badge">{props.member.role}</span>
+        <Show
+          when={confirming()}
+          fallback={
+            <button
+              type="button"
+              class="btn btn--sm"
+              disabled={props.disabled}
+              onClick={() => setConfirming(true)}
+            >
+              Remove
+            </button>
+          }
+        >
+          <button type="button" class="btn btn--sm" onClick={() => setConfirming(false)}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn btn--sm danger"
+            disabled={props.disabled}
+            onClick={() => props.onRemove(props.member)}
+          >
+            Remove {memberName(props.member)}
+          </button>
+        </Show>
+      </div>
+    </li>
+  );
+}
+
+/** Members: the owner, each member with devices and activity, and open invites. */
+export function Members(props: {
+  members: Member[];
+  invites: Invite[];
+  ownerDevices: number;
+  disabled: boolean;
+  locale: string;
+  nowMs: number;
+  sessionTitle: (sessionKey: string) => string | undefined;
+  onRemove: (member: Member) => void;
+}) {
+  const open = () => props.invites.filter((invite) => invite.status === "open");
+  return (
+    <section class="ocid-access__section" aria-labelledby="ocid-access-members">
+      <h2 id="ocid-access-members">Members</h2>
+      <p class="ocid-access__hint">
+        Who can open this claw. Only you can change this, from one of your own devices.
+      </p>
+      <ul class="ocid-access__list">
+        <li class="ocid-access__row ocid-access__row--owner">
+          <div>
+            <div class="ocid-access__title">You</div>
+            <div class="ocid-access__hint">{countDevices(props.ownerDevices)}</div>
+          </div>
+          <span class="ocid-access__badge">owner</span>
+        </li>
+        <For each={props.members}>
+          {(member) => (
+            <MemberRow
+              member={member}
+              disabled={props.disabled}
+              nowMs={props.nowMs}
+              sessionTitle={props.sessionTitle}
+              onRemove={props.onRemove}
+            />
+          )}
+        </For>
+        <For each={open()}>
+          {(invite) => (
+            <li class="ocid-access__row ocid-access__row--invited">
+              <div>
+                <div class="ocid-access__title">{invite.label}</div>
+                <div class="ocid-access__hint">
+                  Invite link created {formatDay(invite.createdAt, props.locale)} · expires{" "}
+                  {formatDay(invite.expiresAt, props.locale)} · not accepted yet
+                </div>
+              </div>
+              <div class="ocid-access__actions">
+                <span class="ocid-access__badge">{invite.role}</span>
+                <span class="ocid-access__badge">Invited</span>
+              </div>
+            </li>
+          )}
+        </For>
+      </ul>
+    </section>
+  );
+}

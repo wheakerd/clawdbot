@@ -1,7 +1,7 @@
 {
   "id": "openclaw-id-access",
-  "name": "OpenClaw ID members",
-  "description": "Invite people to this claw, approve their requests, and manage members and owner devices.",
+  "name": "OpenClaw ID people",
+  "description": "Invite people to this claw, approve their requests, and see and remove members.",
   "categories": [
     "security"
   ],

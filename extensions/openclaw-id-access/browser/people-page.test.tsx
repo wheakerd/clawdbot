@@ -12,9 +12,6 @@ vi.mock("./owner-signing.js", () => ({
   ),
   signMembershipChange: vi.fn(async (_link: unknown, target: unknown) => ({ signed: target })),
   signAsOwner: vi.fn(async () => ({ signed: "cap" })),
-  signOwnerDeviceRevocation: vi.fn(async (_link: unknown, device: { devicePub: string }) => ({
-    revoked: device.devicePub,
-  })),
 }));
 
 const { default: plugin } = await import("./index.js");
@@ -60,12 +57,12 @@ function linked(overrides: Partial<StatusResult["link"]> = {}): StatusResult {
 
 // Activates the plugin, mounts its page and returns the host's request spy.
 // Activation reads the status once (the flag gate) before the page reads its own.
-function hostFor(statuses: StatusResult[]) {
+function hostFor(statuses: StatusResult[], submitResult: unknown = {}) {
   const request = vi.fn(async (method: string) => {
     if (method === "openclawId.status") {
       return statuses.length > 1 ? statuses.shift() : statuses[0];
     }
-    return {};
+    return submitResult;
   });
   const registerPage = vi.fn<(page: UI.ControlUiPage) => () => void>(() => () => {});
   const controller = new AbortController();
@@ -75,17 +72,24 @@ function hostFor(statuses: StatusResult[]) {
     connection: { connected: true, canRead: true, canWrite: true, canAdmin: true },
     request,
     subscribe: () => () => {},
+    sessions: {
+      rows: [{ key: "agent:main:trip", derivedTitle: "Trip ideas" }],
+      normalizeKey: (key: string) => key,
+    },
     ui: { registerPage },
   } as unknown as UI.ControlUiHost;
   return { host, request, registerPage, controller };
 }
 
-async function mountPage(statuses: StatusResult[]) {
-  const { host, request, registerPage, controller } = hostFor([statuses[0]!, ...statuses]);
+async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
+  const { host, request, registerPage, controller } = hostFor(
+    [statuses[0]!, ...statuses],
+    submitResult,
+  );
   await plugin.activate(host);
   await vi.waitFor(() => expect(registerPage).toHaveBeenCalled());
   const [page] = registerPage.mock.calls[0]!;
-  expect(page).toMatchObject({ id: "members", label: "Devices & people" });
+  expect(page).toMatchObject({ id: "people", label: "People" });
   const container = document.createElement("div");
   document.body.append(container);
   const view = page.mount(container, {
@@ -100,7 +104,7 @@ async function mountPage(statuses: StatusResult[]) {
 const button = (container: HTMLElement, label: string) =>
   [...container.querySelectorAll("button")].find((node) => node.textContent?.trim() === label);
 
-describe("Devices & people page", () => {
+describe("People page", () => {
   afterEach(() => {
     document.body.replaceChildren();
   });
@@ -115,9 +119,14 @@ describe("Devices & people page", () => {
     expect(registerPage).not.toHaveBeenCalled();
   });
 
-  it("shows the requesting device's fingerprint", async () => {
+  it("shows who is asking, from which device, and which invite they used", async () => {
     const { container } = await mountPage([linked()]);
     await vi.waitFor(() => expect(container.textContent).toMatch(/· device [0-9A-Z]{5}-/));
+    expect(container.textContent).toContain(
+      "Using your invite for member@example.test · Operator · created",
+    );
+    // Owner devices live in the account menu, not on People.
+    expect(container.textContent).not.toContain("Old laptop");
   });
 
   it("approves a pending request with an owner-signed change", async () => {
@@ -158,21 +167,45 @@ describe("Devices & people page", () => {
     expect(container.textContent).toContain("No one is waiting for approval.");
   });
 
-  it("lists owner devices and revokes another one, never this browser", async () => {
-    const { container, request } = await mountPage([linked()]);
-    await vi.waitFor(() => expect(container.textContent).toContain("Old laptop"));
-    const revokes = () =>
-      [...container.querySelectorAll("button")].filter(
-        (node) => node.textContent?.trim() === "Revoke",
-      );
-    await vi.waitFor(() => expect(revokes()).toHaveLength(1));
-    await vi.waitFor(() => expect(revokes()[0]!.disabled).toBe(false));
-    revokes()[0]!.click();
+  it("shows each member's devices and what they are running, and says what a removal cut", async () => {
+    const member = {
+      accountId: "acct-bob",
+      role: "operator",
+      peerKeys: ["iroh:bob"],
+      email: "bob@example.test",
+      displayName: "Bob",
+      approvedAt: 1_800_000_000,
+      devices: [
+        {
+          peerKey: "iroh:bob",
+          connections: 1,
+          lastSeenAt: Date.now(),
+          runs: [{ runId: "r1", sessionKey: "agent:main:trip" }],
+        },
+      ],
+    };
+    const { container, request } = await mountPage(
+      [linked({ invites: [], members: [member] }), linked({ invites: [], members: [] })],
+      { removal: { devices: 1, connectionsClosed: 1, runsCancelled: 1 } },
+    );
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "bob@example.test · 1 device · active now · running “Trip ideas”",
+      ),
+    );
+    await vi.waitFor(() => expect(button(container, "Remove")?.disabled).toBe(false));
+    button(container, "Remove")!.click();
+    await vi.waitFor(() => expect(button(container, "Remove Bob")).toBeDefined());
+    expect(request).not.toHaveBeenCalledWith("openclawId.authority", expect.anything());
+    button(container, "Remove Bob")!.click();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("openclawId.authority", {
         action: "submit",
-        statement: { revoked: "ed25519:old-laptop" },
+        statement: { signed: { op: "remove", account_id: "acct-bob" } },
       }),
+    );
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("Bob removed · 1 connection closed · 1 run stopped"),
     );
   });
 

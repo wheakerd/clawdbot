@@ -4,8 +4,33 @@ import type { MemberRole } from "@openclaw/openclaw-id-protocol";
 /** An active owner device as `openclawId.status` lists it. */
 export type OwnerDevice = { devicePub: string; label: string; peerKeys: string[]; cert: unknown };
 
-/** One member of the claw. */
-export type Member = { accountId: string; role: string; peerKeys: string[]; email?: string | null };
+/** One active run a member's device started, read from the Gateway's run registry. */
+export type MemberRun = { runId: string; sessionKey: string };
+
+/** One of a member's device keys with its live activity on this Gateway. */
+export type MemberDevice = {
+  peerKey: string;
+  /** Open relayed Gateway connections for this key. */
+  connections: number;
+  /** Last activity this Gateway saw, ms since the epoch; null when not seen since it started. */
+  lastSeenAt: number | null;
+  runs: MemberRun[];
+};
+
+/** One member of the claw. Name and email are reported by OpenClaw ID; display only. */
+export type Member = {
+  accountId: string;
+  role: string;
+  peerKeys: string[];
+  email?: string | null;
+  displayName?: string | null;
+  /** When the owner approved them, seconds since the epoch. */
+  approvedAt?: number | null;
+  devices?: MemberDevice[];
+};
+
+/** What an accepted removal cut (`openclawId.authority` submit result `removal`). */
+export type RemovalSummary = { devices: number; connectionsClosed: number; runsCancelled: number };
 
 /** One invite as the Gateway lists it to owners. */
 export type Invite = {

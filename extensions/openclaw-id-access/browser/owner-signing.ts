@@ -2,10 +2,8 @@
 // UI's Make reachable (and the claw loader on a claw origin) stores D per claw
 // in IndexedDB "openclaw-id" / "owner-devices" as a non-extractable key pair.
 import {
-  fingerprint,
   formatEd25519PublicKey,
   signStatement,
-  type Ed25519PublicKey,
   type MembershipTarget,
   type SignedStatement,
   type StatementBodies,
@@ -89,17 +87,6 @@ export function signMembershipChange(link: Link, target: MembershipTarget) {
     claw_id: link.clawId ?? "",
     seq: (link.seq ?? 0) + 1,
     target,
-    issued_at: Math.floor(Date.now() / 1000),
-  });
-}
-
-/** Signs a Revocation of another owner device; the Gateway cuts its connections. */
-export async function signOwnerDeviceRevocation(link: Link, device: OwnerDevice) {
-  return signAsOwner(link, "Revocation", {
-    target_fp: await fingerprint(device.devicePub as Ed25519PublicKey),
-    target_kind: "owner_device",
-    reason: "revoked from the Control UI",
-    root_epoch: link.rootEpoch ?? 1,
     issued_at: Math.floor(Date.now() / 1000),
   });
 }
