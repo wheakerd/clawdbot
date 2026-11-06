@@ -78,6 +78,7 @@ import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway
 import { resolveColdLoadLatency } from "./lib/control-ui-bench-latency.ts";
 import {
   persistColdLoadWarmState,
+  qualifyDetailsSubagentsWarmState,
   restoreColdLoadWarmState,
 } from "./lib/control-ui-bench-warm-state.ts";
 import {
@@ -2039,7 +2040,7 @@ try {
   };
   const qualifyDetails = async () => {
     if (!values["details-processes"] && !values["details-subagent-activity"]) {
-      return;
+      return null;
     }
     const details = page.locator(".chat-details:visible");
     if (!(await details.count())) {
@@ -2048,13 +2049,27 @@ try {
     if (values["details-processes"]) {
       await details.locator('[data-details-group="processes"] [data-process-id]').waitFor();
     }
-    if (values["details-subagent-activity"] && !values["archived-session"]) {
-      await details.locator(".chat-subagent-activity__row").first().waitFor();
-    }
     await details
       .locator('[data-details-group="automations"] .chat-summary__automation')
       .first()
       .waitFor();
+    if (values["details-subagent-activity"] && !values["archived-session"]) {
+      const rows = fixture.scenario.sessions!.flatMap((row) =>
+        row.parentSessionKey === fixture.selectedSessionKey &&
+        typeof row.label === "string" &&
+        row.label.startsWith("Synthetic child review ")
+          ? [{ key: row.key, label: row.label }]
+          : [],
+      );
+      const qualified = await page.waitForFunction(qualifyDetailsSubagentsWarmState, {
+        sessionKey: fixture.selectedSessionKey,
+        rows,
+      });
+      const receipt = await qualified.jsonValue();
+      await qualified.dispose();
+      return receipt;
+    }
+    return null;
   };
   const qualifyLateRowFacts = async () => {
     if (!fixture.lateRowFacts) {
@@ -2192,10 +2207,10 @@ try {
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
     await qualifyLateRowFacts();
-    await qualifyDetails();
+    const detailsSubagentsWarmState = await qualifyDetails();
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
-      warmInput,
+      { ...warmInput, detailsSubagentsWarmState },
     );
     const passes = values["warm-reload"] ? 2 : 1;
     for (let index = 0; index < bundleSlots.length; index++) {
@@ -2230,11 +2245,11 @@ try {
         );
         await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
         await qualifyLateRowFacts();
-        await qualifyDetails();
-        const { storage: captured, ...saved } = await page.evaluate(
-          persistColdLoadWarmState,
-          warmInput,
-        );
+        const detailsSubagentsWarmState = await qualifyDetails();
+        const { storage: captured, ...saved } = await page.evaluate(persistColdLoadWarmState, {
+          ...warmInput,
+          detailsSubagentsWarmState,
+        });
         qualifyLateRowSnapshot(saved, index);
         storage = captured;
         primes.push(saved);
