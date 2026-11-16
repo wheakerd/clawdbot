@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDecisionTool } from "../agents/tools/decision-tool.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -34,6 +34,9 @@ describe("registered decision consumer admission", () => {
         consumerAllowed = true;
         runtimeAllowed = true;
         expect(context.isAdmissible?.()).toBe(false);
+        expect(() => captureGuardedFetchRequestAuthority()?.()).toThrow(
+          "Decision dispatch is no longer admitted",
+        );
         return { status: "unavailable", reason: "transport" };
       });
       expect(
@@ -109,10 +112,17 @@ describe("registered decision consumer admission", () => {
 
   it("keeps revoked admission closed across provider cleanup without poisoning health", async () => {
     let current = true;
+    const dispatch = vi.fn();
     const call = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, context) => {
       current = false;
       expect(context.isAdmissible?.()).toBe(false);
       current = true;
+      try {
+        captureGuardedFetchRequestAuthority()?.();
+        dispatch();
+      } catch {
+        // Transport retries must retain the provider's earlier consumer rejection.
+      }
       // A transport may sanitize its guard failure and await cleanup before returning.
       await Promise.resolve();
       expect(context.isAdmissible?.()).toBe(false);
@@ -131,6 +141,7 @@ describe("registered decision consumer admission", () => {
         ),
       ).toEqual(unavailable("disabled"));
     }
+    expect(dispatch).not.toHaveBeenCalled();
     expect(host.registry.decisionProviders[0]?.host.inspect(config)).toMatchObject({
       activeRequests: 0,
       successCount: 0,
@@ -142,44 +153,102 @@ describe("registered decision consumer admission", () => {
     expect(call).toHaveBeenCalledTimes(4);
   });
 
-  it.each(["authority", "cancel"] as const)(
-    "preserves %s rejection through provider error sanitization",
+  it.each(["caller", "consumer", "deadline", "retired-consumer", "expired-consumer"] as const)(
+    "blocks dispatch when %s closes the request",
     async (kind) => {
-      const failure = new Error("consumer authority closed");
-      const cancelled = new Error("caller cancelled");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      onTestFinished(() => vi.useRealTimers());
       const controller = new AbortController();
-      let throwing = false;
-      let current = true;
-      const host = registered(async (_batch, context) => {
-        throwing = true;
-        expect(() => context.isAdmissible?.()).toThrow(failure);
-        throwing = false;
-        current = false;
-        if (kind === "cancel") {
-          controller.abort(cancelled);
+      const release = createDeferredCore();
+      const dispatch = vi.fn();
+      const host = registered(async () => {
+        await release.promise;
+        try {
+          captureGuardedFetchRequestAuthority()?.();
+          dispatch();
+        } catch {
+          // A transport may sanitize cancellation while it cleans up.
         }
-        await Promise.resolve();
-        return unavailable("transport");
+        return answer;
       });
       const pending = evaluateDecisionInRegistry(
         batch,
         { ...options(), signal: controller.signal },
         host.registry,
         config,
-        undefined,
-        () => {
-          if (throwing) {
-            throw failure;
-          }
-          return current;
-        },
+        "consumer",
       );
-      await expect(pending).rejects.toBe(kind === "cancel" ? cancelled : failure);
-      expect(host.registry.decisionProviders[0]?.host.inspect(config)).toMatchObject({
-        activeRequests: 0,
-        successCount: 0,
-        callable: true,
-      });
+      await host.started;
+      if (kind === "caller") {
+        controller.abort(new Error("caller cancelled"));
+      } else {
+        const provider = host.registry.decisionProviders[0]!.host;
+        if (kind === "retired-consumer") {
+          provider.retire();
+        } else if (kind === "deadline" || kind === "expired-consumer") {
+          await vi.advanceTimersByTimeAsync(1_001);
+        }
+        if (kind !== "deadline") {
+          provider.cancelConsumer("consumer");
+        }
+      }
+      release.resolve();
+      if (kind === "deadline") {
+        await expect(pending).resolves.toEqual(unavailable("deadline"));
+      } else {
+        await expect(pending).rejects.toThrow(
+          kind === "caller" ? "caller cancelled" : "Decision consumer authority closed.",
+        );
+      }
+      expect(dispatch).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ["authority", "provider"],
+    ["authority", "transport"],
+    ["cancel", "provider"],
+    ["cancel", "transport"],
+  ] as const)("preserves %s rejection through %s error sanitization", async (kind, boundary) => {
+    const failure = new Error("consumer authority closed");
+    const cancelled = new Error("caller cancelled");
+    const controller = new AbortController();
+    let throwing = false;
+    let current = true;
+    const host = registered(async (_batch, context) => {
+      throwing = true;
+      const check = () =>
+        boundary === "provider"
+          ? context.isAdmissible?.()
+          : captureGuardedFetchRequestAuthority()?.();
+      expect(check).toThrow(failure);
+      throwing = false;
+      expect(check).toThrow(failure);
+      current = false;
+      if (kind === "cancel") {
+        controller.abort(cancelled);
+      }
+      await Promise.resolve();
+      return unavailable("transport");
+    });
+    const pending = evaluateDecisionInRegistry(
+      batch,
+      { ...options(), signal: controller.signal },
+      host.registry,
+      config,
+      undefined,
+      () => {
+        if (throwing) {
+          throw failure;
+        }
+        return current;
+      },
+    );
+    await expect(pending).rejects.toBe(kind === "cancel" ? cancelled : failure);
+    expect(host.registry.decisionProviders[0]?.host.inspect(config)).toMatchObject({
+      activeRequests: 0,
+      successCount: 0,
+      callable: true,
+    });
+  });
 });

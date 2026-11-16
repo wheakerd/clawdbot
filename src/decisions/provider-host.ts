@@ -56,6 +56,12 @@ class DecisionConsumerClosedError extends Error {
   }
 }
 
+type PendingDecisionRequest = {
+  consumerId?: string;
+  done: Promise<void>;
+  consumerCancellation?: DecisionConsumerClosedError;
+};
+
 type Health = {
   id: string;
   secretRevision: number;
@@ -71,10 +77,7 @@ export class DecisionProviderHost {
   private retired = false;
   private reloadPause?: object;
   private health?: Health;
-  private readonly pending = new Map<
-    AbortController,
-    { consumerId?: string; done: Promise<void> }
-  >();
+  private readonly pending = new Map<AbortController, PendingDecisionRequest>();
   private readonly reasons: Partial<Record<UnavailableReason, number>> = {};
   private successCount = 0;
   private totalLatencyMs = 0;
@@ -119,11 +122,10 @@ export class DecisionProviderHost {
     for (const [controller, request] of this.pending) {
       // Close admission before abort callbacks can reenter. A retiring consumer
       // must reject rather than receive the provider-only fallback classification.
-      controller.abort(
-        request.consumerId !== undefined && changedConsumerIds.has(request.consumerId)
-          ? new DecisionConsumerClosedError()
-          : "decision-provider-retired",
-      );
+      if (request.consumerId !== undefined && changedConsumerIds.has(request.consumerId)) {
+        request.consumerCancellation ??= new DecisionConsumerClosedError();
+      }
+      controller.abort(request.consumerCancellation ?? "decision-provider-retired");
     }
     const assertResumable = () => {
       const instance = getPluginInstance(this.record);
@@ -163,7 +165,8 @@ export class DecisionProviderHost {
   cancelConsumer(pluginId: string): void {
     for (const [controller, request] of this.pending) {
       if (request.consumerId === pluginId) {
-        controller.abort(new DecisionConsumerClosedError());
+        request.consumerCancellation ??= new DecisionConsumerClosedError();
+        controller.abort(request.consumerCancellation);
       }
     }
   }
@@ -286,18 +289,33 @@ export class DecisionProviderHost {
       const deadlineMonotonicMs = started + budget;
       const timer = setTimeout(() => controller.abort("decision-deadline"), budget);
       const { promise: done, resolve: settle } = createDeferredCore();
-      this.pending.set(controller, { consumerId, done });
-      let dispatchRejection: Outcome | undefined;
+      const request: PendingDecisionRequest = { consumerId, done };
+      this.pending.set(controller, request);
+      let consumerRejection: Outcome | undefined;
       let observedInterruption: Outcome | undefined;
       let admissionError: { error: unknown } | undefined;
-      const interrupted = (): Outcome | undefined => {
+      const consumerAdmissible = () => {
+        try {
+          return !isAdmissible || isAdmissible();
+        } catch (error) {
+          // Adapters may sanitize errors during transport cleanup; preserve caller authority.
+          admissionError = { error };
+          throw error;
+        }
+      };
+      const assertConsumerAuthority = () => {
         options.signal.throwIfAborted();
-        if (controller.signal.reason instanceof DecisionConsumerClosedError) {
-          throw controller.signal.reason;
+        // AbortSignal keeps its first reason; consumer closure must also survive
+        // an earlier provider retirement or deadline abort.
+        if (request.consumerCancellation) {
+          throw request.consumerCancellation;
         }
         if (admissionError) {
           throw admissionError.error;
         }
+      };
+      const interrupted = (): Outcome | undefined => {
+        assertConsumerAuthority();
         if (
           this.retired ||
           instance.owner?.revoked ||
@@ -306,11 +324,11 @@ export class DecisionProviderHost {
           return this.unavailable("retiring");
         }
         // Withdrawal remains a consumer outcome even when transport cleanup outlasts the deadline.
-        if (dispatchRejection) {
-          return dispatchRejection;
+        if (consumerRejection) {
+          return consumerRejection;
         }
         if (!admitted()) {
-          return this.unavailable("disabled");
+          return (consumerRejection ??= this.unavailable("disabled"));
         }
         if (
           controller.signal.reason === "decision-deadline" ||
@@ -323,15 +341,8 @@ export class DecisionProviderHost {
         if (observedInterruption) {
           return observedInterruption;
         }
-        try {
-          if (isAdmissible && !isAdmissible()) {
-            return this.unavailable("disabled");
-          }
-        } catch (error) {
-          // Adapters may sanitize this error and yield during cleanup. Preserve
-          // the caller-owned terminal assertion rather than treating it as health.
-          admissionError = { error };
-          throw error;
+        if (!consumerAdmissible()) {
+          return (consumerRejection ??= this.unavailable("disabled"));
         }
         const currentConfig = readConfig();
         const selection = resolveDecisionModelSetting(currentConfig, options.agentId);
@@ -348,10 +359,18 @@ export class DecisionProviderHost {
         return undefined;
       };
       const assertDispatch = () => {
-        const stopped = interrupted();
-        if (stopped) {
-          dispatchRejection = stopped;
+        // Consumer consent and authority remain live. Provider retirement is
+        // checked before admission and at settlement, not during admitted I/O.
+        assertConsumerAuthority();
+        if (consumerRejection || !admitted() || !consumerAdmissible()) {
+          consumerRejection ??= this.unavailable("disabled");
           throw new Error("Decision dispatch is no longer admitted.");
+        }
+        if (
+          controller.signal.reason === "decision-deadline" ||
+          performance.now() >= deadlineMonotonicMs
+        ) {
+          throw new Error("Decision deadline exceeded.");
         }
       };
       try {
@@ -501,13 +520,7 @@ export class DecisionProviderHost {
         this.fail(health, reason, retryAfterMs);
         return this.unavailable(reason);
       } catch (error) {
-        options.signal.throwIfAborted();
-        if (controller.signal.reason instanceof DecisionConsumerClosedError) {
-          throw controller.signal.reason;
-        }
-        if (admissionError) {
-          throw admissionError.error;
-        }
+        assertConsumerAuthority();
         if (error instanceof DecisionContractError) {
           throw error;
         }
