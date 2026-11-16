@@ -157,7 +157,9 @@ describe("registered decision consumer admission", () => {
     "blocks dispatch when %s closes the request",
     async (kind) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-      onTestFinished(() => vi.useRealTimers());
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
       const controller = new AbortController();
       const release = createDeferredCore();
       const dispatch = vi.fn();
