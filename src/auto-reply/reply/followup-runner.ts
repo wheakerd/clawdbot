@@ -516,8 +516,10 @@ export function createFollowupRunner(
         await admittedTurn?.releaseSourceAdmission?.();
       } finally {
         operation?.complete();
-        defaults.typing.markRunComplete();
-        defaults.typing.markDispatchIdle();
+        if (disposition.kind === "consumed") {
+          defaults.typing.markRunComplete();
+          defaults.typing.markDispatchIdle();
+        }
       }
     }
 
