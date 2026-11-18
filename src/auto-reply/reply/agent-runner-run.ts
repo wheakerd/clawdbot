@@ -546,20 +546,21 @@ export async function runReplyAgent(
           guidance,
         });
     }
-    const { admitUserTurn, recordPendingDelivery } = createReplyInputAdmission({
-      followupRun,
-      replyOperation,
-      runId: turn.runId,
-      sourceTurnId,
-      sessionKey,
-      storePath,
-      setEntry: (entry) => {
-        activeSessionEntry = entry;
-        if (activeSessionStore && sessionKey) {
-          activeSessionStore[sessionKey] = entry;
-        }
-      },
-    });
+    const { admitUserTurn, completeObservedTurn, recordPendingDelivery } =
+      createReplyInputAdmission({
+        followupRun,
+        replyOperation,
+        runId: turn.runId,
+        sourceTurnId,
+        sessionKey,
+        storePath,
+        setEntry: (entry) => {
+          activeSessionEntry = entry;
+          if (activeSessionStore && sessionKey) {
+            activeSessionStore[sessionKey] = entry;
+          }
+        },
+      });
     try {
       if (turn.preflightError) {
         throw turn.preflightError;
@@ -576,6 +577,7 @@ export async function runReplyAgent(
           ...params,
           activeSessionStore,
           admitUserTurn,
+          completeObservedTurn,
           recordPendingDelivery,
           applyReplyToMode,
           blockReplyPipeline,

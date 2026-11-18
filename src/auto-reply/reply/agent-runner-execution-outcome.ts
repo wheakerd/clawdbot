@@ -174,6 +174,8 @@ export async function runAgentTurnWithOutcome(
               revision !== undefined &&
               participation.isCurrent(revision)
             ) {
+              params.replyOperation?.freezeAbort();
+              await params.completeObservedTurn?.();
               return { runId, outcome: { kind: "observed" } };
             }
             return run();
