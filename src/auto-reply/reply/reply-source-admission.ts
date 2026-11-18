@@ -213,7 +213,6 @@ export async function retainReplySourceAfterFailedPreflight(params: {
   const { operation, followupRun } = params;
   try {
     await followupRun.userTurnTranscriptRecorder?.persistApproved({
-      expectedSessionId: operation.sessionId,
       beforeFreshMessageCommit: () => {
         operation.abortSignal.throwIfAborted();
         followupRun.operatorAuthority?.assertCurrent();

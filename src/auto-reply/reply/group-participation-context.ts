@@ -4,6 +4,7 @@ import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
 import { readSessionTranscriptModelContextInWorker } from "../../config/sessions/session-transcript-read-worker-runtime.js";
+import { transcriptEntryPrecedesContextTail } from "../../config/sessions/transcript-entry-anchor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -172,9 +173,10 @@ async function collectGroupParticipationEvidence(
       // Input accepted after this read remains at the end of the conversation.
       if (
         admission &&
-        (admission.sessionId !== params.target.sessionId ||
-          (admission.generation === context.version?.generation &&
-            admission.rawSeq <= (context.version.rawSeq ?? 0)))
+        transcriptEntryPrecedesContextTail(admission, {
+          sessionId: params.target.sessionId,
+          version: context.version,
+        })
       ) {
         earlierSources.push(source);
       } else {

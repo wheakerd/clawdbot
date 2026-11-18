@@ -17,9 +17,8 @@ export async function prepareGroupParticipationObservation(params: AgentTurnPara
   }
   const recorder = params.followupRun.userTurnTranscriptRecorder;
   if (participation.isObserving && recorder && !recorder.hasPersisted()) {
-    const persisted = await recorder.persistApproved({
-      expectedSessionId: params.followupRun.run.sessionId,
-      ...(params.sessionKey
+    const persisted = await recorder.persistApproved(
+      params.sessionKey
         ? {
             target: {
               agentId: params.followupRun.run.agentId,
@@ -32,8 +31,8 @@ export async function prepareGroupParticipationObservation(params: AgentTurnPara
               cwd: params.followupRun.run.workspaceDir,
             },
           }
-        : {}),
-    });
+        : undefined,
+    );
     if (!persisted) {
       throw new Error("The group source could not be committed to its session");
     }
