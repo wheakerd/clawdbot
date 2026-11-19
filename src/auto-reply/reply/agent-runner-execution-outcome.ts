@@ -9,7 +9,6 @@ import { prepareReplyTurnRunSource } from "./agent-runner-admission.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import { bindGoalContinuationExecution } from "./goal-continuation-return.js";
-import { prepareGroupParticipationObservation } from "./group-participation-observe.js";
 import { handoffCompletedSourceReply } from "./queue/drain.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
@@ -46,9 +45,6 @@ async function recordAgentTurnExecutionOutcome(
     )
   ) {
     params.opts?.onAgentRunTerminalOutcome?.(executionStatus === "ok" ? "completed" : "failed");
-  }
-  if (result?.outcome.kind === "observed") {
-    return;
   }
   const sourceReplyDeliveryMode =
     params.followupRun.run.sourceReplyDeliveryMode ?? params.opts?.sourceReplyDeliveryMode;
@@ -166,26 +162,7 @@ export async function runAgentTurnWithOutcome(
             requesterSessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
             report: params.opts?.onVisibleWorkSessions,
           },
-          async (): Promise<AgentTurnExecutionResult> => {
-            const participation = await prepareGroupParticipationObservation(params);
-            const revision = participation?.snapshot?.revision;
-            if (
-              participation?.isObserving &&
-              revision !== undefined &&
-              participation.isCurrent(revision)
-            ) {
-              params.replyOperation?.freezeAbort();
-              await params.completeObservedTurn?.();
-              return { runId, outcome: { kind: "observed" } };
-            }
-            if (participation?.mode === "ordinary") {
-              await params.typingSignals.signalRunStart();
-            } else if (participation) {
-              await (params.typingSignals.signalExecutionActivity?.() ??
-                params.typingSignals.signalRunStart());
-            }
-            return run();
-          },
+          run,
         ),
     );
     const automation = params.followupRun.run.scheduledAutomation;

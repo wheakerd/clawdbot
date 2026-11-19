@@ -555,7 +555,7 @@ export function installSessionToolResultGuard(
     }
     const finalMessage = finalWrite.message;
     if (
-      nextMessage.role === "assistant" &&
+      finalMessage.role === "assistant" &&
       toolCalls.length === 0 &&
       context.suppressTranscriptOnlyAssistantPersistence === true
     ) {

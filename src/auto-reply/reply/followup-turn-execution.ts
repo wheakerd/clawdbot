@@ -7,7 +7,6 @@ import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { resolveTurnPersonalProfiles } from "../../sessions/session-participant-input.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
@@ -23,13 +22,12 @@ import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { readGroupParticipationRun } from "./group-participation-run.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { createReplyInputAdmission } from "./reply-input-admission.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-turn-admission.types.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
@@ -91,16 +89,11 @@ export async function executeFollowupTurn(params: {
   const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
-  const deliveryAllowed = () =>
-    turn.sendPolicy === "allow" &&
-    !roomEvent &&
-    !readGroupParticipationRun(turn.operation)?.isObserving;
+  const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const progressAllowed = () =>
     deliveryAllowed() &&
     (sourceOpts?.progressRequiresReply !== true ||
-      isRequiredReplyExpectation(
-        turn.queued.run.terminalReplyExpectation ?? terminalReplyExpectation,
-      ));
+      isRequiredReplyExpectation(terminalReplyExpectation));
   const currentVerboseLevel = (): VerboseLevel => {
     const level =
       turn.queued.run.verboseLevelOverride ??
@@ -194,23 +187,19 @@ export async function executeFollowupTurn(params: {
       : undefined;
   const baseTypingSignals = createTypingSignaler({
     typing: defaults.typing,
-    mode: defaults.typingMode,
+    mode: progressAllowed() ? defaults.typingMode : "never",
   });
-  const enqueueTyping = (signal: () => Promise<void>) =>
-    enqueueProgress(async () => {
-      if (progressAllowed()) {
-        await signal();
-      }
-    });
   const typingSignals: TypingSignaler = {
     ...baseTypingSignals,
-    signalRunStart: () => enqueueTyping(baseTypingSignals.signalRunStart),
-    signalMessageStart: () => enqueueTyping(baseTypingSignals.signalMessageStart),
-    signalTextDelta: (text) => enqueueTyping(() => baseTypingSignals.signalTextDelta(text)),
-    signalReasoningDelta: () => enqueueTyping(baseTypingSignals.signalReasoningDelta),
-    signalToolStart: () => enqueueTyping(baseTypingSignals.signalToolStart),
+    signalRunStart: () => enqueueProgress(baseTypingSignals.signalRunStart),
+    signalMessageStart: () => enqueueProgress(baseTypingSignals.signalMessageStart),
+    signalTextDelta: (text) => enqueueProgress(() => baseTypingSignals.signalTextDelta(text)),
+    signalReasoningDelta: () => enqueueProgress(baseTypingSignals.signalReasoningDelta),
+    signalToolStart: () => enqueueProgress(baseTypingSignals.signalToolStart),
     signalExecutionActivity: () =>
-      enqueueTyping(baseTypingSignals.signalExecutionActivity ?? baseTypingSignals.signalRunStart),
+      enqueueProgress(
+        baseTypingSignals.signalExecutionActivity ?? baseTypingSignals.signalRunStart,
+      ),
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
@@ -401,7 +390,6 @@ export async function executeFollowupTurn(params: {
       }
       const execute = () =>
         executeAgentTurn({
-          completeObservedTurn: inputAdmission.completeObservedTurn,
           recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
           commandBody: turn.queued.prompt,
@@ -461,11 +449,7 @@ export async function executeFollowupTurn(params: {
             )
           : undefined;
       progressOpts.cronCreatorAuthorityCapability = capability;
-      const runWithInput = () =>
-        withBeforeAgentReplyObserver(
-          { shouldDispatch: () => !readGroupParticipationRun(turn.operation)?.isObserving },
-          () => withCurrentUserTurnInput(recorder, execute),
-        );
+      const runWithInput = () => withCurrentUserTurnInput(recorder, execute);
       execution = capability
         ? await runWithCronCreatorAuthorityCapability(
             capability,

@@ -345,22 +345,7 @@ export function collectRuntimeMetadata(items: InternalFollowupRun[], abortSignal
   );
   const groupParticipation =
     items.length > 0 && items.every((item) => item.groupParticipation)
-      ? {
-          ...items.at(-1)?.groupParticipation,
-          sources: items.flatMap(
-            (item) =>
-              item.groupParticipation?.sources ??
-              (item.userTurnTranscriptRecorder
-                ? [
-                    {
-                      recorder: item.userTurnTranscriptRecorder,
-                      sourceMessageId: item.messageId,
-                      replyToText: item.groupParticipation?.replyToText,
-                    },
-                  ]
-                : []),
-          ),
-        }
+      ? items.at(-1)?.groupParticipation
       : undefined;
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const explicitSkillSelections = [

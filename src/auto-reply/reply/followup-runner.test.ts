@@ -16,7 +16,7 @@ import type { ReplyPayload } from "../types.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import type { FollowupRun } from "./queue.js";
 import type { QueuedFollowupReplyBatch } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const state = vi.hoisted(() => ({

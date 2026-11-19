@@ -34,12 +34,9 @@ import { enqueueGoalContinuation, createGoalContinuationReturn } from "./goal-co
 import { completeFollowupRunLifecycle, type FollowupRun } from "./queue.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
-import {
-  prepareReplyAgentTurn,
-  type AdmittedFollowupTurn,
-  type FollowupRunnerParams,
-} from "./reply-agent-turn-preparation.js";
+import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-turn-admission.types.js";
 import {
   isReplyOperationStalledBeforeOutput,
   resolveStalledTurnNoticeText,
@@ -218,6 +215,10 @@ export function createFollowupRunner(
       const turn: AdmittedFollowupTurn = admission.turn;
       operation = turn.operation;
       admittedTurn = turn;
+      if (admission.kind === "observed") {
+        disposition = { kind: "consumed" };
+        return;
+      }
       if (turn.session.kind === "session" && turn.session.storePath) {
         activitySummaryCompletion =
           resolveGatewayContext?.()?.sessionActivitySummaries?.beginCompletion(
@@ -321,10 +322,7 @@ export function createFollowupRunner(
             storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
             sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
             entry: turn.session.current(),
-            writer:
-              execution.execution.outcome.kind === "observed"
-                ? undefined
-                : execution.execution.outcome.sessionWriter,
+            writer: execution.execution.outcome.sessionWriter,
             operation: turn.operation,
             activitySummaryCompletion,
             publish: (entry) => turn.session.publish(entry),
@@ -347,13 +345,6 @@ export function createFollowupRunner(
           },
         ),
       );
-      const operationResult = turn.operation.result;
-      if (completion.kind === "completed" && operationResult?.kind === "failed") {
-        completion = {
-          kind: "failed",
-          error: formatErrorMessage(operationResult.cause ?? operationResult.code),
-        };
-      }
       if (decision.kind === "deliver") {
         for (const payload of decision.payloads) {
           progressContinuation = getReplyPayloadMetadata(payload)?.progressContinuation;
@@ -523,10 +514,8 @@ export function createFollowupRunner(
         await admittedTurn?.releaseSourceAdmission?.();
       } finally {
         operation?.complete();
-        if (disposition.kind === "consumed") {
-          defaults.typing.markRunComplete();
-          defaults.typing.markDispatchIdle();
-        }
+        defaults.typing.markRunComplete();
+        defaults.typing.markDispatchIdle();
       }
     }
 

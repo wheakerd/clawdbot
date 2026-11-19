@@ -42,34 +42,27 @@ Explicit `decision_evaluate` remains independent of Labs.
 
 ## Group participation
 
-With Decision assistance enabled, a configured `decisionModel` helps the agent
-distinguish invitations from opportunities to contribute in groups and channels
-with mention gating disabled.
-This behavior uses embedded harnesses, including the Codex harness. Generic CLI
-backends keep their existing reply behavior.
-These rules also apply after an upgrade when Decision assistance is already
-enabled: eligible groups can stay silent instead of replying to every admitted
-message.
+With Decision assistance enabled and a configured `decisionModel`, unmentioned
+messages in always-on groups and channels are assessed before typing or reply
+generation. The Decision Model uses the existing group etiquette and bounded
+recent conversation to decide whether a reply is invited or adds clear value.
 
-The Decision Model evaluates the conversation before reply generation. If it
-finds an invitation or a useful opportunity to contribute, the agent runs through
-the ordinary reply path with its existing permissions, tools, streaming, reply
-obligation, and delivery policy. Otherwise, the message is recorded without
-starting a primary agent run. There is no post-generation draft review or revision
-loop. New accepted input invalidates a pending assessment before it is applied.
+A rejected message is recorded without typing or a primary-model run. Approval
+starts typing immediately, unless `typingMode` is `never`, and commits the primary
+model to a conversational reply in its usual voice. Existing permissions and
+delivery rules still apply, including `NO_REPLY` after message-tool delivery to
+prevent duplicate output. Typing stops when the turn completes or fails.
 
-No additional participation setting is needed. Decision assistance is the Labs
-opt-in for current and future Decision Model features, including participation
-for installations where the flag is already enabled. If the Decision Model is
-unavailable, the turn uses ordinary reply behavior. Cancellation ends the turn.
+Mentions, commands, media turns, and generic CLI backends keep ordinary behavior.
+Embedded harnesses, including Codex, support participation assessment. With
+Decision assistance off or the Decision Model unavailable, the primary model
+keeps deciding whether to reply. Existing opt-ins also enable this feature after
+upgrade; no additional setting is needed.
 
-Evaluations include bounded recent group history and reply references, not a
-newly generated reply or its tool results. Hosted providers receive this evidence
-and charge for evaluations under their normal usage terms. The preflight has a
-maximum 30-second budget, bounded further by the turn timeout. Turning assistance
-off stops new evaluations and discards pending judgments, restoring ordinary
-reply behavior. Once generation is admitted, ordinary turn authority and
-cancellation govern execution and delivery.
+Hosted Decision providers receive the current message, reply reference, and
+recent conversation, and charge under their normal usage terms. Each evaluation
+has a maximum 30-second timeout, bounded further by the turn timeout. Cancellation
+ends the turn; changing the opt-in applies to subsequent turns.
 
 ## Choose a provider and model
 

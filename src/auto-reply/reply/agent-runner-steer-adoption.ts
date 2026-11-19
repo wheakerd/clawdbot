@@ -32,7 +32,6 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
-import { recordGroupParticipationInput } from "./group-participation-inputs.js";
 import type { MessageInjectionRuntimeReason } from "./message-injection-authority.js";
 import {
   admitFollowupRunLifecycle,
@@ -42,7 +41,10 @@ import {
   type FollowupRun,
 } from "./queue.js";
 import { refuseCollaborativeSteering } from "./queue/lifecycle.js";
-import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
+import {
+  recordReplyFollowupAdmission,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
@@ -100,7 +102,7 @@ function resolveAcceptedSteerRunId(params: ActiveReplySteerParams): string {
 
 export async function runActiveReplySteer(
   params: ActiveReplySteerParams,
-): Promise<"handled" | ReplyPayload> {
+): Promise<"handled" | "followup" | ReplyPayload> {
   const {
     followupRun,
     queueKey,
@@ -144,7 +146,6 @@ export async function runActiveReplySteer(
   if (!parked) {
     return "handled";
   }
-  recordGroupParticipationInput(activeReplyOperation, followupRun);
   const mailbox = expectDefined(followupRun.controllerInput, "Parked steer source").mailbox;
   const owner = mailbox.owner.active;
   if (owner) {
@@ -162,7 +163,7 @@ export async function runActiveReplySteer(
     activeRunId?: string,
     error?: string,
     runtimeReason?: MessageInjectionRuntimeReason,
-  ): Promise<"handled"> => {
+  ): Promise<"followup"> => {
     assertReadCurrent();
     parked.fallback();
     custodyFinished = true;
@@ -170,17 +171,13 @@ export async function runActiveReplySteer(
       replyOperationRunState?.admission?.status === "skipped" &&
       replyOperationRunState.admission.reason === "queue-cap";
     if (replyOperationRunState && !queueCapRejected) {
-      replyOperationRunState.admission = {
-        status: "accepted",
-        mode: "followup",
-        ...(reason === "collaborative_steering_disabled"
-          ? { reason: "collaborative-steering-disabled" as const }
-          : reason === "requester-mismatch"
-            ? { reason }
-            : isInboundUserMessage
-              ? { reason: "steering-unavailable" as const }
-              : {}),
-      };
+      recordReplyFollowupAdmission(replyOperationRunState, {
+        explicitFollowup: false,
+        requesterMismatch: reason === "requester-mismatch",
+        collaborationBlocked: reason === "collaborative_steering_disabled",
+        unavailableSteer: isInboundUserMessage,
+        followupRun,
+      });
     }
     diagnosticLogger.warn("steering rejected; applying follow-up policy", {
       reason,
@@ -196,7 +193,7 @@ export async function runActiveReplySteer(
       activeRunId,
     });
     await touchActiveSessionEntry();
-    return "handled";
+    return "followup";
   };
   // The native receipt owns settlement after handoff, even if a finalizer fails.
   let nativeOutcome: Promise<ReplyMessageInjectionOutcome> | undefined;
@@ -463,7 +460,6 @@ export async function runActiveReplySteer(
         `queue: active session ${steerSessionId} adoption finalizer failed: ${formatErrorMessage(finalization.adoptionError)}`,
       );
     }
-    recordGroupParticipationInput(activeReplyOperation, followupRun, "steer");
     await refreshReplyOperationTyping(activeReplyOperation, {
       startIfIdle: typingSignals.shouldStartImmediately,
     });

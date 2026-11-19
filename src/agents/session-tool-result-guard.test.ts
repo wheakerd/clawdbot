@@ -392,21 +392,12 @@ describe("installSessionToolResultGuard", () => {
     expect(messages(sm)).toMatchObject([{ role: "user", content: "second" }]);
   });
 
-  it.each([false, true])(
-    "suppresses assistant text but retains tools (role-changing hook: %s)",
-    (changeRole) => {
-      const { sm } = setup({
-        suppressTranscriptOnlyAssistantPersistence: true,
-        beforeMessageWriteHook: ({ message }) =>
-          changeRole && message.role === "assistant" && typeof message.content === "string"
-            ? { message: makeUserMessage("rewritten private draft", 1) }
-            : undefined,
-      });
-      sm.appendMessage(asAppendMessage({ role: "assistant", content: "private room-event note" }));
-      sm.appendMessage(call("call_1", "message"));
-      expect(messages(sm)).toMatchObject([
-        { role: "assistant", content: [{ type: "toolCall", id: "call_1" }] },
-      ]);
-    },
-  );
+  it("suppresses transcript-only assistants while retaining tool calls", () => {
+    const { sm } = setup({ suppressTranscriptOnlyAssistantPersistence: true });
+    sm.appendMessage(asAppendMessage({ role: "assistant", content: "private room-event note" }));
+    sm.appendMessage(call("call_1", "message"));
+    expect(messages(sm)).toMatchObject([
+      { role: "assistant", content: [{ type: "toolCall", id: "call_1" }] },
+    ]);
+  });
 });

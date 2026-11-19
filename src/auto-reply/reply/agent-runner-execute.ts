@@ -21,7 +21,6 @@ import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { createGoalContinuationReturn } from "./goal-continuation.js";
-import { readGroupParticipationRun } from "./group-participation-run.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
@@ -130,7 +129,6 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     "blockReplyChunking" | "toolProgressDetail" | "transcriptCommandBody" | "typing" | "typingMode"
   > & {
     admitUserTurn: (recorder?: UserTurnTranscriptRecorder) => Promise<void>;
-    completeObservedTurn: () => Promise<void>;
     applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
     recordPendingDelivery: (delivery: PendingReplyDelivery) => Promise<void>;
     resolveVisibleReplyDelivery: () => Promise<boolean>;
@@ -214,7 +212,6 @@ async function executePreparedReplyAgentRunWithCompletion(
     typingMode,
   } = context;
   let activeSessionEntry = getActiveSessionEntry();
-  const participation = readGroupParticipationRun(replyOperation);
 
   // Queued turns outlive this invocation and must not inherit its terminal buffer.
   const runFollowupTurn = createFollowupRunner({
@@ -259,7 +256,6 @@ async function executePreparedReplyAgentRunWithCompletion(
   );
   const runOutcome = await withBeforeAgentReplyObserver(
     {
-      shouldDispatch: () => !participation?.isObserving,
       beforeDispatch: async () => {
         replyOperation.abortSignal.throwIfAborted();
         return true;
@@ -348,7 +344,7 @@ async function executePreparedReplyAgentRunWithCompletion(
       replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
     }
     return returnWithQueuedFollowupDrain(
-      runOutcome.outcome.kind === "rejected" && !participation?.isObserving
+      runOutcome.outcome.kind === "rejected"
         ? markPostCompactionModelFailurePayload(
             runOutcome.outcome.postCompactionModelFailure,
             runOutcome.outcome.payload,
