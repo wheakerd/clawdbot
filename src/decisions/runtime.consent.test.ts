@@ -13,21 +13,29 @@ afterEach(() => {
 });
 
 describe("decision consumer consent", () => {
-  it("rejects withdrawn admission before provider invocation and preserves health", async () => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    const host = registered(evaluate);
-    expect(await host.run({ ...options(), admit: () => false })).toEqual({
-      status: "unavailable",
-      reason: "disabled",
-    });
-    expect(evaluate).not.toHaveBeenCalled();
-    expect(await host.run({ ...options(), admit: () => true })).toMatchObject({ status: "ok" });
-    expect(host.registry.decisionProviders[0]?.host.inspect(config).callable).toBe(true);
-  });
+  it.each(["before-invocation", "readiness"] as const)(
+    "checks admission at %s without poisoning provider health",
+    async (stage) => {
+      let allowed = stage === "readiness";
+      const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+      const host = registered(evaluate, () => {
+        allowed = false;
+        return true;
+      });
+      expect(await host.run({ ...options(), admit: () => allowed })).toEqual({
+        status: "unavailable",
+        reason: "disabled",
+      });
+      expect(evaluate).not.toHaveBeenCalled();
+      expect(host.registry.decisionProviders[0]?.host.inspect(config).callable).toBe(true);
+    },
+  );
 
-  it.each([false, true])(
-    "checks consent after awaited network preparation (withdrawn: %s)",
-    async (withdraw) => {
+  it.each(["allowed", "denied", "invalid"] as const)(
+    "checks %s admission after awaited network preparation and cleanup",
+    async (kind) => {
+      const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+      onTestFinished(() => clock.mockRestore());
       let allowed = true;
       const preparing = createDeferredCore();
       const release = createDeferredCore();
@@ -50,57 +58,34 @@ describe("decision consumer consent", () => {
           await result.release();
           return answer;
         } catch {
-          // Provider adapters may translate the transport exception and even see a
-          // later re-enable. Neither can revive this evaluation or poison health.
+          // A translated transport error and late cleanup cannot revive admission.
           allowed = true;
-          return { status: "unavailable", reason: "transport" };
-        }
-      });
-      const pending = host.run({ ...options(), admit: () => allowed });
-      await preparing.promise;
-      allowed = !withdraw;
-      release.resolve();
-      expect(await pending).toMatchObject(
-        withdraw ? { status: "unavailable", reason: "disabled" } : { status: "ok" },
-      );
-      expect(fetch).toHaveBeenCalledTimes(withdraw ? 0 : 1);
-      expect(retained).toBeTypeOf("function");
-      expect(() => retained?.()).toThrow("no longer active");
-      expect(host.registry.decisionProviders[0]?.host.inspect(config).callable).toBe(true);
-    },
-  );
-
-  it.each(["denied", "invalid"] as const)(
-    "preserves %s admission through translated errors and overdue cleanup",
-    async (kind) => {
-      const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-      onTestFinished(() => clock.mockRestore());
-      let rejectAdmission = false;
-      const host = registered(async () => {
-        rejectAdmission = true;
-        try {
-          captureGuardedFetchRequestAuthority()?.();
-        } catch {
-          rejectAdmission = false;
           clock.mockReturnValue(1_001);
           return { status: "unavailable", reason: "transport" };
         }
-        return answer;
       });
       const pending = host.run({
         ...options(),
         admit: () => {
-          if (rejectAdmission && kind === "invalid") {
+          if (!allowed && kind === "invalid") {
             throw new Error("private callback diagnostics");
           }
-          return !rejectAdmission;
+          return allowed;
         },
       });
+      await preparing.promise;
+      allowed = kind === "allowed";
+      release.resolve();
       if (kind === "invalid") {
         await expect(pending).rejects.toThrow("Invalid decision contract");
       } else {
-        expect(await pending).toEqual({ status: "unavailable", reason: "disabled" });
+        expect(await pending).toMatchObject(
+          kind === "allowed" ? { status: "ok" } : { status: "unavailable", reason: "disabled" },
+        );
       }
+      expect(fetch).toHaveBeenCalledTimes(kind === "allowed" ? 1 : 0);
+      expect(retained).toBeTypeOf("function");
+      expect(() => retained?.()).toThrow("no longer active");
       const health = host.registry.decisionProviders[0]?.host.inspect(config);
       expect(health?.callable).toBe(true);
       expect(health?.reasons.deadline).toBeUndefined();
@@ -131,25 +116,10 @@ describe("decision consumer consent", () => {
   ])("fails closed on invalid admission callbacks", async (admit) => {
     const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     const host = registered(evaluate);
-    // Deliberately cross the typed boundary to exercise invalid JavaScript callers.
-    const invalidAdmission = admit as unknown as () => boolean;
-    await expect(host.run({ ...options(), admit: invalidAdmission })).rejects.toThrow(
-      "Invalid decision contract",
-    );
-    expect(evaluate).not.toHaveBeenCalled();
-  });
-
-  it("rechecks admission after synchronous provider readiness", async () => {
-    let allowed = true;
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    const host = registered(evaluate, () => {
-      allowed = false;
-      return true;
-    });
-    expect(await host.run({ ...options(), admit: () => allowed })).toEqual({
-      status: "unavailable",
-      reason: "disabled",
-    });
+    const request = options();
+    // Exercise invalid JavaScript callers at the typed API boundary.
+    Reflect.set(request, "admit", admit);
+    await expect(host.run(request)).rejects.toThrow("Invalid decision contract");
     expect(evaluate).not.toHaveBeenCalled();
   });
 });

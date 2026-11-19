@@ -24,7 +24,7 @@ describe("registered decision consumer admission", () => {
     async (withdraw) => {
       let consumerAllowed = true;
       let runtimeAllowed = true;
-      const host = registered(async (_batch, context) => {
+      const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, context) => {
         expect(context.isAdmissible?.()).toBe(true);
         consumerAllowed = withdraw !== "consumer";
         runtimeAllowed = withdraw !== "runtime";
@@ -33,26 +33,34 @@ describe("registered decision consumer admission", () => {
         );
         consumerAllowed = true;
         runtimeAllowed = true;
+        await Promise.resolve();
         expect(context.isAdmissible?.()).toBe(false);
         expect(() => captureGuardedFetchRequestAuthority()?.()).toThrow(
           "Decision dispatch is no longer admitted",
         );
         return { status: "unavailable", reason: "transport" };
       });
-      expect(
-        await evaluateDecisionInRegistry(
-          batch,
-          { ...options(), admit: () => consumerAllowed },
-          host.registry,
-          config,
-          undefined,
-          () => runtimeAllowed,
-        ),
-      ).toEqual({ status: "unavailable", reason: "disabled" });
+      const host = registered(evaluate);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        expect(
+          await evaluateDecisionInRegistry(
+            batch,
+            { ...options(), admit: () => consumerAllowed },
+            host.registry,
+            config,
+            undefined,
+            () => runtimeAllowed,
+          ),
+        ).toEqual({ status: "unavailable", reason: "disabled" });
+      }
       expect(host.registry.decisionProviders[0]?.host.inspect(config)).toMatchObject({
         activeRequests: 0,
+        successCount: 0,
         callable: true,
+        reasons: { disabled: 3 },
       });
+      evaluate.mockResolvedValueOnce(answer);
+      expect(await host.run()).toMatchObject({ status: "ok" });
     },
   );
 
@@ -108,49 +116,6 @@ describe("registered decision consumer admission", () => {
     Reflect.set(requestOptions, "priority", "urgent");
     await expect(host.run(requestOptions)).rejects.toThrow("Invalid decision contract");
     expect(call).not.toHaveBeenCalled();
-  });
-
-  it("keeps revoked admission closed across provider cleanup without poisoning health", async () => {
-    let current = true;
-    const dispatch = vi.fn();
-    const call = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, context) => {
-      current = false;
-      expect(context.isAdmissible?.()).toBe(false);
-      current = true;
-      try {
-        captureGuardedFetchRequestAuthority()?.();
-        dispatch();
-      } catch {
-        // Transport retries must retain the provider's earlier consumer rejection.
-      }
-      // A transport may sanitize its guard failure and await cleanup before returning.
-      await Promise.resolve();
-      expect(context.isAdmissible?.()).toBe(false);
-      return unavailable("transport");
-    });
-    const host = registered(call);
-    for (let i = 0; i < 3; i++) {
-      expect(
-        await evaluateDecisionInRegistry(
-          batch,
-          options(),
-          host.registry,
-          config,
-          undefined,
-          () => current,
-        ),
-      ).toEqual(unavailable("disabled"));
-    }
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(host.registry.decisionProviders[0]?.host.inspect(config)).toMatchObject({
-      activeRequests: 0,
-      successCount: 0,
-      callable: true,
-      reasons: { disabled: 3 },
-    });
-    call.mockResolvedValueOnce(answer);
-    expect(await host.run()).toMatchObject({ status: "ok" });
-    expect(call).toHaveBeenCalledTimes(4);
   });
 
   it.each(["caller", "consumer", "deadline", "retired-consumer", "expired-consumer"] as const)(

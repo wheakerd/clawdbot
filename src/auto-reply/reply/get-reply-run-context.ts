@@ -41,7 +41,6 @@ import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import { getRequesterProfile } from "../requester-profile.js";
-import type { TemplateContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { applySessionHints } from "./body.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
@@ -49,6 +48,7 @@ import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   buildExecOverridePromptHint,
   finishReplyPreparation,
+  formatRoomEventLine,
   hasInboundHistoryBody,
   hasReplyTargetContext,
 } from "./get-reply-run-helpers.js";
@@ -499,17 +499,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     ({ activeGoalContext, inboundUserContext } = buildInboundContextState());
   };
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
-  function formatRoomEventLine(context: TemplateContext, body: string): string {
-    const messageId =
-      normalizeOptionalString(context.MessageSid) ??
-      normalizeOptionalString(context.MessageSidFull);
-    const sender =
-      normalizeOptionalString(context.SenderName) ??
-      normalizeOptionalString(context.SenderUsername) ??
-      normalizeOptionalString(context.SenderId);
-    const prefix = [messageId ? `#${messageId}` : undefined, sender].filter(Boolean).join(" ");
-    return prefix ? `${prefix}: ${body}` : body;
-  }
 
   function resolveRoomEventBody(): string {
     const hasBaseBody = Boolean(normalizeOptionalString(baseBodyFinal));
