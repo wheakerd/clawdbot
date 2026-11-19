@@ -49,6 +49,7 @@ import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { createFollowupSpeechPreparer } from "./followup-delivery-tts.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./queue.js";
@@ -238,7 +239,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     resolveClaimedReplyExpectation(terminalReplyExpectation, result.meta),
     result.meta?.error?.kind === "hook_block" || result.didSendDeterministicApprovalPrompt === true
       ? "blocked"
-      : authoredSilence
+      : authoredSilence && !readGroupParticipationRun(turn.operation)?.requiresVisibleReply
         ? "silent"
         : sourceReplyDelivery !== "missing"
           ? sourceReplyDelivery

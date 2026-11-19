@@ -66,6 +66,7 @@ import {
   resolveAutomationReplyState,
   retainAutomationReasoningWithFinal,
 } from "./automation-reply-payloads.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-channel-actions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import {
@@ -126,6 +127,8 @@ export async function prepareReplyAgentPayloads(state: {
     usage,
   } = accounting;
   let { activeSessionEntry } = accounting;
+  const participation = readGroupParticipationRun(replyOperation);
+  const requiresVisibleReply = participation?.requiresVisibleReply === true;
   const terminalReplyExpectation =
     followupRun.run.terminalReplyExpectation ??
     resolveSourceReplyExpectation({
@@ -212,7 +215,7 @@ export async function prepareReplyAgentPayloads(state: {
     resolveClaimedReplyExpectation(terminalReplyExpectation, runResult.meta),
     blocked
       ? "blocked"
-      : authoredSilence
+      : authoredSilence && !requiresVisibleReply
         ? "silent"
         : sourceReplyDelivery !== "missing"
           ? sourceReplyDelivery
@@ -558,7 +561,7 @@ export async function prepareReplyAgentPayloads(state: {
     quietFinal,
   );
   if (
-    (quietFinal && sourcePayloads.length === 0) ||
+    (quietFinal && sourcePayloads.length === 0 && !missingReplyPayload) ||
     (!strandedFinal &&
       completion.outcome !== "delivered" &&
       payloadArray.length === 0 &&

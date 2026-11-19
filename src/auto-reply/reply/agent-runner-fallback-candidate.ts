@@ -42,7 +42,6 @@ import {
   resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
-import { readGroupParticipationRun } from "./group-participation-run.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 import {
@@ -243,9 +242,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           resolveCandidateRuntime(provider, model, runOptions.agentHarnessRuntimeOverride),
         );
         const candidateRun = runtime.candidateRun;
-        if (runtime.useCliExecution) {
-          readGroupParticipationRun(turn.replyOperation)?.useOrdinaryBehavior();
-        }
         bindSourceReplyDeliveryRuntime(candidateRun, sourceReplyDeliveryRuntime);
         // CLI prompts are fixed to their session binding, so dispatch must publish that
         // same stable mode or a valid assistant reply can be silently suppressed.
