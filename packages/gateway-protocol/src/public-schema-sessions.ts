@@ -86,6 +86,7 @@ export {
   SessionMemberAddParamsSchema,
   SessionMemberMutationResultSchema,
   SessionMemberRemoveParamsSchema,
+  SessionMemberSetAccessParamsSchema,
   SessionMemberSchema,
   SessionMemberEvidenceSchema,
   SessionMemberPermissionLevelSchema,
