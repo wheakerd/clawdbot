@@ -607,15 +607,16 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it.each(["required", "result-required"] as const)(
-    "does not let private payloads settle an empty %s message-tool final",
-    async (expectation) => {
+  it.each([false, true])(
+    "does not let private payloads settle an empty message-tool final (progress=%s)",
+    async (progress) => {
       const turn = createTurn();
       turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-      turn.queued.run.terminalReplyExpectation = expectation;
       const text = "Private terminal diagnostic.";
       const execution = createSettledExecution();
-      execution.outcome.result.messagingToolSentTargets = [{ ...progressTarget, text }];
+      if (progress) {
+        execution.outcome.result.messagingToolSentTargets = [{ ...progressTarget, text }];
+      }
       const decision = await decide(turn, execution, createAccounting([{ text }]));
       expect(decision).toMatchObject({
         kind: "retry-source-delivery",

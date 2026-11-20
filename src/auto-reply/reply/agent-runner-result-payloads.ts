@@ -221,7 +221,6 @@ export async function prepareReplyAgentPayloads(state: {
             : pendingContinuation
               ? "pending"
               : "empty",
-    sourceReplyDelivery,
   );
   const explicitSilence = completion.outcome === "silent";
   if (replyOperationRunState) {

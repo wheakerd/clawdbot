@@ -2,7 +2,6 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { TOOL_CALL_RAW_TOOL_NAME } from "../../agents/tool-catalog.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import {
@@ -10,11 +9,6 @@ import {
   decision,
   judgment,
 } from "./group-participation.reply.test-support.js";
-import {
-  REPLY_OPERATION_RUN_STATE,
-  type ReplyOperationRunState,
-} from "./reply-operation-run-state.js";
-import type { TypingController } from "./typing.js";
 
 const answer = (content: string) => ({ delta: { role: "assistant", content } });
 let fixture: Awaited<ReturnType<typeof createGroupReplyFixture>>;
@@ -38,7 +32,6 @@ it.each([
   ["silent", 0],
   ["text", 1],
   ["message-tool", 2],
-  ["NO_REPLY recovery", 3],
 ] as const)("persists and delivers %s participation", async (mode, primaryRequests) => {
   await writeFile(
     join(fixture.config.agents!.defaults!.workspace!, "IDENTITY.md"),
@@ -50,12 +43,8 @@ it.each([
   decision.mockResolvedValue(judgment(mode === "silent" ? "silent" : "reply"));
   const onAdopted = vi.fn();
   const onAbandoned = vi.fn();
-  const state: ReplyOperationRunState = {};
-  const messageToolOnly = mode === "message-tool" || mode === "NO_REPLY recovery";
+  const messageToolOnly = mode === "message-tool";
   const text = "The TLS port is 443.";
-  if (mode === "NO_REPLY recovery") {
-    fixture.respond(answer("NO_REPLY"));
-  }
   if (messageToolOnly) {
     fixture.respond(
       {
@@ -86,7 +75,6 @@ it.each([
   await fixture.dispatch("Bob, which TLS port?", `delivery-${mode}`, "-10001", {
     sourceReplyDeliveryMode: messageToolOnly ? "message_tool_only" : "automatic",
     turnAdoptionLifecycle: { onAdopted, onAbandoned },
-    [REPLY_OPERATION_RUN_STATE]: state,
   });
   expect(decision).toHaveBeenCalledOnce();
   expect(decision.mock.calls[0]?.[0]).toMatchObject({
@@ -94,13 +82,8 @@ it.each([
   });
   expect(fixture.requests).toHaveLength(primaryRequests);
   expect(fixture.sent).toEqual(mode === "silent" ? [] : [text]);
-  expect(fixture.typing() > 0).toBe(mode !== "silent");
   expect(onAdopted).toHaveBeenCalledOnce();
   expect(onAbandoned).not.toHaveBeenCalled();
-  if (messageToolOnly) {
-    expect(state.replyCompletion?.outcome).toBe("delivered");
-    expect(state.agentTurn).toBe("ok");
-  }
   const history = await readRecentUserAssistantTextForSession({
     agentId: "main",
     sessionKey: "agent:main:telegram:group:-10001",
@@ -127,55 +110,6 @@ it.each([
     expect(systemMessages(fixture.requests.at(-1))).toEqual(prefix);
     expect(decision).toHaveBeenCalledOnce();
     expect(fixture.sent).toEqual([text]);
-  }
-});
-
-it.each([
-  ["instant", false],
-  ["instant", true],
-  ["never", false],
-] as const)("types before output and cleans up (%s, failure=%s)", async (typingMode, fail) => {
-  fixture.config.agents!.defaults!.typingMode = typingMode;
-  const started = createDeferred();
-  const release = createDeferred();
-  let typing: TypingController | undefined;
-  decision.mockImplementation(async () => {
-    expect(fixture.typing()).toBe(0);
-    return judgment("reply");
-  });
-  fixture.respond({
-    ...answer("The port is 443."),
-    ...(fail ? { status: 400 } : {}),
-    beforeOutput: async () => {
-      started.resolve();
-      await release.promise;
-    },
-  });
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-  const pending = fixture.reply("Which port?", `typing-${typingMode}-${fail}`, "-10002", {
-    typingKeepalive: true,
-    onTypingController: (controller) => {
-      typing = controller;
-    },
-  });
-  try {
-    await awaitGateBeforeSettlement(started.promise, pending, "Primary model did not start");
-    expect(typing?.isActive()).toBe(typingMode !== "never");
-    expect(fixture.partials).toEqual([]);
-    const initial = fixture.typing();
-    await vi.advanceTimersByTimeAsync(18_000);
-    expect(fixture.typing() > initial).toBe(typingMode !== "never");
-    expect(typing?.isActive()).toBe(typingMode !== "never");
-    release.resolve();
-    await pending;
-    expect(typing?.isActive()).toBe(false);
-    const completed = fixture.typing();
-    await vi.advanceTimersByTimeAsync(18_000);
-    expect(fixture.typing()).toBe(completed);
-  } finally {
-    release.resolve();
-    await pending.catch(() => undefined);
-    vi.useRealTimers();
   }
 });
 

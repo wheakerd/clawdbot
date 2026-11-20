@@ -414,7 +414,7 @@ export async function executePreparedReplyRun(
       : undefined;
   const followupRun = {
     createChannelCronAuthority,
-    ...(groupParticipation ? { groupParticipation } : {}),
+    ...(groupParticipation && !hasInboundAudio(sessionCtx) ? { groupParticipation } : {}),
     prompt: queuedBody,
     readAdmissionConfig,
     sourceTurnId: resolveReplySourceTurnId({
