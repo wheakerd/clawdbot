@@ -1,9 +1,10 @@
 import { X509Certificate } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -25,6 +26,8 @@ type GuestGatewayOptions = {
   others?: "none" | "view" | "invited";
   invitedScopes?: OperatorScope[];
   maxInvitedAccess?: "read" | "suggest" | "send";
+  tools?: OpenClawConfig["tools"];
+  onInvitedEvent?: (event: GatewayEvent) => void;
 };
 
 async function startInvitedGuestGateway(
@@ -58,12 +61,19 @@ async function startInvitedGuestGateway(
     sender: [],
   };
   const providerRequests: string[] = [];
-  const providerReplies: { beforeReply?: () => Promise<void> } = {};
+  const providerReplies: {
+    beforeReply?: () => Promise<void>;
+    reply?: (body: string, response: ServerResponse) => void;
+  } = {};
   const provider = createServer((request, response) => {
     void readRequestText(request)
       .then(async (body) => {
         providerRequests.push(body);
         await providerReplies.beforeReply?.();
+        if (providerReplies.reply) {
+          providerReplies.reply(body, response);
+          return;
+        }
         writeOpenAiResponsesText(response, {
           text: "Acknowledged.",
           messageId: "mention-reply",
@@ -145,7 +155,7 @@ async function startInvitedGuestGateway(
         },
       },
       plugins: { slots: { memory: "none" } },
-      tools: {
+      tools: options.tools ?? {
         profile: "minimal",
         alsoAllow: ["read", "sessions_history", "sessions_search"],
       },
@@ -160,6 +170,11 @@ async function startInvitedGuestGateway(
             administrator: {
               agents: "*",
               scopes: ["operator.admin"],
+              sessions: { others: "write" },
+            },
+            creator: {
+              agents: ["main"],
+              scopes: ["operator.read", "operator.write"],
               sessions: { others: "write" },
             },
             invited: {
@@ -208,7 +223,10 @@ async function startInvitedGuestGateway(
     mode: "webchat",
     scopes: invitedScopes,
     caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-    onEvent: (event) => events.invited.push(event),
+    onEvent: (event) => {
+      events.invited.push(event);
+      options.onInvitedEvent?.(event);
+    },
     deviceIdentity: loadOrCreateDeviceIdentity({
       path: state.path("invited-device", "client", "credentials.sqlite"),
     }),
