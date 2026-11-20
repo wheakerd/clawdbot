@@ -20,7 +20,12 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 
 type GatewayEvent = { event?: string; payload?: unknown };
 
-type GuestGatewayOptions = { origin?: string; others?: "none" | "view" | "invited" };
+type GuestGatewayOptions = {
+  origin?: string;
+  others?: "none" | "view" | "invited";
+  invitedScopes?: OperatorScope[];
+  maxInvitedAccess?: "read" | "suggest" | "send";
+};
 
 async function startInvitedGuestGateway(
   signal: AbortSignal,
@@ -74,7 +79,7 @@ async function startInvitedGuestGateway(
   );
   const scopes: OperatorScope[] = ["operator.admin"];
   const guestScopes: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
-  const invitedScopes: OperatorScope[] = [
+  const invitedScopes: OperatorScope[] = options.invitedScopes ?? [
     "operator.read",
     "operator.write",
     "operator.questions",
@@ -160,7 +165,10 @@ async function startInvitedGuestGateway(
             invited: {
               agents: ["main"],
               scopes: invitedScopes,
-              sessions: { others: options.others ?? "invited" },
+              sessions: {
+                others: options.others ?? "invited",
+                maxInvitedAccess: options.maxInvitedAccess,
+              },
             },
             guest: {
               agents: ["main"],
