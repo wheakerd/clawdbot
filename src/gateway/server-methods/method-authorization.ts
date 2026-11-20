@@ -16,6 +16,7 @@ import {
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
   resolveAgentRuntimeCronScope,
+  requiresSessionParticipation,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../method-scopes.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
@@ -26,8 +27,10 @@ import {
 } from "../operator-role-policy.js";
 import { PUBLICATION_READ_SCOPE, APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
 import { isPublicationReaderCurrent, isPublicationReaderMethod } from "../publication-reader.js";
+import { readQueuedParticipationProfile } from "../queued-chat-input-admission.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner.js";
+import { resolveAuthenticatedPersonalGatewayProfileId } from "./gateway-personal-caller.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
 /** Resolve the grant's dispatch ceiling without rechecking source or role liveness. */
@@ -65,7 +68,7 @@ export function authorizeGatewayMethod(
   params: unknown,
   methodRegistry: GatewayMethodRegistryView,
   context: GatewayRequestContext,
-): { error: ErrorShape | null; sessionScope?: SessionOperatorScope } {
+): { error: ErrorShape | null; sessionScope?: SessionOperatorScope; participationRequired?: true } {
   if (
     client?.internal?.publicationReader ||
     client?.connect.scopes?.includes(PUBLICATION_READ_SCOPE)
@@ -131,6 +134,17 @@ export function authorizeGatewayMethod(
   }
   const scopeAuth = authorizeGatewayMethodScopes(method, scopes, params, methodRegistry);
   if (!scopeAuth.allowed) {
+    if (
+      requiresSessionParticipation(method, scopes, params) &&
+      ((!client.internal?.syntheticClient &&
+        resolveAuthenticatedPersonalGatewayProfileId(client)) ||
+        (method === "chat.send" &&
+          client.internal?.operatorRunAuthority !== undefined &&
+          readQueuedParticipationProfile(params) ===
+            client.internal?.operatorRunAuthority?.profileId))
+    ) {
+      return { error: null, participationRequired: true };
+    }
     // Handlers recheck the stored human owner at the mutation commit boundary.
     if (isHumanCronMutation(method) && isDirectCronOwnerClient(client)) {
       return { error: null };
