@@ -254,6 +254,7 @@ type PendingApprovalInput = {
   sourceSessionKey?: string;
   audienceSessionKey?: string;
   reviewerDeviceId?: string;
+  execApprovalIds?: readonly string[];
   limit?: number;
   nowMs?: number;
 };
@@ -300,8 +301,11 @@ export function readPendingOperatorApprovalsInDatabase(
     params.audienceSessionKey === undefined
       ? undefined
       : requireString(params.audienceSessionKey, "operator approval audience session key");
+  const execApprovalIds = params.execApprovalIds && new Set(params.execApprovalIds);
   const requiresPostFilter =
-    audienceSessionKey !== undefined || params.reviewerDeviceId !== undefined;
+    audienceSessionKey !== undefined ||
+    params.reviewerDeviceId !== undefined ||
+    execApprovalIds !== undefined;
   const records: OperatorApprovalRecord[] = [];
   let query = stateDb
     .selectFrom("operator_approvals")
@@ -330,8 +334,10 @@ export function readPendingOperatorApprovalsInDatabase(
     const matchesAudience =
       !audienceSessionKey || record.audienceSessionKeys.includes(audienceSessionKey);
     const matchesReviewer =
-      params.reviewerDeviceId === undefined ||
-      matchesOperatorApprovalReviewerBinding(record, params.reviewerDeviceId);
+      record.kind === "exec" && execApprovalIds
+        ? execApprovalIds.has(record.id)
+        : params.reviewerDeviceId === undefined ||
+          matchesOperatorApprovalReviewerBinding(record, params.reviewerDeviceId);
     if (matchesAudience && matchesReviewer) {
       records.push(record);
       if (records.length === resultLimit) {

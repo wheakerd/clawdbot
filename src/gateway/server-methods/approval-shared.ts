@@ -16,6 +16,7 @@ import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.
 import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import { canResolveParticipationExecApproval } from "../exec-approval-participation.js";
 import type { OperatorApprovalTerminalReason } from "../operator-approval-store.js";
 import type { OperatorApprovalStoreGuard } from "../operator-approval-store.types.js";
 import {
@@ -161,11 +162,14 @@ function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
       excludeConnId: params.excludeConnId,
       record: params.record,
       filter: (client) =>
+        (params.approvalKind === "exec"
+          ? canResolveParticipationExecApproval(params.record, client)
+          : undefined) ??
         isApprovalRecordVisibleToClient({
           record: params.record,
           client,
         }),
-    }) ?? null
+    }) ?? (params.record.participation ? new Set<string>() : null)
   );
 }
 
