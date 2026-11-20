@@ -10,7 +10,6 @@ import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { InternalFollowupRun } from "./queue/types.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
 
-export type GroupParticipationContext = { agentName?: string; replyToText?: string };
 type Params = {
   run: InternalFollowupRun;
   sessionKey?: string;
@@ -128,7 +127,6 @@ export async function prepareGroupParticipation(params: Params & { operation: Re
       config: run.run.config,
       cwd: run.run.workspaceDir,
     },
-    expectedSessionId: operation.sessionId,
     beforeFreshMessageCommit: assertCurrent,
   });
   if (!persisted) {
