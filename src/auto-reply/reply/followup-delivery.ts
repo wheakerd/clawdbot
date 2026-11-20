@@ -244,6 +244,7 @@ export async function resolveFollowupDeliveryDecision(params: {
             : pendingContinuation
               ? "pending"
               : "empty",
+    sourceReplyDelivery,
   );
   const explicitSilence = completion.outcome === "silent";
   const sourcePayloads = selectAutomationReplyPayloads(
@@ -284,10 +285,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     await opts?.onObservedReplyDelivery?.();
   }
   const recovery =
-    explicitSilence ||
-    terminalRunFailed ||
-    !missingReplyNoticeAllowed ||
-    completion.outcome !== "missing"
+    explicitSilence || terminalRunFailed || completion.outcome !== "missing"
       ? ({ kind: "none" } as const)
       : resolveStrandedReplyRecovery({
           base: turn.queued,
@@ -307,7 +305,7 @@ export async function resolveFollowupDeliveryDecision(params: {
       resolved: runtimeResolved,
     };
   }
-  if (recovery.kind === "diagnostic") {
+  if (recovery.kind === "diagnostic" && missingReplyNoticeAllowed) {
     const [payload] = preparePayloads([recovery.payload]);
     return payload
       ? { kind: "deliver" as const, payloads: [payload], resolved: runtimeResolved }

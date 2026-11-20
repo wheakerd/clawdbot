@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -8,6 +10,10 @@ import {
   decision,
   judgment,
 } from "./group-participation.reply.test-support.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import type { TypingController } from "./typing.js";
 
 const answer = (content: string) => ({ delta: { role: "assistant", content } });
@@ -28,79 +34,101 @@ function systemMessages(request: unknown) {
   );
 }
 
-it.each(["silent", "text", "message-tool"] as const)(
-  "persists and delivers %s participation",
-  async (mode) => {
-    decision.mockResolvedValue(judgment(mode === "silent" ? "silent" : "reply"));
-    const onAdopted = vi.fn();
-    const onAbandoned = vi.fn();
-    const text = "The TLS port is 443.";
-    if (mode === "message-tool") {
-      fixture.respond(
-        {
-          delta: {
-            role: "assistant",
-            tool_calls: [
-              {
-                index: 0,
-                id: "reply",
-                type: "function",
-                function: {
-                  name: TOOL_CALL_RAW_TOOL_NAME,
-                  arguments: JSON.stringify({
-                    id: "message",
-                    args: { action: "send", message: text, final: true },
-                  }),
-                },
+it.each([
+  ["silent", 0],
+  ["text", 1],
+  ["message-tool", 2],
+  ["NO_REPLY recovery", 3],
+] as const)("persists and delivers %s participation", async (mode, primaryRequests) => {
+  await writeFile(
+    join(fixture.config.agents!.defaults!.workspace!, "IDENTITY.md"),
+    "- **Name:** Cactux\n",
+  );
+  if (mode === "text") {
+    fixture.config.agents!.entries!.main!.identity = { name: "Configured" };
+  }
+  decision.mockResolvedValue(judgment(mode === "silent" ? "silent" : "reply"));
+  const onAdopted = vi.fn();
+  const onAbandoned = vi.fn();
+  const state: ReplyOperationRunState = {};
+  const messageToolOnly = mode === "message-tool" || mode === "NO_REPLY recovery";
+  const text = "The TLS port is 443.";
+  if (mode === "NO_REPLY recovery") {
+    fixture.respond(answer("NO_REPLY"));
+  }
+  if (messageToolOnly) {
+    fixture.respond(
+      {
+        delta: {
+          role: "assistant",
+          tool_calls: [
+            {
+              index: 0,
+              id: "reply",
+              type: "function",
+              function: {
+                name: TOOL_CALL_RAW_TOOL_NAME,
+                arguments: JSON.stringify({
+                  id: "message",
+                  args: { action: "send", message: text, final: true },
+                }),
               },
-            ],
-          },
-          stop: "tool_calls",
+            },
+          ],
         },
-        answer("NO_REPLY"),
-      );
-    } else {
-      fixture.respond(answer(text));
-    }
-    await fixture.dispatch("Bob, which TLS port?", `delivery-${mode}`, "-10001", {
-      sourceReplyDeliveryMode: mode === "message-tool" ? "message_tool_only" : "automatic",
-      turnAdoptionLifecycle: { onAdopted, onAbandoned },
-    });
-    expect(decision).toHaveBeenCalledOnce();
-    expect(fixture.requests).toHaveLength(mode === "silent" ? 0 : mode === "text" ? 1 : 2);
-    expect(fixture.sent).toEqual(mode === "silent" ? [] : [text]);
-    expect(fixture.typing() > 0).toBe(mode !== "silent");
-    expect(onAdopted).toHaveBeenCalledOnce();
-    expect(onAbandoned).not.toHaveBeenCalled();
-    const history = await readRecentUserAssistantTextForSession({
-      agentId: "main",
-      sessionKey: "agent:main:telegram:group:-10001",
-      storePath: fixture.storePath,
-    });
-    expect(history).toContainEqual(
-      expect.objectContaining({ role: "user", text: expect.stringContaining("which TLS port?") }),
+        stop: "tool_calls",
+      },
+      answer("NO_REPLY"),
     );
-    if (mode === "text") {
-      const first = fixture.requests[0];
-      expect(JSON.stringify(first)).toContain(
-        "The Decision Model approved participation for this turn.",
-      );
-      expect(JSON.stringify(first)).toContain("Without approval, apply this etiquette:");
-      const prefix = systemMessages(first);
-      expect(prefix).toHaveLength(1);
-      expect(JSON.stringify(prefix)).not.toContain(
-        "The Decision Model approved participation for this turn.",
-      );
-      fixture.respond(answer("NO_REPLY"));
-      await fixture.reply("Please check again.", "ordinary-mention", "-10001", undefined, {
-        WasMentioned: true,
-      });
-      expect(systemMessages(fixture.requests.at(-1))).toEqual(prefix);
-      expect(decision).toHaveBeenCalledOnce();
-      expect(fixture.sent).toEqual([text]);
-    }
-  },
-);
+  } else {
+    fixture.respond(answer(text));
+  }
+  await fixture.dispatch("Bob, which TLS port?", `delivery-${mode}`, "-10001", {
+    sourceReplyDeliveryMode: messageToolOnly ? "message_tool_only" : "automatic",
+    turnAdoptionLifecycle: { onAdopted, onAbandoned },
+    [REPLY_OPERATION_RUN_STATE]: state,
+  });
+  expect(decision).toHaveBeenCalledOnce();
+  expect(decision.mock.calls[0]?.[0]).toMatchObject({
+    state: { agentName: mode === "text" ? "Configured" : "Cactux" },
+  });
+  expect(fixture.requests).toHaveLength(primaryRequests);
+  expect(fixture.sent).toEqual(mode === "silent" ? [] : [text]);
+  expect(fixture.typing() > 0).toBe(mode !== "silent");
+  expect(onAdopted).toHaveBeenCalledOnce();
+  expect(onAbandoned).not.toHaveBeenCalled();
+  if (messageToolOnly) {
+    expect(state.replyCompletion?.outcome).toBe("delivered");
+    expect(state.agentTurn).toBe("ok");
+  }
+  const history = await readRecentUserAssistantTextForSession({
+    agentId: "main",
+    sessionKey: "agent:main:telegram:group:-10001",
+    storePath: fixture.storePath,
+  });
+  expect(history).toContainEqual(
+    expect.objectContaining({ role: "user", text: expect.stringContaining("which TLS port?") }),
+  );
+  if (mode === "text") {
+    const first = fixture.requests[0];
+    expect(JSON.stringify(first)).toContain(
+      "The Decision Model approved participation for this turn.",
+    );
+    expect(JSON.stringify(first)).toContain("Without approval, apply this etiquette:");
+    const prefix = systemMessages(first);
+    expect(prefix).toHaveLength(1);
+    expect(JSON.stringify(prefix)).not.toContain(
+      "The Decision Model approved participation for this turn.",
+    );
+    fixture.respond(answer("NO_REPLY"));
+    await fixture.reply("Please check again.", "ordinary-mention", "-10001", undefined, {
+      WasMentioned: true,
+    });
+    expect(systemMessages(fixture.requests.at(-1))).toEqual(prefix);
+    expect(decision).toHaveBeenCalledOnce();
+    expect(fixture.sent).toEqual([text]);
+  }
+});
 
 it.each([
   ["instant", false],

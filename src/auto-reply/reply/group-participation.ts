@@ -1,4 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isDecisionAssistanceEligible } from "../../agents/decision-assistance.js";
+import { loadAgentIdentityFromWorkspaceAsync } from "../../agents/identity-file.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
@@ -65,6 +67,12 @@ export async function prepareGroupParticipation(params: Params & { operation: Re
     limit: 16,
     includeMessageToolSourceReplies: true,
   });
+  const agentName =
+    run.groupParticipation?.agentName ??
+    normalizeOptionalString(
+      (await loadAgentIdentityFromWorkspaceAsync(run.run.workspaceDir))?.name,
+    ) ??
+    run.run.agentId;
   assertCurrent();
   const { evaluateDecision } = await import("../../decisions/runtime.js");
   const outcome = await runWithReplyOperationLifecycleAdmission(operation, () =>
@@ -72,7 +80,7 @@ export async function prepareGroupParticipation(params: Params & { operation: Re
       {
         state: {
           agentId: run.run.agentId,
-          agentName: run.groupParticipation?.agentName ?? run.run.agentId,
+          agentName,
           conversation: conversation.map(({ role, text }) => ({ role, text })),
           message: run.prompt,
           replyTo: run.groupParticipation?.replyToText ?? null,

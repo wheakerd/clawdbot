@@ -600,6 +600,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         }
       }
       if (participation?.reply) {
+        turn.queued.run.terminalReplyExpectation = "result-required";
         turn.queued.currentInboundContext = appendCurrentInboundContext(
           turn.queued.currentInboundContext,
           [
