@@ -26,6 +26,7 @@ type GuestGatewayOptions = {
   others?: "none" | "view" | "invited";
   invitedScopes?: OperatorScope[];
   maxInvitedAccess?: "read" | "suggest" | "send";
+  invitedTools?: string[];
   tools?: OpenClawConfig["tools"];
   onInvitedEvent?: (event: GatewayEvent) => void;
 };
@@ -183,6 +184,7 @@ async function startInvitedGuestGateway(
               sessions: {
                 others: options.others ?? "invited",
                 maxInvitedAccess: options.maxInvitedAccess,
+                invitedTools: options.invitedTools,
               },
             },
             guest: {
