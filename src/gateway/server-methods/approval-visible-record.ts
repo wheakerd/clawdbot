@@ -6,6 +6,7 @@ import { assertionSucceeds } from "../../shared/assertion.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { ExecApprovalDurableLookup } from "../exec-approval-manager.types.js";
+import { canResolveParticipationExecApproval } from "../exec-approval-participation.js";
 import {
   canAccessOperatorApproval,
   canResolveOperatorApproval,
@@ -42,9 +43,18 @@ export async function loadVisibleApproval(params: {
 } | null> {
   // Reconciliation can settle a live waiter, so authorization must precede
   // every durable read and no unauthorized lookup may reach the bridge.
-  const authorized = params.allowApprovalRuntime
-    ? canResolveOperatorApproval(params.client)
-    : canReviewOperatorApproval(params.client);
+  const participationAccess = () =>
+    params.allowApprovalRuntime
+      ? canResolveParticipationExecApproval(
+          params.execApprovalManager.getLiveSnapshot(params.id),
+          params.client,
+        )
+      : undefined;
+  const authorized =
+    participationAccess() ??
+    (params.allowApprovalRuntime
+      ? canResolveOperatorApproval(params.client)
+      : canReviewOperatorApproval(params.client));
   if (!params.authority.isCurrent() || !authorized || params.client?.invalidated) {
     return null;
   }
@@ -85,12 +95,13 @@ export async function loadVisibleApproval(params: {
     source: () => { sessionKey?: string | null; agentId?: string | null },
     reviewerDeviceIds: () => readonly string[] | null | undefined,
   ) =>
-    sessionAccess.canAccess(source()) &&
-    canAccessOperatorApproval({
-      client: params.client,
-      allowApprovalRuntime: params.allowApprovalRuntime,
-      binding: { reviewerDeviceIds: reviewerDeviceIds() },
-    });
+    participationAccess() ??
+    (sessionAccess.canAccess(source()) &&
+      canAccessOperatorApproval({
+        client: params.client,
+        allowApprovalRuntime: params.allowApprovalRuntime,
+        binding: { reviewerDeviceIds: reviewerDeviceIds() },
+      }));
   if (
     liveRecord &&
     !canAccess(
@@ -106,11 +117,14 @@ export async function loadVisibleApproval(params: {
       (admittedManager?.getLocalSnapshot(bindingId) !== admittedRecord ||
         admittedRecord.request.sessionKey !== sourceSessionKey ||
         admittedRecord.request.agentId !== sourceAgentId ||
-        !canAccessOperatorApproval({
-          client: params.client,
-          allowApprovalRuntime: params.allowApprovalRuntime,
-          binding: { reviewerDeviceIds: admittedRecord.approvalReviewerDeviceIds },
-        }))
+        !(
+          participationAccess() ??
+          canAccessOperatorApproval({
+            client: params.client,
+            allowApprovalRuntime: params.allowApprovalRuntime,
+            binding: { reviewerDeviceIds: admittedRecord.approvalReviewerDeviceIds },
+          })
+        ))
     ) {
       throw new Error("Approval lookup authority is no longer active");
     }
@@ -169,9 +183,12 @@ export async function loadVisibleApproval(params: {
   if (
     !isLookupCurrent() ||
     params.client?.invalidated ||
-    !(params.allowApprovalRuntime
-      ? canResolveOperatorApproval(params.client)
-      : canReviewOperatorApproval(params.client))
+    !(
+      participationAccess() ??
+      (params.allowApprovalRuntime
+        ? canResolveOperatorApproval(params.client)
+        : canReviewOperatorApproval(params.client))
+    )
   ) {
     return null;
   }
@@ -218,11 +235,14 @@ export async function loadVisibleApproval(params: {
             lookup.record.source.sessionKey ||
           (normalizeOptionalString(current.request.agentId) ?? null) !==
             lookup.record.source.agentId ||
-          !canAccessOperatorApproval({
-            client: params.client,
-            allowApprovalRuntime: params.allowApprovalRuntime,
-            binding: { reviewerDeviceIds: current.approvalReviewerDeviceIds },
-          })
+          !(
+            participationAccess() ??
+            canAccessOperatorApproval({
+              client: params.client,
+              allowApprovalRuntime: params.allowApprovalRuntime,
+              binding: { reviewerDeviceIds: current.approvalReviewerDeviceIds },
+            })
+          )
         ) {
           return null;
         }
