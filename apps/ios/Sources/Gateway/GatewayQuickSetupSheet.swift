@@ -213,7 +213,7 @@ struct GatewayQuickSetupSheet: View {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
-        if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
+        if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem, toasts: self.appModel.toasts) {
             return
         }
         guard problem.retryable else { return }
