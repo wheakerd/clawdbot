@@ -483,8 +483,9 @@ struct ChatProTab: View {
     }
 
     private var voiceAvatarAccessibilityLabel: String {
+        // Talk on: the same phrase the composer's Talk row shows, never the owner's raw status.
         let state = self.appModel.talkMode.isEnabled
-            ? self.appModel.talkMode.statusText
+            ? Self.talkControl(appModel: self.appModel).statusPhrase
             : String(localized: "Voice off")
         return "\(self.agentDisplayName), \(state)"
     }
@@ -496,6 +497,7 @@ struct ChatProTab: View {
             isSpeaking: appModel.talkMode.isSpeaking,
             isGatewayConnected: appModel.talkMode.isGatewayConnected,
             statusText: appModel.talkMode.statusText,
+            phase: appModel.talkMode.chatPhase,
             providerLabel: appModel.talkMode.gatewayTalkProviderLabel,
             levelProvider: {
                 if appModel.talkMode.isSpeaking {
@@ -512,6 +514,8 @@ struct ChatProTab: View {
                     await appModel.talkMode.setMicrophoneMuted(!appModel.talkMode.isMicrophoneMuted)
                 }
             },
+            // The words heard so far, while the person speaks; empty in every other phase.
+            partialTranscript: appModel.talkMode.isListening ? appModel.talkMode.lastTranscript : "",
             inputDevices: self.talkInputDevices,
             selectedInputDeviceID: self.selectedTalkInputDeviceID(appModel: appModel),
             selectInputDevice: { deviceID in
@@ -520,6 +524,11 @@ struct ChatProTab: View {
             cameraFacing: appModel.preferredCameraFacing == .front ? .front : .back,
             flipCamera: {
                 appModel.flipPreferredCameraFacing()
+            },
+            openSettings: {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
             },
             toggle: { sessionKey in
                 appModel.focusChatSession(sessionKey)
@@ -535,7 +544,7 @@ struct ChatProTab: View {
 
     private static func selectedTalkInputDeviceID(appModel: NodeAppModel) -> String? {
         guard let preferredID = appModel.talkMode.preferredInputDeviceID,
-              self.talkInputDevices.contains(where: { $0.id == preferredID })
+              talkInputDevices.contains(where: { $0.id == preferredID })
         else { return nil }
         return preferredID
     }
